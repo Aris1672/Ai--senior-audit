@@ -1,0 +1,136 @@
+"use client";
+
+import { createClient } from "@/lib/supabase-client";
+import { useEffect, useState } from "react";
+import { formatRubles } from "@/lib/billing";
+
+interface Stats {
+  totalClients:    number;
+  activeClients:   number;
+  pausedClients:   number;
+  totalSessions:   number;
+  totalFindings:   number;
+  criticalFindings: number;
+  totalRevenue:    number;
+  totalTokensUsed: number;
+}
+
+export default function AdminDashboard() {
+  const [stats, setStats]     = useState<Stats | null>(null);
+  const [loading, setLoading] = useState(true);
+  const supabase = createClient();
+
+  useEffect(() => {
+    async function loadStats() {
+      const [
+        { data: profiles },
+        { data: sessions },
+        { data: findings },
+        { data: usage },
+      ] = await Promise.all([
+        supabase.from("profiles").select("status").eq("role", "client").neq("status", "deleted"),
+        supabase.from("audit_sessions").select("status, findings_ct, cost_rub"),
+        supabase.from("findings").select("risk_level"),
+        supabase.from("usage_events").select("tokens_in, tokens_out, cost_rub"),
+      ]);
+
+      setStats({
+        totalClients:     profiles?.length || 0,
+        activeClients:    profiles?.filter(p => p.status === "active").length  || 0,
+        pausedClients:    profiles?.filter(p => p.status === "paused").length  || 0,
+        totalSessions:    sessions?.length || 0,
+        totalFindings:    findings?.length || 0,
+        criticalFindings: findings?.filter(f => f.risk_level === "КРИТИЧНО").length || 0,
+        totalRevenue:     usage?.reduce((s, e) => s + (e.cost_rub || 0), 0) || 0,
+        totalTokensUsed:  usage?.reduce((s, e) => s + (e.tokens_in || 0) + (e.tokens_out || 0), 0) || 0,
+      });
+      setLoading(false);
+    }
+    loadStats();
+  }, []);
+
+  const METRIC_CARDS = stats ? [
+    { label: "Всего клиентов",       value: stats.totalClients,                    color: "#4d91ff" },
+    { label: "Активных клиентов",    value: stats.activeClients,                   color: "#2ecc8f" },
+    { label: "Приостановленных",     value: stats.pausedClients,                   color: "#f59e0b" },
+    { label: "Аудит-сессий",         value: stats.totalSessions,                   color: "#4d91ff" },
+    { label: "Всего нарушений",      value: stats.totalFindings,                   color: "#f59e0b" },
+    { label: "Критичных нарушений",  value: stats.criticalFindings,                color: "#e84040" },
+    { label: "Выручка (AI-токены)",  value: formatRubles(stats.totalRevenue),      color: "#2ecc8f" },
+    { label: "Токенов использовано", value: stats.totalTokensUsed.toLocaleString("ru"), color: "#7a90c0" },
+  ] : [];
+
+  return (
+    <div>
+      {/* Header */}
+      <div style={{ marginBottom: "32px" }}>
+        <h1 style={{ fontSize: "24px", fontWeight: "700", color: "#e8edf8", margin: 0 }}>
+          Обзор платформы
+        </h1>
+        <p style={{ color: "#7a90c0", fontSize: "14px", marginTop: "6px" }}>
+          Общая статистика по всем клиентам и аудитам
+        </p>
+      </div>
+
+      {/* Metric cards */}
+      {loading ? (
+        <div style={{ color: "#7a90c0", fontSize: "14px" }}>Загрузка статистики...</div>
+      ) : (
+        <div style={{
+          display: "grid",
+          gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))",
+          gap: "16px",
+          marginBottom: "40px",
+        }}>
+          {METRIC_CARDS.map((card, i) => (
+            <div key={i} style={{
+              background:   "#0c1220",
+              border:       "1px solid #1e2d55",
+              borderTop:    `3px solid ${card.color}`,
+              borderRadius: "10px",
+              padding:      "20px",
+            }}>
+              <div style={{ fontSize: "13px", color: "#7a90c0", marginBottom: "8px" }}>
+                {card.label}
+              </div>
+              <div style={{ fontSize: "26px", fontWeight: "700", color: card.color }}>
+                {card.value}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Quick links */}
+      <div style={{
+        background: "#0c1220", border: "1px solid #1e2d55",
+        borderRadius: "10px", padding: "24px",
+      }}>
+        <h2 style={{ fontSize: "16px", fontWeight: "600", color: "#e8edf8", marginBottom: "16px" }}>
+          Быстрые действия
+        </h2>
+        <div style={{ display: "flex", gap: "12px", flexWrap: "wrap" }}>
+          {[
+            { href: "/admin/clients/new", label: "+ Создать клиента",  bg: "#1565e8" },
+            { href: "/admin/clients",     label: "Управление клиентами", bg: "#0d1f3e" },
+            { href: "/admin/pricing",     label: "Настройка тарифов",  bg: "#0d1f3e" },
+          ].map(btn => (
+            <a key={btn.href} href={btn.href} style={{
+              padding:      "10px 20px",
+              background:   btn.bg,
+              border:       "1px solid #1e2d55",
+              borderRadius: "8px",
+              color:        "#e8edf8",
+              fontSize:     "13px",
+              fontWeight:   "500",
+              textDecoration: "none",
+              cursor:       "pointer",
+            }}>
+              {btn.label}
+            </a>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
