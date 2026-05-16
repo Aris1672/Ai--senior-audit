@@ -205,6 +205,17 @@ case "confirm_audit": {
   return NextResponse.json({ success: true });
 }
 
+    // ── Get session context for chat ───────────────────────
+    case "get_session_context": {
+      const { sessionId } = payload;
+      const { data } = await supabase
+        .from("audit_sessions")
+        .select("id, title, status, transactions_ct, cost_rub, period_from, period_to, client_id")
+        .eq("id", sessionId)
+        .single();
+      return NextResponse.json(data || {});
+    }
+
       // ── Delete client ──────────────────────────────────────
       case "delete_client": {
         const { clientId } = payload;
