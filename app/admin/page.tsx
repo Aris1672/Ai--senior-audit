@@ -18,36 +18,31 @@ interface Stats {
 export default function AdminDashboard() {
   const [stats, setStats]     = useState<Stats | null>(null);
   const [loading, setLoading] = useState(true);
-  const supabase = createClient();
+ 
 
-  useEffect(() => {
-    async function loadStats() {
-      const [
-        { data: profiles },
-        { data: sessions },
-        { data: findings },
-        { data: usage },
-      ] = await Promise.all([
-        supabase.from("profiles").select("status").eq("role", "client").neq("status", "deleted"),
-        supabase.from("audit_sessions").select("status, findings_ct, cost_rub"),
-        supabase.from("findings").select("risk_level"),
-        supabase.from("usage_events").select("tokens_in, tokens_out, cost_rub"),
-      ]);
+ useEffect(() => {
+  async function loadStats() {
+    const res  = await fetch("/api/data", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "admin_stats" }),
+    });
+    const { profiles, sessions, findings, usage } = await res.json();
 
-      setStats({
-        totalClients:     profiles?.length || 0,
-        activeClients:    profiles?.filter(p => p.status === "active").length  || 0,
-        pausedClients:    profiles?.filter(p => p.status === "paused").length  || 0,
-        totalSessions:    sessions?.length || 0,
-        totalFindings:    findings?.length || 0,
-        criticalFindings: findings?.filter(f => f.risk_level === "КРИТИЧНО").length || 0,
-        totalRevenue:     usage?.reduce((s, e) => s + (e.cost_rub || 0), 0) || 0,
-        totalTokensUsed:  usage?.reduce((s, e) => s + (e.tokens_in || 0) + (e.tokens_out || 0), 0) || 0,
-      });
-      setLoading(false);
-    }
-    loadStats();
-  }, []);
+    setStats({
+      totalClients:     profiles?.length || 0,
+      activeClients:    profiles?.filter((p: any) => p.status === "active").length  || 0,
+      pausedClients:    profiles?.filter((p: any) => p.status === "paused").length  || 0,
+      totalSessions:    sessions?.length || 0,
+      totalFindings:    findings?.length || 0,
+      criticalFindings: findings?.filter((f: any) => f.risk_level === "КРИТИЧНО").length || 0,
+      totalRevenue:     usage?.reduce((s: number, e: any) => s + (e.cost_rub || 0), 0) || 0,
+      totalTokensUsed:  usage?.reduce((s: number, e: any) => s + (e.tokens_in || 0) + (e.tokens_out || 0), 0) || 0,
+    });
+    setLoading(false);
+  }
+  loadStats();
+}, []);
 
   const METRIC_CARDS = stats ? [
     { label: "Всего клиентов",       value: stats.totalClients,                    color: "#4d91ff" },

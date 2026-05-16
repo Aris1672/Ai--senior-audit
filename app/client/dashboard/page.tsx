@@ -22,53 +22,37 @@ export default function ClientDashboard() {
   const [loading, setLoading] = useState(true);
   const supabase = createClient();
 
-  useEffect(() => {
-    async function load() {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) return;
+ useEffect(() => {
+  async function load() {
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return;
 
-      const [
-        { data: profile },
-        { data: sub },
-        { data: sessions },
-        { data: findings },
-        { data: usage },
-      ] = await Promise.all([
-        supabase.from("profiles").select("company_name").eq("id", user.id).single(),
-        supabase.from("client_subscriptions")
-          .select("audits_purchased, audits_used, custom_price_rub, custom_max_tx, pricing_tiers(name, price_rub, max_transactions)")
-          .eq("client_id", user.id).order("created_at", { ascending: false }).limit(1),
-        supabase.from("audit_sessions")
-          .select("id, title, status, transactions_ct, findings_ct, cost_rub, created_at")
-          .eq("client_id", user.id).order("created_at", { ascending: false }).limit(5),
-        supabase.from("findings")
-          .select("id, risk_level, title, created_at")
-          .eq("client_id", user.id).eq("status", "open")
-          .order("created_at", { ascending: false }).limit(8),
-        supabase.from("usage_events")
-          .select("cost_rub, transactions_ct")
-          .eq("client_id", user.id),
-      ]);
+    const res = await fetch("/api/data", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "client_dashboard", payload: { clientId: user.id } }),
+    });
+    const { profile, sub, sessions, findings, usage } = await res.json();
 
-      const s    = sub?.[0] as any;
-      const tier = s?.pricing_tiers;
+    const s    = sub?.[0] as any;
+    const tier = s?.pricing_tiers;
 
-      setData({
-        company_name:     profile?.company_name || "",
-        tier_name:        tier?.name            || "—",
-        audits_remaining: s ? (s.audits_purchased - s.audits_used) : 0,
-        audits_purchased: s?.audits_purchased   || 0,
-        max_tx:           s?.custom_max_tx      || tier?.max_transactions || 0,
-        price_rub:        s?.custom_price_rub   || tier?.price_rub        || 0,
-        sessions:         sessions              || [],
-        findings:         findings              || [],
-        totalCost:        usage?.reduce((a, e) => a + (e.cost_rub || 0), 0)          || 0,
-        totalTx:          usage?.reduce((a, e) => a + (e.transactions_ct || 0), 0)   || 0,
-      });
-      setLoading(false);
-    }
-    load();
-  }, []);
+    setData({
+      company_name:     profile?.company_name || "",
+      tier_name:        tier?.name            || "—",
+      audits_remaining: s ? (s.audits_purchased - s.audits_used) : 0,
+      audits_purchased: s?.audits_purchased   || 0,
+      max_tx:           s?.custom_max_tx      || tier?.max_transactions || 0,
+      price_rub:        s?.custom_price_rub   || tier?.price_rub        || 0,
+      sessions:         sessions              || [],
+      findings:         findings              || [],
+      totalCost:        usage?.reduce((a: number, e: any) => a + (e.cost_rub || 0), 0)        || 0,
+      totalTx:          usage?.reduce((a: number, e: any) => a + (e.transactions_ct || 0), 0) || 0,
+    });
+    setLoading(false);
+  }
+  load();
+}, []);
 
   if (loading) return (
     <div style={{ color: "#7a90c0", fontFamily: "system-ui, sans-serif" }}>Загрузка...</div>

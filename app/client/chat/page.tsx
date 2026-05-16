@@ -15,80 +15,73 @@ export default function ChatPage() {
   const bottomRef = useRef<HTMLDivElement>(null);
   const supabase  = createClient();
 
-  useEffect(() => {
-    async function init() {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) return;
-      setClientId(user.id);
+ useEffect(() => {
+  async function init() {
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return;
+    setClientId(user.id);
 
-      // Get or create active session
-      const { data: existing } = await supabase
-        .from("audit_sessions")
-        .select("id")
-        .eq("client_id", user.id)
-        .eq("status", "active")
-        .order("created_at", { ascending: false })
-        .limit(1);
+    const res = await fetch("/api/data", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "get_or_create_session", payload: { clientId: user.id } }),
+    });
+    const { sessionId: sid, isNew } = await res.json();
+    setSessionId(sid);
 
-      if (existing && existing.length > 0) {
-        setSessionId(existing[0].id);
-        // Load message history
-        const { data: msgs } = await supabase
-          .from("audit_messages")
-          .select("role, content")
-          .eq("session_id", existing[0].id)
-          .order("created_at");
-        setMessages((msgs as any) || []);
-      } else {
-        // Create new session
-        const { data: newSession } = await supabase
-          .from("audit_sessions")
-          .insert({ client_id: user.id, title: `Аудит ${new Date().toLocaleDateString("ru")}`, status: "active" })
-          .select().single();
-        setSessionId(newSession?.id || null);
-      }
+    if (!isNew) {
+      const msgRes = await fetch("/api/data", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "client_messages", payload: { sessionId: sid } }),
+      });
+      const msgs = await msgRes.json();
+      setMessages(msgs || []);
     }
-    init();
-  }, []);
+  }
+  init();
+}, []);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
   async function sendMessage() {
-    if (!input.trim() || !clientId || !sessionId || loading) return;
+  if (!input.trim() || !clientId || !sessionId || loading) return;
 
-    const userMsg: Message = { role: "user", content: input };
-    const newMessages = [...messages, userMsg];
-    setMessages(newMessages);
-    setInput("");
-    setLoading(true);
+  const userMsg: Message = { role: "user", content: input };
+  const newMessages = [...messages, userMsg];
+  setMessages(newMessages);
+  setInput("");
+  setLoading(true);
 
-    // Save user message
-    await supabase.from("audit_messages").insert({
-      session_id: sessionId, client_id: clientId,
-      role: "user", content: input,
-    });
+  // Save user message via Vercel
+  await fetch("/api/data", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      action: "save_message",
+      payload: { sessionId, clientId, role: "user", content: userMsg.content },
+    }),
+  });
 
-    const res = await fetch("/api/chat", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        clientId, sessionId,
-        messages: newMessages.map(m => ({ role: m.role, content: m.content })),
-      }),
-    });
+  // Send to Claude via Vercel
+  const res = await fetch("/api/chat", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      clientId, sessionId,
+      messages: newMessages.map(m => ({ role: m.role, content: m.content })),
+    }),
+  });
 
-    const data = await res.json();
-    if (data.message) {
-      const assistantMsg: Message = {
-        role: "assistant", content: data.message, costRub: data.costRub,
-      };
-      setMessages(prev => [...prev, assistantMsg]);
-      setTotalCost(prev => prev + (data.costRub || 0));
-    }
-    setLoading(false);
+  const data = await res.json();
+  if (data.message) {
+    setMessages(prev => [...prev, { role: "assistant", content: data.message, costRub: data.costRub }]);
+    setTotalCost(prev => prev + (data.costRub || 0));
   }
+  setLoading(false);
+}
 
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "calc(100vh - 64px)" }}>

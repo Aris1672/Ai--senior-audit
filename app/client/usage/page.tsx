@@ -27,27 +27,25 @@ export default function UsagePage() {
   const [totalOut,  setTotalOut]  = useState(0);
   const supabase = createClient();
 
-  useEffect(() => {
-    async function load() {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) return;
+useEffect(() => {
+  async function load() {
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return;
 
-      const { data } = await supabase
-        .from("usage_events")
-        .select("*")
-        .eq("client_id", user.id)
-        .order("created_at", { ascending: false })
-        .limit(100);
-
-      const evts = (data || []) as UsageEvent[];
-      setEvents(evts);
-      setTotalCost(evts.reduce((s, e) => s + (e.cost_rub  || 0), 0));
-      setTotalIn(  evts.reduce((s, e) => s + (e.tokens_in || 0), 0));
-      setTotalOut( evts.reduce((s, e) => s + (e.tokens_out|| 0), 0));
-      setLoading(false);
-    }
-    load();
-  }, []);
+    const res  = await fetch("/api/data", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "client_usage", payload: { clientId: user.id } }),
+    });
+    const evts = await res.json() as UsageEvent[];
+    setEvents(evts);
+    setTotalCost(evts.reduce((s, e) => s + (e.cost_rub  || 0), 0));
+    setTotalIn(  evts.reduce((s, e) => s + (e.tokens_in || 0), 0));
+    setTotalOut( evts.reduce((s, e) => s + (e.tokens_out|| 0), 0));
+    setLoading(false);
+  }
+  load();
+}, []);
 
   return (
     <div>

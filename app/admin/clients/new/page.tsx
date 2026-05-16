@@ -35,16 +35,18 @@ export default function NewClientPage() {
     notes:        "",
   });
 
-  useEffect(() => {
-    supabase.from("pricing_tiers")
-      .select("*")
-      .eq("is_active", true)
-      .order("sort_order")
-      .then(({ data }) => {
-        setTiers(data || []);
-        if (data?.[0]) setForm(f => ({ ...f, tierId: data[0].id }));
-      });
-  }, []);
+ useEffect(() => {
+  fetch("/api/data", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ action: "pricing_tiers" }),
+  })
+  .then(r => r.json())
+  .then(data => {
+    setTiers(data || []);
+    if (data?.[0]) setForm(f => ({ ...f, tierId: data[0].id }));
+  });
+}, []);
 
   function update(field: string, value: any) {
     setForm(f => ({ ...f, [field]: value }));

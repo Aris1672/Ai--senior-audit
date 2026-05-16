@@ -38,49 +38,39 @@ export default function AdminClientsPage() {
   const supabase = createClient();
 
   async function loadClients() {
-    const { data } = await supabase
-      .from("profiles")
-      .select(`
-        id, full_name, company_name, inn, status, created_at,
-        client_subscriptions (
-          audits_purchased, audits_used, custom_price_rub,
-          pricing_tiers ( name, price_rub )
-        ),
-        audit_sessions ( id, status, cost_rub )
-      `)
-      .eq("role", "client")
-      .neq("status", "deleted")
-      .order("created_at", { ascending: false });
+  const res  = await fetch("/api/data", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ action: "admin_clients" }),
+  });
+  const data = await res.json();
+  setClients(data);
+  setLoading(false);
+}
 
-    setClients((data as any) || []);
-    setLoading(false);
-  }
+async function handlePause(clientId: string, currentStatus: string) {
+  setActing(clientId);
+  const newStatus = currentStatus === "active" ? "paused" : "active";
+  await fetch("/api/data", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ action: "update_client_status", payload: { clientId, status: newStatus } }),
+  });
+  await loadClients();
+  setActing(null);
+}
 
-  useEffect(() => { loadClients(); }, []);
-
-  async function handlePause(clientId: string, currentStatus: string) {
-    setActing(clientId);
-    const newStatus = currentStatus === "active" ? "paused" : "active";
-    await fetch("/api/admin/clients", {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ clientId, status: newStatus }),
-    });
-    await loadClients();
-    setActing(null);
-  }
-
-  async function handleDelete(clientId: string) {
-    if (!confirm("Удалить клиента? Это действие необратимо.")) return;
-    setActing(clientId);
-    await fetch("/api/admin/clients", {
-      method: "DELETE",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ clientId }),
-    });
-    await loadClients();
-    setActing(null);
-  }
+async function handleDelete(clientId: string) {
+  if (!confirm("Удалить клиента? Это действие необратимо.")) return;
+  setActing(clientId);
+  await fetch("/api/data", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ action: "delete_client", payload: { clientId } }),
+  });
+  await loadClients();
+  setActing(null);
+}
 
   const filtered = clients.filter(c =>
     (c.company_name || "").toLowerCase().includes(search.toLowerCase()) ||

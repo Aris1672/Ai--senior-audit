@@ -41,31 +41,33 @@ export default function DocumentsPage() {
   const supabase = createClient();
 
   async function loadDocs(uid: string) {
-    const { data } = await supabase
-      .from("documents")
-      .select("id, file_name, file_type, file_size, status, uploaded_at")
-      .eq("client_id", uid)
-      .order("uploaded_at", { ascending: false });
-    setDocs((data as any) || []);
-    setLoading(false);
+  const res  = await fetch("/api/data", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ action: "client_documents", payload: { clientId: uid } }),
+  });
+  const data = await res.json();
+  setDocs(data || []);
+  setLoading(false);
+}
+
+useEffect(() => {
+  async function init() {
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return;
+    setClientId(user.id);
+
+    const res = await fetch("/api/data", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "get_or_create_session", payload: { clientId: user.id } }),
+    });
+    const { sessionId: sid } = await res.json();
+    setSessionId(sid);
+    await loadDocs(user.id);
   }
-
-  useEffect(() => {
-    async function init() {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) return;
-      setClientId(user.id);
-
-      const { data: sess } = await supabase
-        .from("audit_sessions")
-        .select("id").eq("client_id", user.id)
-        .eq("status", "active").order("created_at", { ascending: false }).limit(1);
-
-      if (sess?.[0]) setSessionId(sess[0].id);
-      await loadDocs(user.id);
-    }
-    init();
-  }, []);
+  init();
+}, []);
 
   async function uploadFile(file: File) {
     if (!clientId || !sessionId) return;
