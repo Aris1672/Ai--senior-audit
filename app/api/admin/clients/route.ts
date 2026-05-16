@@ -98,7 +98,14 @@ export async function POST(req: NextRequest) {
 
     const userId = authUser.user.id;
 
-    // Update profile
+    // Force create profile — bypass trigger reliability issues
+    await supabase.from("profiles").upsert({
+      id:     userId,
+      role:   "client",
+      status: "active",
+    }, { onConflict: "id" });
+
+    // Update with company details
     await supabase.from("profiles").update({
       full_name:    fullName    || null,
       company_name: companyName || null,
