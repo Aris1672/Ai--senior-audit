@@ -69,29 +69,18 @@ export async function POST(req: NextRequest) {
   try {
     const supabase = createAdminClient();
     const {
-      email,
-      password,
-      fullName,
-      companyName,
-      inn,
-      phone,
-      tierId,
-      auditsCount,
-      customPrice,
-      customMaxTx,
-      validTo,
-      notes,
+      email, password, fullName,
+      companyName, inn, phone, notes,
     } = await req.json();
 
-    // Validate required fields
-    if (!email || !password || !tierId) {
+    if (!email || !password) {
       return NextResponse.json(
-        { error: "email, password и tierId обязательны" },
+        { error: "Email и пароль обязательны" },
         { status: 400 }
       );
     }
 
-    // Create auth user with admin API
+    // Create auth user
     const { data: authUser, error: authError } =
       await supabase.auth.admin.createUser({
         email,
@@ -101,7 +90,6 @@ export async function POST(req: NextRequest) {
       });
 
     if (authError || !authUser.user) {
-      console.error("Auth create error:", authError);
       return NextResponse.json(
         { error: authError?.message || "Ошибка создания пользователя" },
         { status: 400 }
@@ -110,42 +98,14 @@ export async function POST(req: NextRequest) {
 
     const userId = authUser.user.id;
 
-    // Update profile with company details
-    const { error: profileError } = await supabase
-      .from("profiles")
-      .update({
-        full_name:    fullName    || null,
-        company_name: companyName || null,
-        inn:          inn         || null,
-        phone:        phone       || null,
-        updated_at:   new Date().toISOString(),
-      })
-      .eq("id", userId);
-
-    if (profileError) {
-      console.error("Profile update error:", profileError);
-    }
-
-    // Assign subscription
-    const { error: subError } = await supabase
-      .from("client_subscriptions")
-      .insert({
-        client_id:        userId,
-        tier_id:          tierId,
-        audits_purchased: auditsCount  || 1,
-        custom_price_rub: customPrice  || null,
-        custom_max_tx:    customMaxTx  || null,
-        valid_to:         validTo      || null,
-        notes:            notes        || null,
-      });
-
-    if (subError) {
-      console.error("Subscription insert error:", subError);
-      return NextResponse.json(
-        { error: "Клиент создан, но ошибка назначения подписки" },
-        { status: 500 }
-      );
-    }
+    // Update profile
+    await supabase.from("profiles").update({
+      full_name:    fullName    || null,
+      company_name: companyName || null,
+      inn:          inn         || null,
+      phone:        phone       || null,
+      updated_at:   new Date().toISOString(),
+    }).eq("id", userId);
 
     return NextResponse.json({
       success:  true,
