@@ -1,31 +1,44 @@
+/**
+ * app/api/audit/calculate-price/route.ts
+ *
+ * Counts transactions from a parsed document or a live 1C connection,
+ * then maps the count to a pricing tier.
+ *
+ * POST { sessionId, clientId, documentId? } | { sessionId, clientId, c1Config? }
+ * → { transactionCount, priceRub, tierName }
+ */
+
 import { createAdminClient } from "@/lib/supabase-server";
+import { parseFile } from "@/lib/file-parser";
 import { NextRequest, NextResponse } from "next/server";
 
-// Determine price tier based on transaction count
-function calcPrice(txCount: number, tiers: any[]): { priceRub: number; tierName: string } {
-  // Sort tiers by max_transactions ascending
-  const sorted = [...tiers].sort((a, b) => a.max_transactions - b.max_transactions);
+// ─── Pricing ──────────────────────────────────────────────────────────────────
 
+function calcPrice(
+  txCount: number,
+  tiers: { name: string; max_transactions: number; price_rub: number }[]
+): { priceRub: number; tierName: string } {
+  const sorted = [...tiers].sort((a, b) => a.max_transactions - b.max_transactions);
   for (const tier of sorted) {
     if (txCount <= tier.max_transactions) {
       return { priceRub: tier.price_rub, tierName: tier.name };
     }
   }
-
-  // Above all tiers — use highest tier
-  const highest = sorted[sorted.length - 1];
-  return { priceRub: highest.price_rub, tierName: `${highest.name} (превышен лимит)` };
+  const top = sorted[sorted.length - 1];
+  return { priceRub: top.price_rub, tierName: `${top.name} (превышен лимит)` };
 }
+
+// ─── Route ────────────────────────────────────────────────────────────────────
 
 export async function POST(req: NextRequest) {
   try {
     const { documentId, sessionId, clientId, c1Config } = await req.json();
     const supabase = createAdminClient();
 
-    // Get active pricing tiers
+    // ── Load active pricing tiers ─────────────────────────────────────────
     const { data: tiers } = await supabase
       .from("pricing_tiers")
-      .select("*")
+      .select("name, max_transactions, price_rub")
       .eq("is_active", true);
 
     if (!tiers || tiers.length === 0) {
@@ -37,94 +50,97 @@ export async function POST(req: NextRequest) {
 
     let transactionCount = 0;
 
+    // ── FILE MODE ─────────────────────────────────────────────────────────
     if (documentId) {
-      // ── FILE MODE: count rows from parsed document ──────────────────
       const { data: doc } = await supabase
         .from("documents")
-        .select("parsed_data, file_type, storage_path")
+        .select("parsed_data, status, file_type, storage_path")
         .eq("id", documentId)
         .single();
 
-      if (doc?.parsed_data?.rowCount) {
+      if (doc?.parsed_data?.rowCount != null) {
+        // Already parsed — use cached value (fast path)
         transactionCount = doc.parsed_data.rowCount;
-      } else {
-        // Parse the file to count rows
-        const { data: fileData } = await supabase.storage
+
+      } else if (["xlsx", "csv", "xml"].includes(doc?.file_type ?? "")) {
+        // Not yet ready — download and parse now (Vercel → Supabase)
+        const { data: blob, error: dlErr } = await supabase.storage
           .from("audit-documents")
-          .download(doc?.storage_path || "");
+          .download(doc!.storage_path);
 
-        if (fileData) {
-          const text = await fileData.text();
-
-          if (doc?.file_type === "csv") {
-            // Count CSV rows (subtract header)
-            const lines = text.split("\n").filter(l => l.trim());
-            transactionCount = Math.max(0, lines.length - 1);
-
-          } else if (doc?.file_type === "xml") {
-            // Count XML transaction elements
-            const matches = text.match(/<(Документ|Document|ХозяйственнаяОперация|transaction)/gi);
-            transactionCount = matches?.length || 0;
-
-          } else {
-            // For xlsx — use a reasonable estimate based on file size
-            // Real xlsx parsing would need a worker, this is a fallback
-            transactionCount = Math.floor((fileData.size || 0) / 200);
-          }
-
-          // Update document with parsed row count
-          await supabase.from("documents").update({
-            parsed_data: { rowCount: transactionCount },
-            status: "ready",
-          }).eq("id", documentId);
+        if (dlErr || !blob) {
+          return NextResponse.json(
+            { error: "Не удалось загрузить файл для подсчёта строк" },
+            { status: 500 }
+          );
         }
-      }
 
-    } else if (c1Config) {
-      // ── LIVE 1C MODE: query OData for transaction count ─────────────
+        const buffer = await blob.arrayBuffer();
+        const result = await parseFile(
+          buffer,
+          doc!.file_type as "xlsx" | "csv" | "xml"
+        );
+
+        transactionCount = result.rowCount;
+
+        // Cache the result
+        await supabase
+          .from("documents")
+          .update({ parsed_data: result, status: "ready" })
+          .eq("id", documentId);
+      }
+    }
+
+    // ── LIVE 1C MODE ──────────────────────────────────────────────────────
+    else if (c1Config) {
       const { url, username, password, base } = c1Config;
-      const baseUrl = `${url}/${base}/odata/standard.odata`;
-      const auth    = Buffer.from(`${username}:${password}`).toString("base64");
+      const auth = Buffer.from(`${username}:${password}`).toString("base64");
+      const endpoint =
+        `${url}/${base}/odata/standard.odata` +
+        `/Document_ПоступлениеТоваровУслуг?$count=true&$top=0&$format=json`;
 
       try {
-        const c1Res = await fetch(
-          `${baseUrl}/Document_ПоступлениеТоваровУслуг?$count=true&$top=0&$format=json`,
-          {
-            headers: { Authorization: `Basic ${auth}` },
-            signal: AbortSignal.timeout(10000), // 10s timeout
-          }
-        );
+        const c1Res = await fetch(endpoint, {
+          headers: { Authorization: `Basic ${auth}` },
+          signal:  AbortSignal.timeout(10_000),
+        });
 
         if (!c1Res.ok) {
           return NextResponse.json(
-            { error: "Не удалось подключиться к 1С. Проверьте настройки подключения." },
+            { error: "Не удалось подключиться к 1С. Проверьте настройки." },
             { status: 400 }
           );
         }
 
         const c1Data = await c1Res.json();
-        transactionCount = c1Data["@odata.count"] || 0;
+        transactionCount = c1Data["@odata.count"] ?? 0;
 
-      } catch (err) {
+      } catch {
         return NextResponse.json(
-          { error: "Превышено время ожидания подключения к 1С. Проверьте доступность сервера." },
+          { error: "Превышено время ожидания 1С. Проверьте доступность сервера." },
           { status: 400 }
         );
       }
     }
 
-    // Calculate price
+    // ── Price & persist ───────────────────────────────────────────────────
     const { priceRub, tierName } = calcPrice(transactionCount, tiers);
 
-    // Update session with transaction count
-    await supabase.from("audit_sessions").update({
-      transactions_ct: transactionCount,
-    }).eq("id", sessionId);
+    if (sessionId) {
+      await supabase
+        .from("audit_sessions")
+        .update({
+          transactions_ct: transactionCount,
+          price_rub:       priceRub,
+          tier_name:       tierName,
+        })
+        .eq("id", sessionId);
+    }
 
     return NextResponse.json({ transactionCount, priceRub, tierName });
 
   } catch (err) {
-    console.error("calculate-price error:", err);
+    console.error("[calculate-price] error:", err);
     return NextResponse.json({ error: "Ошибка расчёта стоимости" }, { status: 500 });
   }
 }
