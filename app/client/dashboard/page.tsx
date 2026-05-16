@@ -1,6 +1,6 @@
 "use client";
 
-import { createClient } from "@/lib/supabase-client";
+
 import { useEffect, useState } from "react";
 import { formatRubles, getRiskColor, getRiskBgColor, type RiskLevel } from "@/lib/billing";
 
@@ -20,19 +20,20 @@ interface DashboardData {
 export default function ClientDashboard() {
   const [data,    setData]    = useState<DashboardData | null>(null);
   const [loading, setLoading] = useState(true);
-  const supabase = createClient();
+  
 
  useEffect(() => {
   async function load() {
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) return;
+   const meRes = await fetch("/api/auth/me");
+const { user } = await meRes.json();
+if (!user) return;
 
-    const res = await fetch("/api/data", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ action: "client_dashboard", payload: { clientId: user.id } }),
-    });
-    const { profile, sub, sessions, findings, usage } = await res.json();
+const dataRes = await fetch("/api/data", {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({ action: "client_dashboard", payload: { clientId: user.id } }),
+});
+const { profile, sub, sessions, findings, usage } = await dataRes.json();
 
     const s    = sub?.[0] as any;
     const tier = s?.pricing_tiers;

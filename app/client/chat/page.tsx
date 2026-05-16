@@ -1,6 +1,6 @@
 "use client";
 
-import { createClient } from "@/lib/supabase-client";
+
 import { useEffect, useRef, useState } from "react";
 
 interface Message { role: "user" | "assistant"; content: string; costRub?: number; }
@@ -13,22 +13,26 @@ export default function ChatPage() {
   const [clientId,  setClientId]  = useState<string | null>(null);
   const [totalCost, setTotalCost] = useState(0);
   const bottomRef = useRef<HTMLDivElement>(null);
-  const supabase  = createClient();
+  
 
  useEffect(() => {
   async function init() {
-    const { data: { user } } = await supabase.auth.getUser();
+    // Get user via Vercel — not directly from Russia to Supabase
+    const meRes = await fetch("/api/auth/me");
+    const { user } = await meRes.json();
     if (!user) return;
     setClientId(user.id);
 
-    const res = await fetch("/api/data", {
+    // Get or create audit session
+    const sessionRes = await fetch("/api/data", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ action: "get_or_create_session", payload: { clientId: user.id } }),
     });
-    const { sessionId: sid, isNew } = await res.json();
+    const { sessionId: sid, isNew } = await sessionRes.json();
     setSessionId(sid);
 
+    // Load existing messages if session already existed
     if (!isNew) {
       const msgRes = await fetch("/api/data", {
         method: "POST",

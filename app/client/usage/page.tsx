@@ -1,6 +1,6 @@
 "use client";
 
-import { createClient } from "@/lib/supabase-client";
+
 import { useEffect, useState } from "react";
 import { formatRubles } from "@/lib/billing";
 
@@ -25,19 +25,21 @@ export default function UsagePage() {
   const [totalCost, setTotalCost] = useState(0);
   const [totalIn,   setTotalIn]   = useState(0);
   const [totalOut,  setTotalOut]  = useState(0);
-  const supabase = createClient();
+  
 
 useEffect(() => {
   async function load() {
-    const { data: { user } } = await supabase.auth.getUser();
+    // Get user via Vercel — not directly from Russia to Supabase
+    const meRes = await fetch("/api/auth/me");
+    const { user } = await meRes.json();
     if (!user) return;
 
-    const res  = await fetch("/api/data", {
+    const dataRes = await fetch("/api/data", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ action: "client_usage", payload: { clientId: user.id } }),
     });
-    const evts = await res.json() as UsageEvent[];
+    const evts = await dataRes.json() as UsageEvent[];
     setEvents(evts);
     setTotalCost(evts.reduce((s, e) => s + (e.cost_rub  || 0), 0));
     setTotalIn(  evts.reduce((s, e) => s + (e.tokens_in || 0), 0));

@@ -1,6 +1,6 @@
 "use client";
 
-import { createClient } from "@/lib/supabase-client";
+
 import { useEffect, useRef, useState } from "react";
 
 interface Document {
@@ -38,7 +38,7 @@ export default function DocumentsPage() {
   const [clientId,  setClientId]  = useState<string | null>(null);
   const [dragOver,  setDragOver]  = useState(false);
   const fileRef  = useRef<HTMLInputElement>(null);
-  const supabase = createClient();
+ 
 
   async function loadDocs(uid: string) {
   const res  = await fetch("/api/data", {
@@ -53,16 +53,18 @@ export default function DocumentsPage() {
 
 useEffect(() => {
   async function init() {
-    const { data: { user } } = await supabase.auth.getUser();
+    // Get user via Vercel — not directly from Russia to Supabase
+    const meRes = await fetch("/api/auth/me");
+    const { user } = await meRes.json();
     if (!user) return;
     setClientId(user.id);
 
-    const res = await fetch("/api/data", {
+    const sessionRes = await fetch("/api/data", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ action: "get_or_create_session", payload: { clientId: user.id } }),
     });
-    const { sessionId: sid } = await res.json();
+    const { sessionId: sid } = await sessionRes.json();
     setSessionId(sid);
     await loadDocs(user.id);
   }

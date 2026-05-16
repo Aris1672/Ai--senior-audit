@@ -18,19 +18,19 @@ export default function ClientLayout({ children }: { children: React.ReactNode }
   const pathname = usePathname();
   const supabase = createClient();
 
-  useEffect(() => {
+ useEffect(() => {
   async function checkClient() {
-    const { data: { user } } = await supabase.auth.getUser();
+    const res = await fetch("/api/auth/me");
+    const { user } = await res.json();
+
     if (!user) { router.push("/login"); return; }
 
-    // Use API route to bypass RLS self-reference issue
-    const res = await fetch("/api/auth/profile", {
+    const profileRes = await fetch("/api/auth/profile", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ userId: user.id }),
     });
-
-    const profile = await res.json();
+    const profile = await profileRes.json();
 
     if (profile?.role !== "client") { router.push("/login"); return; }
     if (profile?.status === "paused") { router.push("/login"); return; }
