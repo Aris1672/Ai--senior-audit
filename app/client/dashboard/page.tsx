@@ -108,7 +108,7 @@ const { profile, sub, sessions, findings, usage } = await dataRes.json();
             <h2 style={{ fontSize: "15px", fontWeight: "600", color: "#e8edf8", margin: 0 }}>
               Последние аудиты
             </h2>
-            <a href="/client/chat" style={{ fontSize: "12px", color: "#1565e8", textDecoration: "none" }}>
+            <a href="/client/audit/new" style={{ fontSize: "12px", color: "#1565e8", textDecoration: "none" }}>
               + Новый аудит
             </a>
           </div>

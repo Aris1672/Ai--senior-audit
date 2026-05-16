@@ -165,6 +165,28 @@ export async function POST(req: NextRequest) {
           .eq("id", clientId);
         return NextResponse.json({ success: true });
       }
+      // ── Create new audit session ───────────────────────────
+case "create_audit_session": {
+  const { clientId, companyName, inn, period, sourceType } = payload;
+  const { data: session } = await supabase
+    .from("audit_sessions")
+    .insert({
+      client_id: clientId,
+      title:     `Аудит: ${companyName}${period ? ` (${period})` : ""}`,
+      status:    "active",
+    })
+    .select().single();
+  return NextResponse.json({ sessionId: session?.id });
+}
+
+// ── Confirm audit — save final price ──────────────────
+case "confirm_audit": {
+  const { sessionId, priceRub } = payload;
+  await supabase.from("audit_sessions").update({
+    cost_rub: priceRub,
+  }).eq("id", sessionId);
+  return NextResponse.json({ success: true });
+}
 
       // ── Delete client ──────────────────────────────────────
       case "delete_client": {
