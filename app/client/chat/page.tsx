@@ -24,14 +24,11 @@ export default function ChatPage() {
       if (!user) return;
       setClientId(user.id);
 
-      // Check if a specific session was passed from audit flow
       const urlSessionId = searchParams.get("session");
 
       if (urlSessionId) {
-        // Load the specific audit session
         setSessionId(urlSessionId);
 
-        // Load session context (company name, tx count, price)
         const ctxRes = await fetch("/api/data", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -43,7 +40,6 @@ export default function ChatPage() {
         const ctx = await ctxRes.json();
         setContext(ctx);
 
-        // Load existing messages
         const msgRes = await fetch("/api/data", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -56,7 +52,6 @@ export default function ChatPage() {
         setMessages(msgs || []);
 
       } else {
-        // No session in URL — get or create active session
         const sessionRes = await fetch("/api/data", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -90,19 +85,17 @@ export default function ChatPage() {
   // Auto-send initial audit context message when session loads
   useEffect(() => {
     if (!initDone || !sessionId || !clientId || !context) return;
-    if (messages.length > 0) return; // Already has messages
+    if (messages.length > 0) return;
 
-    // Send context automatically so AI knows what to audit
     const systemMessage = `Начат новый аудит.
 
-Клиент: ${context.company_name || "не указан"}
-ИНН: ${context.inn || "не указан"}
-Период: ${context.period || "не указан"}
-Количество транзакций: ${context.transactions_ct || 0}
-Стоимость аудита: ${context.cost_rub || 0} ₽
-Источник данных: ${context.source_type === "file" ? "Загруженный файл" : "1С напрямую"}
+Клиент: ${context?.company_name || "не указан"}
+ИНН: ${context?.inn || "не указан"}
+Период: ${context?.period || "не указан"}
+Количество транзакций в базе: ${context?.transactions_ct || 0}
+Стоимость аудита зафиксирована: ${context?.cost_rub || 0} ₽
 
-Пожалуйста, начни аудит этой базы данных. Представься и спроси какие конкретные аспекты проверить в первую очередь.`;
+Данные загружены из файла выписки. Начни аудит — представься кратко и сразу задай уточняющие вопросы по приоритетам проверки.`;
 
     sendAutoMessage(systemMessage);
   }, [initDone, context]);
@@ -121,6 +114,8 @@ export default function ChatPage() {
           companyName:      context.company_name,
           periodFrom:       context.period,
           transactionCount: context.transactions_ct,
+          openFindings:     0,
+          criticalCount:    0,
         } : undefined,
         messages: [{ role: "user", content }],
       }),
@@ -167,6 +162,8 @@ export default function ChatPage() {
           companyName:      context.company_name,
           periodFrom:       context.period,
           transactionCount: context.transactions_ct,
+          openFindings:     0,
+          criticalCount:    0,
         } : undefined,
         messages: newMessages.map(m => ({ role: m.role, content: m.content })),
       }),

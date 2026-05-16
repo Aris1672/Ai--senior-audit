@@ -206,15 +206,29 @@ case "confirm_audit": {
 }
 
     // ── Get session context for chat ───────────────────────
-    case "get_session_context": {
-      const { sessionId } = payload;
-      const { data } = await supabase
-        .from("audit_sessions")
-        .select("id, title, status, transactions_ct, cost_rub, period_from, period_to, client_id")
-        .eq("id", sessionId)
-        .single();
-      return NextResponse.json(data || {});
-    }
+   case "get_session_context": {
+  const { sessionId } = payload;
+  const { data } = await supabase
+    .from("audit_sessions")
+    .select("id, title, status, transactions_ct, cost_rub, period_from, period_to")
+    .eq("id", sessionId)
+    .single();
+
+  if (!data) return NextResponse.json({});
+
+  // Parse company name and period from title
+  // Title format: "Аудит: ООО Ромашка (2024)"
+  const title = data.title || "";
+  const companyMatch = title.match(/Аудит:\s*(.+?)(?:\s*\(|$)/);
+  const periodMatch  = title.match(/\((.+?)\)/);
+
+  return NextResponse.json({
+    ...data,
+    company_name: companyMatch?.[1]?.trim() || title,
+    period:       periodMatch?.[1]?.trim()  || "",
+    source_type:  "file",
+  });
+}
 
       // ── Delete client ──────────────────────────────────────
       case "delete_client": {
