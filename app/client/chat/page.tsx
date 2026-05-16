@@ -300,18 +300,32 @@ export default function ChatPage() {
       </div>
 
       {/* Input */}
-      <div style={{ display: "flex", gap: "10px" }}>
-        <input
+      <div style={{ display: "flex", gap: "10px", alignItems: "flex-end" }}>
+        <textarea
           value={input}
-          onChange={e => setInput(e.target.value)}
-          onKeyDown={e => e.key === "Enter" && !e.shiftKey && sendMessage()}
-          placeholder="Введите вопрос на русском языке..."
+          onChange={e => {
+            setInput(e.target.value);
+            // Auto-grow: reset height then set to scrollHeight
+            e.target.style.height = "auto";
+            e.target.style.height = Math.min(e.target.scrollHeight, 200) + "px";
+          }}
+          onKeyDown={e => {
+            if (e.key === "Enter" && !e.shiftKey) {
+              e.preventDefault(); // don't add newline on plain Enter
+              sendMessage();
+            }
+          }}
+          placeholder="Введите вопрос на русском языке... (Shift+Enter для новой строки)"
           disabled={loading}
+          rows={1}
           style={{
             flex: 1, padding: "13px 16px",
             background: "#0c1220", border: "1px solid #1e2d55",
             borderRadius: "8px", color: "#e8edf8",
             fontSize: "14px", outline: "none",
+            resize: "none", overflow: "hidden",
+            lineHeight: "1.5", minHeight: "48px", maxHeight: "200px",
+            fontFamily: "inherit",
           }}
         />
         <button onClick={sendMessage} disabled={loading || !input.trim()} style={{
@@ -319,6 +333,7 @@ export default function ChatPage() {
           border: "none", borderRadius: "8px", color: "#fff",
           fontSize: "14px", fontWeight: "600",
           cursor: loading ? "not-allowed" : "pointer",
+          flexShrink: 0, height: "48px",
         }}>
           {loading ? "..." : "→"}
         </button>
