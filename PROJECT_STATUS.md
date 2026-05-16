@@ -26,16 +26,23 @@ Never direct from Russia to Supabase or Anthropic.
 - Pay-per-audit pricing model (automatic based on transaction count)
 - New audit flow: file upload OR live 1C connection
 - All 4 pricing tiers manageable from admin panel
+- File parser: row counting for xlsx / csv / xml (incl. 1C exports)
+  - lib/file-parser.ts — shared pure parser library (no HTTP, no side effects)
+  - /api/parse-file — dedicated parse endpoint with result caching
+  - /api/upload — auto-triggers background parse after upload
+  - /api/audit/calculate-price — uses cached parse result, on-demand fallback
+  - types/index.ts — core TypeScript interfaces created
 
 ## API Routes
 - /api/auth/me — get current user (server-side)
 - /api/auth/profile — get user role and status
 - /api/data — all frontend data operations
 - /api/chat — Claude Haiku 4.5
-- /api/upload — file upload to Supabase Storage
+- /api/upload — file upload to Supabase Storage + background parse trigger
+- /api/parse-file — parse xlsx/csv/xml and cache row count in documents table
 - /api/admin/clients — CRUD clients
 - /api/admin/pricing — CRUD pricing tiers
-- /api/audit/calculate-price — count transactions + price
+- /api/audit/calculate-price — count transactions + price (uses parser)
 - /api/billing/check-limit — enforce limits
 
 ## Database Tables
@@ -43,8 +50,11 @@ profiles, pricing_tiers, client_subscriptions,
 audit_sessions, transactions, findings,
 audit_messages, documents, usage_events
 
+## Dependencies Added
+- fflate — pure-JS zip decompressor for XLSX parsing (npm install fflate)
+
 ## What Still Needs Building
-- [ ] File parser (count rows from xlsx/csv/xml)
+- [x] File parser (count rows from xlsx/csv/xml)
 - [ ] 1C live connection testing
 - [ ] Client portal: audit history page
 - [ ] Admin: per-client audit billing log
