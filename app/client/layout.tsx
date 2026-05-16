@@ -19,24 +19,27 @@ export default function ClientLayout({ children }: { children: React.ReactNode }
   const supabase = createClient();
 
   useEffect(() => {
-    async function checkClient() {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) { router.push("/login"); return; }
+  async function checkClient() {
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) { router.push("/login"); return; }
 
-      const { data: profile } = await supabase
-        .from("profiles")
-        .select("role, status, company_name")
-        .eq("id", user.id)
-        .single();
+    // Use API route to bypass RLS self-reference issue
+    const res = await fetch("/api/auth/profile", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ userId: user.id }),
+    });
 
-      if (profile?.role !== "client") { router.push("/login"); return; }
-      if (profile?.status === "paused") { router.push("/login"); return; }
+    const profile = await res.json();
 
-      setCompanyName(profile?.company_name || "");
-      setChecking(false);
-    }
-    checkClient();
-  }, []);
+    if (profile?.role !== "client") { router.push("/login"); return; }
+    if (profile?.status === "paused") { router.push("/login"); return; }
+
+    setCompanyName(profile?.company_name || "");
+    setChecking(false);
+  }
+  checkClient();
+}, []);
 
   async function handleLogout() {
     await supabase.auth.signOut();

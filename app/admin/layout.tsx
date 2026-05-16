@@ -17,21 +17,25 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
   const supabase = createClient();
 
   useEffect(() => {
-    async function checkAdmin() {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) { router.push("/login"); return; }
+  async function checkAdmin() {
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) { router.push("/login"); return; }
 
-      const { data: profile } = await supabase
-        .from("profiles")
-        .select("role")
-        .eq("id", user.id)
-        .single();
+    // Use API route to bypass RLS self-reference issue
+    const res = await fetch("/api/auth/profile", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ userId: user.id }),
+    });
 
-      if (profile?.role !== "admin") { router.push("/login"); return; }
-      setChecking(false);
-    }
-    checkAdmin();
-  }, []);
+    const profile = await res.json();
+
+    if (profile?.role !== "admin") { router.push("/login"); return; }
+    if (profile?.status === "paused") { router.push("/login"); return; }
+    setChecking(false);
+  }
+  checkAdmin();
+}, []);
 
   async function handleLogout() {
     await supabase.auth.signOut();

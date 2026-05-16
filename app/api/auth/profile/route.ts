@@ -8,12 +8,12 @@ export async function POST(req: NextRequest) {
 
     const { data: profile } = await supabase
       .from("profiles")
-      .select("role, status")
+      .select("role, status, company_name")
       .eq("id", userId)
       .single();
 
     return NextResponse.json(profile);
   } catch {
-    return NextResponse.json({ role: "client", status: "active" });
+    return NextResponse.json({ role: "client", status: "active", company_name: "" });
   }
 }
