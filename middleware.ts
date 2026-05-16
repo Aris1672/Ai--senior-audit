@@ -16,11 +16,12 @@ export async function middleware(req: NextRequest) {
     }
   );
 
-  // Refresh session — keeps auth alive server-side
   await supabase.auth.getUser();
-
   return res;
 }
+
+// Also export as proxy for Next.js 16 compatibility
+export { middleware as proxy };
 
 export const config = {
   matcher: [
