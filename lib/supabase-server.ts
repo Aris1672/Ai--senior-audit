@@ -3,8 +3,8 @@ import { createClient } from "@supabase/supabase-js";
 import { cookies } from "next/headers";
 
 // ─── Used in API routes & Server Components (respects RLS) ───────────────────
-export function createServerClient() {
-  const cookieStore = cookies();
+export async function createServerClient() {
+  const cookieStore = await cookies();
 
   return createSupabaseServerClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
