@@ -4,52 +4,65 @@ import { parseFile } from "@/lib/file-parser";
 import { NextRequest, NextResponse } from "next/server";
 
 // ─── Fetch + parse the uploaded document from Supabase Storage ───────────────
-
 async function getDocumentTextContent(
   supabase: ReturnType<typeof createAdminClient>,
   sessionId: string
 ): Promise<string | null> {
   try {
-    // 1. Find document linked to this audit session
+    console.log("[chat] Looking up document for sessionId:", sessionId);
+
     const { data: doc, error: docErr } = await supabase
       .from("documents")
-      .select("storage_path, file_name, file_type, row_count")
+      .select("storage_path, file_name, file_type, page_count")
       .eq("session_id", sessionId)
-      .order("created_at", { ascending: false })
+      .order("uploaded_at", { ascending: false })
       .limit(1)
       .single();
 
-    if (docErr || !doc?.storage_path) return null;
+    if (docErr) {
+      console.error("[chat] Document lookup error:", docErr.message);
+      return null;
+    }
+    if (!doc?.storage_path) {
+      console.warn("[chat] No document found for session:", sessionId);
+      return null;
+    }
 
-    // 2. Download file bytes from Supabase Storage
-    //    createAdminClient uses the SERVICE_ROLE key — bypasses RLS
+    console.log("[chat] Found document:", doc.file_name, "at path:", doc.storage_path);
+
+    // Download file bytes from Supabase Storage via service role
     const { data: blob, error: dlErr } = await supabase
       .storage
       .from("audit-documents")
       .download(doc.storage_path);
 
     if (dlErr || !blob) {
-      console.error("[chat] Storage download failed:", dlErr);
-      return `[Документ: ${doc.file_name}, строк: ${doc.row_count ?? "?"} — файл недоступен]`;
+      console.error("[chat] Storage download failed:", dlErr?.message);
+      return `[Документ: ${doc.file_name} — ошибка загрузки: ${dlErr?.message}]`;
     }
 
-    // 3. Convert Blob → ArrayBuffer → parse
+    console.log("[chat] Downloaded blob size:", blob.size, "bytes");
+
     const arrayBuffer = await blob.arrayBuffer();
 
-    // Detect file type from name or stored type
+    // Detect file type from extension
     const ext = doc.file_name?.split(".").pop()?.toLowerCase();
     const fileType =
       ext === "csv" ? "csv"
       : ext === "xml" ? "xml"
-      : "xlsx"; // default to xlsx for .xlsx / .xls / unknown
+      : "xlsx";
+
+    console.log("[chat] Parsing as:", fileType);
 
     const parsed = await parseFile(arrayBuffer, fileType);
+
+    console.log("[chat] Parse result — rowCount:", parsed.rowCount,
+      "textContent length:", parsed.textContent?.length ?? 0);
 
     if (!parsed.textContent) {
       return `[Документ: ${doc.file_name}, строк: ${parsed.rowCount}. Содержимое не извлечено.]`;
     }
 
-    // 4. Build a labelled block for the system prompt
     const header = [
       `Файл: ${doc.file_name}`,
       `Формат: ${parsed.parseMethod.toUpperCase()}`,
@@ -63,17 +76,19 @@ async function getDocumentTextContent(
       .join("\n");
 
     return `=== ЗАГРУЖЕННЫЙ ФИНАНСОВЫЙ ДОКУМЕНТ ===\n${header}\n\n${parsed.textContent}\n=== КОНЕЦ ДОКУМЕНТА ===`;
+
   } catch (err) {
-    console.error("[chat] getDocumentTextContent error:", err);
+    console.error("[chat] getDocumentTextContent exception:", err);
     return null;
   }
 }
 
 // ─── POST /api/chat ───────────────────────────────────────────────────────────
-
 export async function POST(req: NextRequest) {
   try {
     const { messages, sessionId, clientId, context } = await req.json();
+
+    console.log("[chat] POST — clientId:", clientId, "sessionId:", sessionId);
 
     if (!clientId || !messages) {
       return NextResponse.json(
@@ -84,7 +99,7 @@ export async function POST(req: NextRequest) {
 
     const supabase = createAdminClient();
 
-    // Check client is active before every AI call
+    // Check client is active
     const { data: profile } = await supabase
       .from("profiles")
       .select("status, company_name")
@@ -98,21 +113,28 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // Fetch and parse the uploaded document (if session has one)
+    // Fetch and parse the uploaded document
     let fileSection = "";
     if (sessionId) {
       const fileContent = await getDocumentTextContent(supabase, sessionId);
       if (fileContent) {
         fileSection = `\n\n${fileContent}`;
+        console.log("[chat] File content added to prompt, length:", fileContent.length);
+      } else {
+        console.warn("[chat] No file content retrieved for session:", sessionId);
       }
+    } else {
+      console.warn("[chat] No sessionId provided — skipping file lookup");
     }
 
-    // Build system prompt: base + audit context + file content
+    // Build system prompt
     const systemPrompt = context
       ? `${AUDIT_SYSTEM_PROMPT}\n\n${buildAuditContext(context)}${fileSection}`
       : `${AUDIT_SYSTEM_PROMPT}${fileSection}`;
 
-    // Call Claude Haiku 4.5 via Vercel — never directly from Russia
+    console.log("[chat] System prompt length:", systemPrompt.length,
+      "| Has file:", fileSection.length > 0);
+
     const response = await anthropic.messages.create({
       model:      "claude-haiku-4-5",
       max_tokens: 2048,
@@ -124,13 +146,11 @@ export async function POST(req: NextRequest) {
     const tokensIn  = response.usage.input_tokens;
     const tokensOut = response.usage.output_tokens;
 
-    // Calculate cost in rubles
     const usdToRub = Number(process.env.USD_TO_RUB) || 90;
     const costRub  =
       ((tokensIn  / 1000) * HAIKU_PRICING.inputPer1K +
        (tokensOut / 1000) * HAIKU_PRICING.outputPer1K) * usdToRub;
 
-    // Persist message + usage event + session cost in parallel
     await Promise.all([
       supabase.from("audit_messages").insert({
         session_id: sessionId,
@@ -162,8 +182,9 @@ export async function POST(req: NextRequest) {
       tokensOut,
       costRub:  Math.round(costRub * 100) / 100,
     });
+
   } catch (err) {
-    console.error("chat route error:", err);
+    console.error("[chat] route error:", err);
     return NextResponse.json(
       { error: "Внутренняя ошибка сервера" },
       { status: 500 }

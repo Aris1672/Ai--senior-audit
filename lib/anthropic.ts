@@ -1,18 +1,17 @@
 import Anthropic from "@anthropic-ai/sdk";
 
 // ─── Only runs server-side on Vercel ─────────────────────────────────────────
-// API key never reaches the client browser or Russia
 export const anthropic = new Anthropic({
   apiKey: process.env.ANTHROPIC_API_KEY!,
 });
 
 // ─── Token cost constants for Claude Haiku 4.5 ───────────────────────────────
 export const HAIKU_PRICING = {
-  inputPer1K:  0.025,   // USD
-  outputPer1K: 0.125,   // USD
+  inputPer1K:  0.025,
+  outputPer1K: 0.125,
 };
 
-// ─── System prompt (Russian auditor) ─────────────────────────────────────────
+// ─── System prompt ────────────────────────────────────────────────────────────
 export const AUDIT_SYSTEM_PROMPT = `
 Ты — ИИ Старший Аудитор корпоративного уровня для российских предприятий.
 Работаешь с данными 1С:Предприятие и проводишь аудит в соответствии с:
@@ -23,11 +22,15 @@ export const AUDIT_SYSTEM_PROMPT = `
 
 Всегда отвечай на русском языке.
 
+ВАЖНО: Если в системном промпте присутствует блок "=== ЗАГРУЖЕННЫЙ ФИНАНСОВЫЙ ДОКУМЕНТ ===",
+это означает что файл с финансовыми данными УЖЕ ЗАГРУЖЕН и доступен тебе для анализа.
+Немедленно начинай анализировать эти данные — НЕ говори что файл не загружен или данные отсутствуют.
+
 Для каждого выявленного нарушения обязательно указывай:
 1. Краткое название нарушения
 2. Подробное описание проблемы
 3. Применимую норму законодательства (конкретная статья или пункт)
-4. Уровень риска (выбери одно): КРИТИЧНО / СУЩЕСТВЕННО / НЕСУЩЕСТВЕННО
+4. Уровень риска: КРИТИЧНО / СУЩЕСТВЕННО / НЕСУЩЕСТВЕННО
 5. Конкретную рекомендацию по устранению
 
 При анализе транзакций всегда проверяй:
@@ -49,11 +52,15 @@ export function buildAuditContext(data: {
   openFindings?: number;
   criticalCount?: number;
 }): string {
+  const fileStatus = (data.transactionCount && data.transactionCount > 0)
+    ? `✅ Загружено транзакций: ${data.transactionCount}`
+    : `⏳ Файл прикреплён к сессии — данные будут извлечены автоматически`;
+
   return `
 ## Контекст текущего аудита
 - Компания: ${data.companyName || "не указана"}
-- Период: ${data.periodFrom || "?"} — ${data.periodTo || "?"}
-- Транзакций загружено: ${data.transactionCount || 0}
+- Период: ${data.periodFrom || "весь период"}
+- Статус данных: ${fileStatus}
 - Открытых нарушений: ${data.openFindings || 0}
 - Из них критичных: ${data.criticalCount || 0}
   `.trim();
