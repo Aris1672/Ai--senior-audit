@@ -13,40 +13,42 @@ export default function LoginPage() {
   const supabase = createClient();
 
   async function handleLogin() {
-    setLoading(true);
-    setError("");
+  setLoading(true);
+  setError("");
 
-    const { data, error: authError } = await supabase.auth.signInWithPassword({
-      email,
-      password,
-    });
+  const { data, error: authError } = await supabase.auth.signInWithPassword({
+    email,
+    password,
+  });
 
-    if (authError || !data.user) {
-      setError("Неверный email или пароль");
-      setLoading(false);
-      return;
-    }
-
-    // Get role from profile and redirect accordingly
-    const { data: profile } = await supabase
-      .from("profiles")
-      .select("role, status")
-      .eq("id", data.user.id)
-      .single();
-
-    if (profile?.status === "paused") {
-      setError("Ваш аккаунт приостановлен. Обратитесь к администратору.");
-      await supabase.auth.signOut();
-      setLoading(false);
-      return;
-    }
-
-    if (profile?.role === "admin") {
-      router.push("/admin");
-    } else {
-      router.push("/client/dashboard");
-    }
+  if (authError || !data.user) {
+    setError("Неверный email или пароль");
+    setLoading(false);
+    return;
   }
+
+  // Use service role via API route to get profile
+  const res = await fetch("/api/auth/profile", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ userId: data.user.id }),
+  });
+
+  const profile = await res.json();
+
+  if (profile?.status === "paused") {
+    setError("Ваш аккаунт приостановлен. Обратитесь к администратору.");
+    await supabase.auth.signOut();
+    setLoading(false);
+    return;
+  }
+
+  if (profile?.role === "admin") {
+    router.push("/admin");
+  } else {
+    router.push("/client/dashboard");
+  }
+}
 
   return (
     <div style={{
