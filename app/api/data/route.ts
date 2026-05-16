@@ -51,7 +51,14 @@ export async function POST(req: NextRequest) {
           .order("sort_order");
         return NextResponse.json(data || []);
       }
-
+      // ── All pricing tiers including inactive (admin only) ──
+      case "pricing_tiers_all": {
+        const { data } = await supabase
+         .from("pricing_tiers")
+         .select("*")
+         .order("sort_order");
+      return NextResponse.json(data || []);
+      }
       // ── Client dashboard data ──────────────────────────────
       case "client_dashboard": {
         const { clientId } = payload;
