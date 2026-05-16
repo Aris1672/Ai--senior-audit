@@ -18,22 +18,27 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
 
 useEffect(() => {
   async function checkAdmin() {
-    // Get user via Vercel (server-side session already validated by middleware)
-    const res = await fetch("/api/auth/me");
-    const { user } = await res.json();
+    try {
+      const res = await fetch("/api/auth/me");
+      const { user } = await res.json();
 
-    if (!user) { router.push("/login"); return; }
+      if (!user) { router.push("/login"); return; }
 
-    const profileRes = await fetch("/api/auth/profile", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ userId: user.id }),
-    });
-    const profile = await profileRes.json();
+      const profileRes = await fetch("/api/auth/profile", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ userId: user.id }),
+      });
+      const profile = await profileRes.json();
 
-    if (profile?.role !== "admin") { router.push("/login"); return; }
-    if (profile?.status === "paused") { router.push("/login"); return; }
-    setChecking(false);
+      if (profile?.role !== "admin") { router.push("/login"); return; }
+      if (profile?.status === "paused") { router.push("/login"); return; }
+      
+      setChecking(false);
+    } catch (err) {
+      console.error("Admin auth check failed:", err);
+      router.push("/login");
+    }
   }
   checkAdmin();
 }, []);

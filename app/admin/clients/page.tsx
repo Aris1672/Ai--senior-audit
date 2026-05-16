@@ -1,6 +1,6 @@
 "use client";
 
-import { createClient } from "@/lib/supabase-client";
+
 import { useEffect, useState } from "react";
 import { formatRubles } from "@/lib/billing";
 
@@ -31,23 +31,32 @@ const STATUS_STYLE: Record<string, { color: string; bg: string; label: string }>
 };
 
 export default function AdminClientsPage() {
-  const [clients, setClients]   = useState<Client[]>([]);
-  const [loading, setLoading]   = useState(true);
-  const [search,  setSearch]    = useState("");
-  const [acting,  setActing]    = useState<string | null>(null);
-  const supabase = createClient();
+const [clients, setClients] = useState<Client[]>([]);
+const [loading, setLoading] = useState(true);
+const [search,  setSearch]  = useState("");
+const [acting,  setActing]  = useState<string | null>(null);
 
-  async function loadClients() {
-  const res  = await fetch("/api/data", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ action: "admin_clients" }),
-  });
-  const data = await res.json();
-  console.log("clients response:", data);
-  setClients(data);
-  setLoading(false);
+async function loadClients() {
+  try {
+    const res  = await fetch("/api/data", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "admin_clients" }),
+    });
+    const data = await res.json();
+    console.log("clients data:", data);
+    setClients(Array.isArray(data) ? data : []);
+  } catch (err) {
+    console.error("loadClients error:", err);
+    setClients([]);
+  } finally {
+    setLoading(false);
+  }
 }
+
+useEffect(() => {
+  loadClients();
+}, []);
 
 async function handlePause(clientId: string, currentStatus: string) {
   setActing(clientId);
