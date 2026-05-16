@@ -14,55 +14,70 @@ export default function ChatPage() {
   const [totalCost, setTotalCost] = useState(0);
   const [context,   setContext]   = useState<any>(null);
   const [initDone,  setInitDone]  = useState(false);
+  const autoSentRef  = useRef(false);   // prevent double auto-send
   const bottomRef    = useRef<HTMLDivElement>(null);
   const searchParams = useSearchParams();
 
+  // ── Init: load user, session, context, history ──────────────────────────────
   useEffect(() => {
     async function init() {
       const meRes = await fetch("/api/auth/me");
       const { user } = await meRes.json();
       if (!user) return;
-      setClientId(user.id);
+
+      const uid = user.id;
+      setClientId(uid);
 
       const urlSessionId = searchParams.get("session");
 
       if (urlSessionId) {
         setSessionId(urlSessionId);
 
-        const ctxRes = await fetch("/api/data", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            action: "get_session_context",
-            payload: { sessionId: urlSessionId },
+        // Load context and message history in parallel
+        const [ctxRes, msgRes] = await Promise.all([
+          fetch("/api/data", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              action: "get_session_context",
+              payload: { sessionId: urlSessionId },
+            }),
           }),
-        });
-        const ctx = await ctxRes.json();
-        setContext(ctx);
+          fetch("/api/data", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              action: "client_messages",
+              payload: { sessionId: urlSessionId },
+            }),
+          }),
+        ]);
 
-        const msgRes = await fetch("/api/data", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            action: "client_messages",
-            payload: { sessionId: urlSessionId },
-          }),
-        });
+        const ctx  = await ctxRes.json();
         const msgs = await msgRes.json();
+
+        setContext(ctx);
         setMessages(msgs || []);
 
+        // Pass resolved values directly to avoid stale-state race
+        setInitDone(true);
+        // Store for auto-send trigger below
+        initRef.current = { uid, sessionId: urlSessionId, ctx, msgs: msgs || [] };
+
       } else {
+        // No session in URL — get or create a generic one
         const sessionRes = await fetch("/api/data", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             action: "get_or_create_session",
-            payload: { clientId: user.id },
+            payload: { clientId: uid },
           }),
         });
         const { sessionId: sid, isNew } = await sessionRes.json();
         setSessionId(sid);
 
+        let msgs: Message[] = [];
         if (!isNew) {
           const msgRes = await fetch("/api/data", {
             method: "POST",
@@ -72,52 +87,83 @@ export default function ChatPage() {
               payload: { sessionId: sid },
             }),
           });
-          const msgs = await msgRes.json();
-          setMessages(msgs || []);
+          msgs = await msgRes.json() || [];
+          setMessages(msgs);
         }
-      }
 
-      setInitDone(true);
+        setInitDone(true);
+        initRef.current = { uid, sessionId: sid, ctx: null, msgs };
+      }
     }
     init();
   }, []);
 
-  // Auto-send initial audit context message when session loads
+  // Ref to hold resolved init values (avoids stale closure in auto-send)
+  const initRef = useRef<{
+    uid: string;
+    sessionId: string;
+    ctx: any;
+    msgs: Message[];
+  } | null>(null);
+
+  // ── Auto-send opening message once init is done ──────────────────────────────
   useEffect(() => {
-    if (!initDone || !sessionId || !clientId || !context) return;
-    if (messages.length > 0) return;
+    if (!initDone) return;
+    if (autoSentRef.current) return;
 
-    const systemMessage = `Начат новый аудит.
+    const init = initRef.current;
+    if (!init) return;
 
-Клиент: ${context?.company_name || "не указан"}
-ИНН: ${context?.inn || "не указан"}
-Период: ${context?.period || "не указан"}
-Количество транзакций в базе: ${context?.transactions_ct || 0}
-Стоимость аудита зафиксирована: ${context?.cost_rub || 0} ₽
+    // Only auto-send if this is a fresh session (no prior messages)
+    if (init.msgs.length > 0) return;
 
-Данные загружены из файла выписки. Начни аудит — представься кратко и сразу задай уточняющие вопросы по приоритетам проверки.`;
+    autoSentRef.current = true;
 
-    sendAutoMessage(systemMessage);
-  }, [initDone, context]);
+    const ctx = init.ctx;
+    const systemMessage = ctx
+      ? `Начат новый аудит.
 
-  async function sendAutoMessage(content: string) {
-    if (!clientId || !sessionId) return;
+Клиент: ${ctx.company_name || "не указан"}
+ИНН: ${ctx.inn || "не указан"}
+Период: ${ctx.period || "не указан"}
+Количество транзакций в базе: ${ctx.transactions_ct || 0}
+Стоимость аудита зафиксирована: ${ctx.cost_rub || 0} ₽
+
+Файл с финансовыми данными прикреплён к этой сессии — ты получишь его содержимое автоматически. Представься кратко и сразу задай уточняющие вопросы по приоритетам проверки.`
+      : `Начат новый сеанс аудита. Представься и спроси, что нужно проверить.`;
+
+    // Call sendAutoMessage with resolved values directly
+    sendAutoMessageDirect(
+      systemMessage,
+      init.uid,
+      init.sessionId,
+      ctx ? {
+        companyName:      ctx.company_name,
+        periodFrom:       ctx.period,
+        transactionCount: ctx.transactions_ct,
+        openFindings:     0,
+        criticalCount:    0,
+      } : undefined
+    );
+  }, [initDone]);
+
+  // ── Send auto opening message (uses direct params, not state) ────────────────
+  async function sendAutoMessageDirect(
+    content: string,
+    uid: string,
+    sid: string,
+    ctx?: any
+  ) {
     setLoading(true);
 
     const res = await fetch("/api/chat", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        clientId,
-        sessionId,
-        context: context ? {
-          companyName:      context.company_name,
-          periodFrom:       context.period,
-          transactionCount: context.transactions_ct,
-          openFindings:     0,
-          criticalCount:    0,
-        } : undefined,
-        messages: [{ role: "user", content }],
+        clientId:  uid,
+        sessionId: sid,       // ← always the resolved value, never null
+        context:   ctx,
+        messages:  [{ role: "user", content }],
       }),
     });
 
@@ -129,10 +175,12 @@ export default function ChatPage() {
     setLoading(false);
   }
 
+  // ── Scroll to bottom on new messages ─────────────────────────────────────────
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
+  // ── Send user message ─────────────────────────────────────────────────────────
   async function sendMessage() {
     if (!input.trim() || !clientId || !sessionId || loading) return;
 
@@ -142,7 +190,7 @@ export default function ChatPage() {
     setInput("");
     setLoading(true);
 
-    // Save user message
+    // Save user message to DB
     await fetch("/api/data", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
