@@ -44,6 +44,7 @@ export default function AdminClientsPage() {
     body: JSON.stringify({ action: "admin_clients" }),
   });
   const data = await res.json();
+  console.log("clients response:", data);
   setClients(data);
   setLoading(false);
 }

@@ -26,21 +26,38 @@ export async function POST(req: NextRequest) {
 
       // ── Admin clients list ─────────────────────────────────
       case "admin_clients": {
-        const { data } = await supabase
-          .from("profiles")
-          .select(`
-            id, full_name, company_name, inn, status, created_at,
-            client_subscriptions (
-              audits_purchased, audits_used, custom_price_rub,
-              pricing_tiers ( name, price_rub )
-            ),
-            audit_sessions ( id, status, cost_rub )
-          `)
-          .eq("role", "client")
-          .neq("status", "deleted")
-          .order("created_at", { ascending: false });
-        return NextResponse.json(data || []);
-      }
+  const { data, error } = await supabase
+    .from("profiles")
+    .select(`
+      id,
+      full_name,
+      company_name,
+      inn,
+      status,
+      created_at,
+      client_subscriptions (
+        audits_purchased,
+        audits_used,
+        custom_price_rub,
+        pricing_tiers ( name, price_rub )
+      ),
+      audit_sessions (
+        id,
+        status,
+        cost_rub
+      )
+    `)
+    .eq("role", "client")
+    .neq("status", "deleted")
+    .order("created_at", { ascending: false });
+
+  if (error) {
+    console.error("admin_clients error:", error);
+    return NextResponse.json({ error: error.message }, { status: 500 });
+  }
+
+  return NextResponse.json(data || []);
+}
 
       // ── Pricing tiers ──────────────────────────────────────
       case "pricing_tiers": {
