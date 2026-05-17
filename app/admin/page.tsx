@@ -11,8 +11,7 @@ interface Stats {
   totalSessions:   number;
   totalFindings:   number;
   criticalFindings: number;
-  totalRevenue:    number;
-  totalTokensUsed: number;
+  totalAuditCharges: number;  // sum of fixed audit prices from audit_sessions
 }
 
 export default function AdminDashboard() {
@@ -36,8 +35,7 @@ export default function AdminDashboard() {
       totalSessions:    sessions?.length || 0,
       totalFindings:    findings?.length || 0,
       criticalFindings: findings?.filter((f: any) => f.risk_level === "КРИТИЧНО").length || 0,
-      totalRevenue:     usage?.reduce((s: number, e: any) => s + (e.cost_rub || 0), 0) || 0,
-      totalTokensUsed:  usage?.reduce((s: number, e: any) => s + (e.tokens_in || 0) + (e.tokens_out || 0), 0) || 0,
+      totalAuditCharges: sessions?.reduce((s: number, e: any) => s + (e.cost_rub || 0), 0) || 0,
     });
     setLoading(false);
   }
@@ -51,8 +49,7 @@ export default function AdminDashboard() {
     { label: "Аудит-сессий",         value: stats.totalSessions,                   color: "#4d91ff" },
     { label: "Всего нарушений",      value: stats.totalFindings,                   color: "#f59e0b" },
     { label: "Критичных нарушений",  value: stats.criticalFindings,                color: "#e84040" },
-    { label: "Выручка (AI-токены)",  value: formatRubles(stats.totalRevenue),      color: "#2ecc8f" },
-    { label: "Токенов использовано", value: stats.totalTokensUsed.toLocaleString("ru"), color: "#7a90c0" },
+    { label: "Выручка с клиентов",   value: formatRubles(stats.totalAuditCharges), color: "#2ecc8f" },
   ] : [];
 
   return (
