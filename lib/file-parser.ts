@@ -1,14 +1,18 @@
 /**
  * lib/file-parser.ts
  *
- * Content extraction for xlsx / csv / xml / docx.
+ * Content extraction for xlsx / xls / csv / xml / docx.
  * No HTTP calls, no Supabase — imported directly by API routes.
  * Runs inside Vercel (Node.js runtime).
+ *
+ * Dependencies:
+ *   fflate  — for xlsx / docx (already installed)
+ *   xlsx    — for legacy .xls binary format (npm install xlsx)
  */
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
-export type ParseMethod = "xlsx" | "csv" | "xml" | "docx" | "fallback";
+export type ParseMethod = "xlsx" | "xls" | "csv" | "xml" | "docx" | "fallback";
 
 export interface ParseResult {
   rowCount: number;
@@ -41,8 +45,8 @@ export function parseCSV(buffer: ArrayBuffer): ParseResult {
   const delimiter = lines[0].includes(";") ? ";" : ",";
   const headers   = lines[0].split(delimiter).map(h => h.replace(/^"|"$/g, "").trim());
 
-  const maxRows    = Math.min(lines.length, 501);
-  const totalRows  = Math.max(0, lines.length - 1);
+  const maxRows   = Math.min(lines.length, 501);
+  const totalRows = Math.max(0, lines.length - 1);
   const textContent =
     lines.slice(0, maxRows).join("\n").slice(0, MAX_CONTENT_CHARS) +
     (totalRows > 500 ? `\n\n[Показаны первые 500 из ${totalRows} строк]` : "");
@@ -74,20 +78,15 @@ export function parseXML(buffer: ArrayBuffer): ParseResult {
 }
 
 // ─── DOCX ─────────────────────────────────────────────────────────────────────
-// A .docx is a ZIP containing word/document.xml — we unzip with fflate
-// and strip XML tags to get plain text.
 
 export async function parseDOCX(buffer: ArrayBuffer): Promise<ParseResult> {
   try {
-    const fflate   = await import("fflate");
-    const unzipped = fflate.unzipSync(new Uint8Array(buffer));
-
+    const fflate      = await import("fflate");
+    const unzipped    = fflate.unzipSync(new Uint8Array(buffer));
     const docXmlBytes = unzipped["word/document.xml"];
-    if (!docXmlBytes) throw new Error("word/document.xml not found in docx");
+    if (!docXmlBytes) throw new Error("word/document.xml not found");
 
-    const docXml = new TextDecoder("utf-8").decode(docXmlBytes);
-
-    // Extract text from <w:t> elements (Word text runs)
+    const docXml  = new TextDecoder("utf-8").decode(docXmlBytes);
     const runs    = docXml.match(/<w:t[^>]*>([^<]*)<\/w:t>/g) || [];
     const rawText = runs
       .map(r => r.replace(/<w:t[^>]*>/, "").replace(/<\/w:t>/, ""))
@@ -95,17 +94,73 @@ export async function parseDOCX(buffer: ArrayBuffer): Promise<ParseResult> {
       .replace(/\s+/g, " ")
       .trim();
 
-    // Count paragraphs as "rows"
-    const paragraphs = (docXml.match(/<w:p[\s>]/g) || []).length;
-
+    const paragraphs  = (docXml.match(/<w:p[\s>]/g) || []).length;
     const textContent = rawText.slice(0, MAX_CONTENT_CHARS) +
-      (rawText.length > MAX_CONTENT_CHARS ? "\n\n[Текст обрезан — показаны первые 50 000 символов]" : "");
+      (rawText.length > MAX_CONTENT_CHARS ? "\n\n[Текст обрезан]" : "");
 
     return { rowCount: paragraphs, parseMethod: "docx", textContent, parsedAt: now() };
-
   } catch (err) {
     console.warn("[file-parser] DOCX parse failed:", err);
     return { rowCount: 0, parseMethod: "fallback", textContent: "[Не удалось прочитать содержимое файла DOCX]", parsedAt: now() };
+  }
+}
+
+// ─── XLS (legacy binary format, pre-2007) ────────────────────────────────────
+// Uses the 'xlsx' npm package which handles the proprietary BIFF binary format.
+// We use it ONLY for .xls — .xlsx continues to use fflate (faster, no dep).
+
+export async function parseXLS(buffer: ArrayBuffer): Promise<ParseResult> {
+  try {
+    const XLSX = await import("xlsx");
+
+    const workbook  = XLSX.read(new Uint8Array(buffer), { type: "array" });
+    const sheetName = workbook.SheetNames[0];
+    const sheet     = workbook.Sheets[sheetName];
+
+    if (!sheet) throw new Error("No sheets found in XLS");
+
+    // Convert sheet to array of arrays
+    const rows: any[][] = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: "" });
+
+    if (rows.length === 0) {
+      return { rowCount: 0, parseMethod: "xls", sheetName, textContent: "[Файл пустой]", parsedAt: now() };
+    }
+
+    const headers   = (rows[0] as any[]).map(h => String(h ?? "").trim()).filter(Boolean);
+    const dataRows  = rows.slice(1);
+    const totalRows = dataRows.length;
+    const maxRows   = Math.min(dataRows.length, 500);
+
+    const lines = [
+      headers.join(";"),
+      ...dataRows.slice(0, maxRows).map(row =>
+        (row as any[]).map(cell => String(cell ?? "").trim()).join(";")
+      ),
+    ];
+
+    const truncationNote = totalRows > 500
+      ? `\n[Показаны первые 500 из ${totalRows} строк]`
+      : "";
+
+    const textContent = lines.join("\n").slice(0, MAX_CONTENT_CHARS) + truncationNote;
+
+    return {
+      rowCount:        totalRows,
+      parseMethod:     "xls",
+      sheetName,
+      detectedColumns: headers.slice(0, 10),
+      textContent,
+      parsedAt:        now(),
+    };
+
+  } catch (err) {
+    console.warn("[file-parser] XLS parse failed:", err);
+    return {
+      rowCount:    Math.floor(buffer.byteLength / 200),
+      parseMethod: "fallback",
+      textContent: "[Не удалось прочитать содержимое файла XLS]",
+      parsedAt:    now(),
+    };
   }
 }
 
@@ -124,7 +179,6 @@ export async function parseXLSX(buffer: ArrayBuffer): Promise<ParseResult> {
     const sheetXml  = new TextDecoder("utf-8").decode(unzipped[sheetKey]);
     const rowCount  = Math.max(0, (sheetXml.match(/<row[\s>]/gi) || []).length - 1);
 
-    // Build shared strings lookup
     const sharedStrings: string[] = [];
     if (unzipped["xl/sharedStrings.xml"]) {
       const ssXml   = new TextDecoder("utf-8").decode(unzipped["xl/sharedStrings.xml"]);
@@ -134,7 +188,6 @@ export async function parseXLSX(buffer: ArrayBuffer): Promise<ParseResult> {
       }
     }
 
-    // Convert rows → CSV-like text
     const rowMatches = sheetXml.match(/<row[\s\S]*?<\/row>/gi) || [];
     const maxRows    = Math.min(rowMatches.length, 501);
     const csvLines: string[] = [];
@@ -166,11 +219,12 @@ export async function parseXLSX(buffer: ArrayBuffer): Promise<ParseResult> {
 
 export async function parseFile(
   buffer: ArrayBuffer,
-  fileType: "xlsx" | "csv" | "xml" | "docx"
+  fileType: "xlsx" | "xls" | "csv" | "xml" | "docx"
 ): Promise<ParseResult> {
   if (fileType === "csv")  return parseCSV(buffer);
   if (fileType === "xml")  return parseXML(buffer);
   if (fileType === "docx") return parseDOCX(buffer);
+  if (fileType === "xls")  return parseXLS(buffer);
   return parseXLSX(buffer);
 }
 

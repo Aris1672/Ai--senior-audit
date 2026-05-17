@@ -56,6 +56,7 @@ async function getAllDocumentsContent(
         ext === "csv" ? "csv"
         : ext === "xml" ? "xml"
         : ext === "docx" ? "docx"
+        : ext === "xls"  ? "xls"
         : "xlsx";
 
       const parsed = await parseFile(arrayBuffer, fileType as "xlsx" | "csv" | "xml" | "docx");

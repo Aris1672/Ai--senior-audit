@@ -20,6 +20,7 @@ const ALLOWED_TYPES: Record<string, string> = {
   "application/vnd.openxmlformats-officedocument.wordprocessingml.document": "docx",
   "image/jpeg":       "image",
   "image/png":        "image",
+  "application/vnd.ms-excel": "xls",
 };
 
 const PARSEABLE = new Set(["xlsx", "csv", "xml"]);
