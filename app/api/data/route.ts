@@ -43,8 +43,11 @@ export async function POST(req: NextRequest) {
       ),
       audit_sessions (
         id,
+        title,
         status,
-        cost_rub
+        cost_rub,
+        paid,
+        created_at
       )
     `)
     .eq("role", "client")
