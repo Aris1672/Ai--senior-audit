@@ -164,6 +164,8 @@ export async function POST(req: NextRequest) {
       ((tokensIn  / 1000) * HAIKU_PRICING.inputPer1K +
        (tokensOut / 1000) * HAIKU_PRICING.outputPer1K) * usdToRub;
 
+    // Run DB saves AND findings extraction in parallel — all awaited
+    // so Vercel doesn't kill them before completion
     await Promise.all([
       supabase.from("audit_messages").insert({
         session_id: sessionId,
@@ -187,6 +189,9 @@ export async function POST(req: NextRequest) {
         p_session_id: sessionId,
         p_amount:     costRub,
       }),
+
+      // Findings extraction runs in parallel with DB saves
+      extractAndSaveFindings(supabase, sessionId, clientId, text),
     ]);
 
     return NextResponse.json({
