@@ -1,70 +1,96 @@
 "use client";
 
-
 import { useEffect, useState } from "react";
-import { formatRubles, getRiskColor, getRiskBgColor, type RiskLevel } from "@/lib/billing";
+import { getRiskColor, getRiskBgColor, type RiskLevel } from "@/lib/billing";
+
+interface SessionData {
+  id:              string;
+  title:           string;
+  status:          string;
+  transactions_ct: number;
+  findings_ct:     number;
+  cost_rub:        number;
+  created_at:      string;
+}
 
 interface DashboardData {
-  company_name:     string;
-  tier_name:        string;
-  audits_remaining: number;
-  audits_purchased: number;
-  max_tx:           number;
-  price_rub:        number;
-  sessions:         any[];
-  findings:         any[];
-  totalCost:        number;
-  totalTx:          number;
+  company_name: string;
+  sessions:     SessionData[];
+  findings:     any[];
+  totalAudits:  number;
+  totalSpend:   number; // sum of fixed audit prices only
 }
 
 export default function ClientDashboard() {
   const [data,    setData]    = useState<DashboardData | null>(null);
   const [loading, setLoading] = useState(true);
-  
 
- useEffect(() => {
-  async function load() {
-   const meRes = await fetch("/api/auth/me");
-const { user } = await meRes.json();
-if (!user) return;
+  useEffect(() => {
+    async function load() {
+      const meRes = await fetch("/api/auth/me");
+      const { user } = await meRes.json();
+      if (!user) return;
 
-const dataRes = await fetch("/api/data", {
-  method: "POST",
-  headers: { "Content-Type": "application/json" },
-  body: JSON.stringify({ action: "client_dashboard", payload: { clientId: user.id } }),
-});
-const { profile, sub, sessions, findings, usage } = await dataRes.json();
+      const dataRes = await fetch("/api/data", {
+        method:  "POST",
+        headers: { "Content-Type": "application/json" },
+        body:    JSON.stringify({ action: "client_dashboard", payload: { clientId: user.id } }),
+      });
+      const { profile, sessions, findings } = await dataRes.json();
 
-    const s    = sub?.[0] as any;
-    const tier = s?.pricing_tiers;
+      const sess: SessionData[] = sessions || [];
 
-    setData({
-      company_name:     profile?.company_name || "",
-      tier_name:        tier?.name            || "—",
-      audits_remaining: s ? (s.audits_purchased - s.audits_used) : 0,
-      audits_purchased: s?.audits_purchased   || 0,
-      max_tx:           s?.custom_max_tx      || tier?.max_transactions || 0,
-      price_rub:        s?.custom_price_rub   || tier?.price_rub        || 0,
-      sessions:         sessions              || [],
-      findings:         findings              || [],
-      totalCost:        usage?.reduce((a: number, e: any) => a + (e.cost_rub || 0), 0)        || 0,
-      totalTx:          usage?.reduce((a: number, e: any) => a + (e.transactions_ct || 0), 0) || 0,
-    });
-    setLoading(false);
-  }
-  load();
-}, []);
+      // Total spend = sum of the fixed audit prices stored at confirmation time
+      // cost_rub on audit_sessions is set to the tier price, not token cost
+      const totalSpend = sess.reduce((a, s) => a + (s.cost_rub || 0), 0);
+
+      setData({
+        company_name: profile?.company_name || "",
+        sessions:     sess,
+        findings:     findings || [],
+        totalAudits:  sess.length,
+        totalSpend,
+      });
+      setLoading(false);
+    }
+    load();
+  }, []);
 
   if (loading) return (
     <div style={{ color: "#7a90c0", fontFamily: "system-ui, sans-serif" }}>Загрузка...</div>
   );
-  if (!data)   return null;
+  if (!data) return null;
+
+  const completedAudits = data.sessions.filter(s => s.status === "completed").length;
+  const activeAudits    = data.sessions.filter(s => s.status === "active").length;
 
   const METRICS = [
-    { label: "Тарифный план",        value: data.tier_name,                     color: "#4d91ff" },
-    { label: "Осталось аудитов",     value: `${data.audits_remaining} из ${data.audits_purchased}`, color: data.audits_remaining > 0 ? "#2ecc8f" : "#e84040" },
-    { label: "Лимит транзакций",     value: data.max_tx.toLocaleString("ru"),   color: "#7a90c0" },
-    { label: "Потрачено (AI)",       value: formatRubles(data.totalCost),       color: "#f59e0b" },
+    {
+      label: "Всего аудитов",
+      value: data.totalAudits,
+      sub:   `${activeAudits} активных · ${completedAudits} завершённых`,
+      color: "#4d91ff",
+    },
+    {
+      label: "Открытых нарушений",
+      value: data.findings.length,
+      sub:   data.findings.length === 0 ? "Нарушений не выявлено" : "Требуют внимания",
+      color: data.findings.length === 0 ? "#2ecc8f" : "#e84040",
+    },
+    {
+      label: "Потрачено на аудиты",
+      value: data.totalSpend.toLocaleString("ru", { style: "currency", currency: "RUB", maximumFractionDigits: 0 }),
+      sub:   `За ${data.totalAudits} аудит${data.totalAudits === 1 ? "" : data.totalAudits < 5 ? "а" : "ов"}`,
+      color: "#f59e0b",
+    },
+    {
+      label: "Последний аудит",
+      value: data.sessions[0]
+        ? new Date(data.sessions[0].created_at).toLocaleDateString("ru", { day: "numeric", month: "long" })
+        : "—",
+      sub:   data.sessions[0]?.title?.replace(/^Аудит:\s*/, "").split("(")[0].trim() || "Аудитов пока нет",
+      color: "#7a90c0",
+    },
   ];
 
   const SESSION_STATUS: Record<string, { label: string; color: string }> = {
@@ -96,7 +122,10 @@ const { profile, sub, sessions, findings, usage } = await dataRes.json();
             borderTop: `3px solid ${m.color}`, borderRadius: "10px", padding: "20px",
           }}>
             <div style={{ fontSize: "12px", color: "#7a90c0", marginBottom: "8px" }}>{m.label}</div>
-            <div style={{ fontSize: "22px", fontWeight: "700", color: m.color }}>{m.value}</div>
+            <div style={{ fontSize: "22px", fontWeight: "700", color: m.color, marginBottom: "6px" }}>
+              {m.value}
+            </div>
+            <div style={{ fontSize: "11px", color: "#3d4f7a" }}>{m.sub}</div>
           </div>
         ))}
       </div>
@@ -108,41 +137,59 @@ const { profile, sub, sessions, findings, usage } = await dataRes.json();
             <h2 style={{ fontSize: "15px", fontWeight: "600", color: "#e8edf8", margin: 0 }}>
               Последние аудиты
             </h2>
-             <a href="/client/audit/new" style={{
-               padding: "6px 14px", background: "#1565e8",
-               borderRadius: "6px", color: "#fff",
-               fontSize: "12px", fontWeight: "600",
-               textDecoration: "none",
-              }}>
+            <a href="/client/audit/new" style={{
+              padding: "6px 14px", background: "#1565e8",
+              borderRadius: "6px", color: "#fff",
+              fontSize: "12px", fontWeight: "600",
+              textDecoration: "none",
+            }}>
               + Новый аудит
             </a>
           </div>
+
           {data.sessions.length === 0 ? (
             <div style={{ color: "#3d4f7a", fontSize: "13px", textAlign: "center", padding: "20px 0" }}>
-              Аудитов пока нет. Начните новый аудит в разделе «ИИ Аудитор».
+              Аудитов пока нет. Нажмите «+ Новый аудит» чтобы начать.
             </div>
-          ) : data.sessions.map((sess: any) => {
+          ) : data.sessions.map((sess) => {
             const st = SESSION_STATUS[sess.status] || SESSION_STATUS.active;
+            // Show only the fixed audit price (cost_rub saved at confirmation)
+            const displayCost = sess.cost_rub
+              ? sess.cost_rub.toLocaleString("ru", { style: "currency", currency: "RUB", maximumFractionDigits: 0 })
+              : "—";
+            const companyName = sess.title.replace(/^Аудит:\s*/, "").split("(")[0].trim();
+
             return (
-              <div key={sess.id} style={{
-                padding: "12px 0", borderBottom: "1px solid #1a2340",
-                display: "flex", justifyContent: "space-between", alignItems: "center",
-              }}>
-                <div>
-                  <div style={{ color: "#e8edf8", fontSize: "13px", fontWeight: "500" }}>
-                    {sess.title}
+              <a
+                key={sess.id}
+                href={`/client/chat?session=${sess.id}`}
+                style={{ textDecoration: "none" }}
+              >
+                <div style={{
+                  padding: "12px 8px", borderBottom: "1px solid #1a2340",
+                  display: "flex", justifyContent: "space-between", alignItems: "center",
+                  borderRadius: "6px", cursor: "pointer",
+                  transition: "background 0.15s",
+                }}
+                  onMouseEnter={e => (e.currentTarget.style.background = "#101828")}
+                  onMouseLeave={e => (e.currentTarget.style.background = "transparent")}
+                >
+                  <div>
+                    <div style={{ color: "#e8edf8", fontSize: "13px", fontWeight: "500" }}>
+                      {companyName}
+                    </div>
+                    <div style={{ color: "#7a90c0", fontSize: "12px", marginTop: "2px" }}>
+                      {sess.findings_ct} нарушений · {displayCost}
+                    </div>
                   </div>
-                  <div style={{ color: "#7a90c0", fontSize: "12px", marginTop: "2px" }}>
-                    {sess.transactions_ct} тр. · {sess.findings_ct} нарушений · {formatRubles(sess.cost_rub)}
-                  </div>
+                  <span style={{
+                    fontSize: "11px", padding: "3px 8px", borderRadius: "12px",
+                    color: st.color, background: st.color + "22", whiteSpace: "nowrap",
+                  }}>
+                    {st.label}
+                  </span>
                 </div>
-                <span style={{
-                  fontSize: "11px", padding: "3px 8px", borderRadius: "12px",
-                  color: st.color, background: st.color + "22",
-                }}>
-                  {st.label}
-                </span>
-              </div>
+              </a>
             );
           })}
         </div>
@@ -164,8 +211,8 @@ const { profile, sub, sessions, findings, usage } = await dataRes.json();
               <span style={{
                 fontSize: "10px", padding: "3px 8px", borderRadius: "10px",
                 fontWeight: "700", whiteSpace: "nowrap",
-                color:       getRiskColor(f.risk_level as RiskLevel),
-                background:  getRiskBgColor(f.risk_level as RiskLevel),
+                color:      getRiskColor(f.risk_level as RiskLevel),
+                background: getRiskBgColor(f.risk_level as RiskLevel),
               }}>
                 {f.risk_level}
               </span>
