@@ -252,6 +252,16 @@ case "confirm_audit": {
         return NextResponse.json(data || []);
       }
 
+      // ── Update session status ──────────────────────────────
+case "update_session_status": {
+  const { sessionId, status } = payload;
+  await supabase
+    .from("audit_sessions")
+    .update({ status })
+    .eq("id", sessionId);
+  return NextResponse.json({ success: true });
+}
+
       default:
         return NextResponse.json({ error: "Unknown action" }, { status: 400 });
     }

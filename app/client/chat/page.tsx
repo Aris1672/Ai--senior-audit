@@ -16,6 +16,7 @@ export default function ChatPage() {
   const [initDone,      setInitDone]      = useState(false);
   const [pendingFile,   setPendingFile]   = useState<File | null>(null);   // file waiting to be sent
   const [uploading,     setUploading]     = useState(false);
+  const [auditCompleted, setAuditCompleted] = useState(false);
 
   const autoSentRef  = useRef(false);
   const bottomRef    = useRef<HTMLDivElement>(null);
@@ -61,6 +62,7 @@ export default function ChatPage() {
 
         setContext(ctx);
         setMessages(msgs || []);
+        if (ctx?.status === "completed") setAuditCompleted(true);
         setInitDone(true);
         initRef.current = { uid, sessionId: urlSessionId, ctx, msgs: msgs || [] };
 
@@ -300,6 +302,30 @@ export default function ChatPage() {
     setLoading(false);
   }
 
+  // ── Complete audit ───────────────────────────────────────────────────────
+  async function completeAudit() {
+    if (!sessionId || !clientId || auditCompleted) return;
+    const confirmed = window.confirm("Завершить аудит? После завершения чат останется доступен только для чтения.");
+    if (!confirmed) return;
+
+    await fetch("/api/data", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        action: "update_session_status",
+        payload: { sessionId, status: "completed" },
+      }),
+    });
+
+    setAuditCompleted(true);
+
+    // Show completion message in chat
+    setMessages(prev => [...prev, {
+      role: "assistant",
+      content: "✅ Аудит завершён. Спасибо за использование ИИ Старшего Аудитора. Результаты и нарушения сохранены в вашем дашборде.",
+    }]);
+  }
+
   const sessionLabel = context?.company_name
     ? `Аудит: ${context.company_name}`
     : "ИИ Старший Аудитор";
@@ -313,13 +339,40 @@ export default function ChatPage() {
         }
       `}</style>
       {/* Header */}
-      <div style={{ marginBottom: "16px" }}>
-        <h1 style={{ fontSize: "20px", fontWeight: "700", color: "#e8edf8", margin: 0 }}>
-          {sessionLabel}
-        </h1>
-        <p style={{ color: "#7a90c0", fontSize: "13px", marginTop: "4px" }}>
-          Задавайте вопросы на русском языке 
-        </p>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: "16px" }}>
+        <div>
+          <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+            <h1 style={{ fontSize: "20px", fontWeight: "700", color: "#e8edf8", margin: 0 }}>
+              {sessionLabel}
+            </h1>
+            {auditCompleted && (
+              <span style={{
+                fontSize: "11px", padding: "3px 10px", borderRadius: "12px",
+                background: "#7a90c022", color: "#7a90c0", fontWeight: "600",
+              }}>
+                Завершён
+              </span>
+            )}
+          </div>
+          <p style={{ color: "#7a90c0", fontSize: "13px", marginTop: "4px" }}>
+            Задавайте вопросы на русском языке
+          </p>
+        </div>
+        {!auditCompleted && initDone && (
+          <button
+            onClick={completeAudit}
+            disabled={loading || uploading || auditCompleted}
+            style={{
+              padding: "8px 16px", background: "transparent",
+              border: "1px solid #2ecc8f", borderRadius: "8px",
+              color: "#2ecc8f", fontSize: "13px", fontWeight: "600",
+              cursor: loading ? "not-allowed" : "pointer",
+              flexShrink: 0,
+            }}
+          >
+            ✓ Завершить аудит
+          </button>
+        )}
       </div>
 
       {/* Messages */}
@@ -409,7 +462,7 @@ export default function ChatPage() {
         {/* Attach button */}
         <button
           onClick={() => fileInputRef.current?.click()}
-          disabled={loading || uploading}
+          disabled={loading || uploading || auditCompleted}
           title="Прикрепить документ"
           style={{
             width: "48px", height: "48px", flexShrink: 0,
@@ -442,7 +495,7 @@ export default function ChatPage() {
               ? "Добавьте комментарий или нажмите → для отправки..."
               : "Введите вопрос... (Shift+Enter для новой строки)"
           }
-          disabled={loading || uploading}
+          disabled={loading || uploading || auditCompleted}
           rows={1}
           style={{
             flex: 1, padding: "13px 16px",
@@ -458,7 +511,7 @@ export default function ChatPage() {
         {/* Send button */}
         <button
           onClick={sendMessage}
-          disabled={loading || uploading || (!input.trim() && !pendingFile)}
+          disabled={loading || uploading || (!input.trim() && !pendingFile) || auditCompleted}
           style={{
             width: "48px", height: "48px", flexShrink: 0,
             background: (loading || uploading) ? "#0d3a8a" : "#1565e8",
