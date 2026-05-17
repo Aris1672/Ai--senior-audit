@@ -11,7 +11,6 @@ async function getAllDocumentsContent(
   try {
     console.log("[chat] Looking up all documents for sessionId:", sessionId);
 
-    // Get ALL documents for this session, oldest first
     const { data: docs, error: docErr } = await supabase
       .from("documents")
       .select("storage_path, file_name, file_type, page_count")
@@ -29,7 +28,6 @@ async function getAllDocumentsContent(
 
     console.log(`[chat] Found ${docs.length} document(s) for session`);
 
-    // Parse each document and collect content
     const sections: string[] = [];
 
     for (const doc of docs) {
@@ -53,8 +51,8 @@ async function getAllDocumentsContent(
       const arrayBuffer = await blob.arrayBuffer();
       const ext = doc.file_name?.split(".").pop()?.toLowerCase();
       const fileType =
-        ext === "csv" ? "csv"
-        : ext === "xml" ? "xml"
+        ext === "csv"  ? "csv"
+        : ext === "xml"  ? "xml"
         : ext === "docx" ? "docx"
         : ext === "xls"  ? "xls"
         : "xlsx";
@@ -86,15 +84,102 @@ async function getAllDocumentsContent(
 
     if (sections.length === 0) return null;
 
-    const intro = docs.length > 1
-      ? `Загружено документов: ${docs.length}\n\n`
-      : "";
-
+    const intro = docs.length > 1 ? `Загружено документов: ${docs.length}\n\n` : "";
     return intro + sections.join("\n\n");
 
   } catch (err) {
     console.error("[chat] getAllDocumentsContent exception:", err);
     return null;
+  }
+}
+
+// ─── Extract and save findings from Claude's response ─────────────────────────
+async function extractAndSaveFindings(
+  supabase: ReturnType<typeof createAdminClient>,
+  sessionId: string,
+  clientId: string,
+  assistantText: string
+): Promise<void> {
+  try {
+    // Only run if response contains violation keywords
+    const hasViolations = /нарушени|критич|риск|штраф|КРИТИЧНО|СУЩЕСТВЕННО|НЕСУЩЕСТВЕННО/i.test(assistantText);
+    if (!hasViolations) return;
+
+    // Ask Claude to extract structured findings
+    const extractRes = await anthropic.messages.create({
+      model:      "claude-haiku-4-5",
+      max_tokens: 1500,
+      system: `Ты — парсер аудиторских отчётов. Извлеки все нарушения из текста аудитора.
+Верни ТОЛЬКО валидный JSON массив, без пояснений, без markdown, без backticks.
+Каждый объект должен содержать:
+{
+  "title": "краткое название нарушения (до 100 символов)",
+  "risk_level": "КРИТИЧНО" | "СУЩЕСТВЕННО" | "НЕСУЩЕСТВЕННО",
+  "description": "подробное описание (до 500 символов)",
+  "legal_basis": "применимые нормы закона (до 200 символов)",
+  "recommendation": "рекомендация по устранению (до 300 символов)"
+}
+Если нарушений нет — верни пустой массив: []`,
+      messages: [{
+        role:    "user",
+        content: `Извлеки все нарушения из этого аудиторского текста:\n\n${assistantText.slice(0, 3000)}`,
+      }],
+    });
+
+    const rawJson = extractRes.content[0].type === "text"
+      ? extractRes.content[0].text.trim()
+      : "[]";
+
+    let findings: any[] = [];
+    try {
+      const clean = rawJson.replace(/^```json?\s*/i, "").replace(/```\s*$/i, "").trim();
+      findings = JSON.parse(clean);
+      if (!Array.isArray(findings)) findings = [];
+    } catch {
+      console.warn("[chat] Failed to parse findings JSON:", rawJson.slice(0, 200));
+      return;
+    }
+
+    if (findings.length === 0) return;
+
+    const validRiskLevels = new Set(["КРИТИЧНО", "СУЩЕСТВЕННО", "НЕСУЩЕСТВЕННО"]);
+
+    const rows = findings
+      .filter((f: any) => f.title && validRiskLevels.has(f.risk_level))
+      .map((f: any) => ({
+        session_id:     sessionId,
+        client_id:      clientId,
+        title:          String(f.title).slice(0, 100),
+        risk_level:     f.risk_level,
+        description:    String(f.description    || "").slice(0, 500),
+        legal_basis:    String(f.legal_basis    || "").slice(0, 200),
+        recommendation: String(f.recommendation || "").slice(0, 300),
+        status:         "open",
+      }));
+
+    if (rows.length === 0) return;
+
+    const { error } = await supabase.from("findings").insert(rows);
+    if (error) {
+      console.error("[chat] Failed to save findings:", error.message);
+    } else {
+      console.log(`[chat] Saved ${rows.length} finding(s) to DB`);
+
+      // Update findings_ct on the session
+      const { data: sess } = await supabase
+        .from("audit_sessions")
+        .select("findings_ct")
+        .eq("id", sessionId)
+        .single();
+
+      await supabase
+        .from("audit_sessions")
+        .update({ findings_ct: (sess?.findings_ct || 0) + rows.length })
+        .eq("id", sessionId);
+    }
+  } catch (err) {
+    console.error("[chat] extractAndSaveFindings error:", err);
+    // Never throw — findings extraction is non-critical
   }
 }
 
@@ -164,8 +249,7 @@ export async function POST(req: NextRequest) {
       ((tokensIn  / 1000) * HAIKU_PRICING.inputPer1K +
        (tokensOut / 1000) * HAIKU_PRICING.outputPer1K) * usdToRub;
 
-    // Run DB saves AND findings extraction in parallel — all awaited
-    // so Vercel doesn't kill them before completion
+    // Run all DB operations + findings extraction in parallel, all awaited
     await Promise.all([
       supabase.from("audit_messages").insert({
         session_id: sessionId,
@@ -190,7 +274,6 @@ export async function POST(req: NextRequest) {
         p_amount:     costRub,
       }),
 
-      // Findings extraction runs in parallel with DB saves
       extractAndSaveFindings(supabase, sessionId, clientId, text),
     ]);
 
