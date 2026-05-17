@@ -37,7 +37,7 @@ interface AuditDetailData {
   messages: Message[];
 }
 
-const RISK_ORDER: RiskLevel[] = ["КРИТИЧНО", "СУЩЕСТВЕННО", "НИЗКОЕ"];
+const RISK_ORDER: RiskLevel[] = ["КРИТИЧНО", "СУЩЕСТВЕННО", "НЕСУЩЕСТВЕННО"];
 
 const SESSION_STATUS: Record<string, { label: string; color: string }> = {
   active:    { label: "Активна",   color: "#2ecc8f" },
