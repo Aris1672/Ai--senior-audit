@@ -23,7 +23,7 @@ const ALLOWED_TYPES: Record<string, string> = {
   "application/vnd.ms-excel": "xls",
 };
 
-const PARSEABLE = new Set(["xlsx", "xls", "csv", "xml", "docx"]);
+const PARSEABLE = new Set(["xlsx", "csv", "xml"]);
 const MAX_FILE_SIZE = 50 * 1024 * 1024; // 50 MB
 
 export async function POST(req: NextRequest) {
@@ -50,7 +50,7 @@ export async function POST(req: NextRequest) {
     const fileType = ALLOWED_TYPES[file.type];
     if (!fileType) {
       return NextResponse.json(
-        { error: "Неподдерживаемый формат. Разрешены: PDF, XLSX, XLS, DOCX, CSV, XML, JPG, PNG" },
+        { error: "Неподдерживаемый формат. Разрешены: PDF, XLSX, DOCX, CSV, XML, JPG, PNG" },
         { status: 400 }
       );
     }
@@ -125,7 +125,7 @@ export async function POST(req: NextRequest) {
     // another HTTP hop. Run after response is returned using waitUntil-style
     // fire-and-forget (no await).
     if (PARSEABLE.has(fileType)) {
-      parseFile(arrayBuffer, fileType as "xlsx" | "xls" | "csv" | "xml" | "docx")
+      parseFile(arrayBuffer, fileType as "xlsx" | "csv" | "xml")
         .then((result) =>
           supabase
             .from("documents")

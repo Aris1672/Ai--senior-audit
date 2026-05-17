@@ -311,7 +311,7 @@ export default function NewAuditPage() {
                   {uploadedFile ? uploadedFile.name : "Нажмите для выбора файла"}
                 </div>
                 <div style={{ color: "#7a90c0", fontSize: "12px" }}>
-                  Excel (.xlsx), CSV, XML из 1С · Максимум 50MB
+                  Excel (.xlsx), CSV, XML, xls из 1С · Максимум 50MB
                 </div>
                 <input ref={fileRef} type="file" style={{ display: "none" }}
                   accept=".xlsx,.csv,.xml,.xls"
