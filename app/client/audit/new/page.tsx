@@ -278,7 +278,7 @@ export default function NewAuditPage() {
           {/* Source type selector */}
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "12px", marginBottom: "20px" }}>
             {([
-              { type: "file",    label: "Загрузить файл",       sub: "Excel, CSV, XML из 1С", icon: "↑" },
+              { type: "file",    label: "Загрузить файл",       sub: "Excel, CSV, XML, xls, docx, doc из 1С", icon: "↑" },
               { type: "live_1c", label: "Подключить 1С напрямую", sub: "OData / REST API",     icon: "⚡" },
             ] as const).map(opt => (
               <div key={opt.type} onClick={() => setSourceType(opt.type)} style={{
@@ -311,7 +311,7 @@ export default function NewAuditPage() {
                   {uploadedFile ? uploadedFile.name : "Нажмите для выбора файла"}
                 </div>
                 <div style={{ color: "#7a90c0", fontSize: "12px" }}>
-                  Excel (.xlsx), CSV, XML, xls из 1С · Максимум 50MB
+                  Excel (.xlsx), CSV, XML, xls, docx, doc из 1С · Максимум 50MB
                 </div>
                 <input ref={fileRef} type="file" style={{ display: "none" }}
                   accept=".xlsx,.csv,.xml,.xls,.docx,.doc"
