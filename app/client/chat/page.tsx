@@ -318,7 +318,7 @@ export default function ChatPage() {
           {sessionLabel}
         </h1>
         <p style={{ color: "#7a90c0", fontSize: "13px", marginTop: "4px" }}>
-          Задавайте вопросы на русском языке · Сессия: {totalCost.toFixed(4)} ₽
+          Задавайте вопросы на русском языке 
         </p>
       </div>
 
@@ -348,11 +348,7 @@ export default function ChatPage() {
               color: "#e8edf8", fontSize: "14px", lineHeight: "1.6", whiteSpace: "pre-wrap",
             }}>
               {msg.content}
-              {msg.costRub && (
-                <div style={{ fontSize: "10px", color: "#3d4f7a", marginTop: "6px" }}>
-                  {msg.costRub.toFixed(4)} ₽
-                </div>
-              )}
+              
             </div>
           </div>
         ))}
