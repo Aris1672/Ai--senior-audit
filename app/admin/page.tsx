@@ -27,10 +27,10 @@ function PaymentDonut({ paid, unpaid }: { paid: number; unpaid: number }) {
     );
   }
 
-  const R = 60;           // outer radius
-  const r = 36;           // inner radius (hole)
-  const cx = 90;
-  const cy = 80;
+  const R = 85;           // outer radius
+  const r = 52;           // inner radius (hole)
+  const cx = 100;
+  const cy = 100;
   const gap = 0.03;       // radians gap between arcs
 
   // Convert a fraction to SVG arc path
@@ -63,7 +63,7 @@ function PaymentDonut({ paid, unpaid }: { paid: number; unpaid: number }) {
 
   return (
     <div style={{ display: "flex", alignItems: "center", gap: "24px" }}>
-      <svg width="180" height="160" viewBox="0 0 180 160">
+      <svg width="220" height="210" viewBox="0 0 220 210">
         {/* Paid arc */}
         <path d={arcPath(0, paidEnd)}   fill="#2ecc8f" opacity="0.9" />
         {/* Unpaid arc */}
