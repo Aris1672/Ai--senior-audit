@@ -67,7 +67,7 @@ function PaymentDonut({ paid, unpaid }: { paid: number; unpaid: number }) {
         {/* Paid arc */}
         <path d={arcPath(0, paidEnd)}   fill="#2ecc8f" opacity="0.9" />
         {/* Unpaid arc */}
-        <path d={arcPath(unpaidStart, unpaidEnd)} fill="#e84040" opacity="0.9" />
+        <path d={arcPath(unpaidStart, unpaidEnd)} fill="#f59e0b" opacity="0.9" />
         {/* Centre label */}
         <text x={cx} y={cy - 6}  textAnchor="middle" fill="#e8edf8" fontSize="13" fontWeight="600">
           {formatRubles(total)}
@@ -87,10 +87,10 @@ function PaymentDonut({ paid, unpaid }: { paid: number; unpaid: number }) {
           </div>
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-          <div style={{ width: "12px", height: "12px", borderRadius: "3px", background: "#e84040", flexShrink: 0 }} />
+          <div style={{ width: "12px", height: "12px", borderRadius: "3px", background: "#f59e0b", flexShrink: 0 }} />
           <div>
             <div style={{ fontSize: "12px", color: "#7a90c0" }}>Не оплачено · {unpaidPct}%</div>
-            <div style={{ fontSize: "15px", fontWeight: "600", color: "#e84040" }}>{formatRubles(unpaid)}</div>
+            <div style={{ fontSize: "15px", fontWeight: "600", color: "#f59e0b" }}>{formatRubles(unpaid)}</div>
           </div>
         </div>
       </div>
