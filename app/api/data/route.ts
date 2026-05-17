@@ -17,7 +17,7 @@ export async function POST(req: NextRequest) {
           { data: usage },
         ] = await Promise.all([
           supabase.from("profiles").select("status").eq("role", "client").neq("status", "deleted"),
-          supabase.from("audit_sessions").select("status, findings_ct, cost_rub"),
+          supabase.from("audit_sessions").select("status, findings_ct, cost_rub, paid"),
           supabase.from("findings").select("risk_level"),
           supabase.from("usage_events").select("tokens_in, tokens_out, cost_rub"),
         ]);

@@ -112,8 +112,12 @@ export default function AdminDashboard() {
       });
       const { profiles, sessions, findings, usage } = await res.json();
 
-      const totalAuditCharges = sessions?.reduce((s: number, e: any) => s + (e.cost_rub || 0), 0) || 0;
-      const totalUnpaid       = sessions?.reduce((s: number, e: any) => s + (!e.paid ? (e.cost_rub || 0) : 0), 0) || 0;
+      // Debug: log first session to verify `paid` field is present
+      if (sessions?.length) console.log("[admin_stats] sample session:", sessions[0]);
+
+      const totalAuditCharges = sessions?.reduce((s: number, e: any) => s + (e.cost_rub || 0), 0) ?? 0;
+      // paid field must be explicitly true — null/undefined/false all count as unpaid
+      const totalUnpaid       = sessions?.reduce((s: number, e: any) => s + (e.paid === true ? 0 : (e.cost_rub || 0)), 0) ?? 0;
 
       setStats({
         totalClients:      profiles?.length || 0,
