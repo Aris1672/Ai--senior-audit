@@ -239,19 +239,6 @@ case "confirm_audit": {
         return NextResponse.json({ success: true });
       }
 
-
-      // ── Check if client has any audit sessions ─────────────
-      case "get_client_sessions": {
-        const { clientId, limit = 1 } = payload;
-        const { data } = await supabase
-          .from("audit_sessions")
-          .select("id, title, status, created_at")
-          .eq("client_id", clientId)
-          .order("created_at", { ascending: false })
-          .limit(limit);
-        return NextResponse.json(data || []);
-      }
-
       default:
         return NextResponse.json({ error: "Unknown action" }, { status: 400 });
     }

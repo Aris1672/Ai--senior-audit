@@ -14,6 +14,7 @@ const NAV_ITEMS = [
 export default function ClientLayout({ children }: { children: React.ReactNode }) {
   const [checking,    setChecking]    = useState(true);
   const [companyName, setCompanyName] = useState("");
+  const [hasAudit,    setHasAudit]    = useState(false);
   const router   = useRouter();
   const pathname = usePathname();
   const supabase = createClient();
@@ -36,6 +37,19 @@ export default function ClientLayout({ children }: { children: React.ReactNode }
     if (profile?.status === "paused") { router.push("/login"); return; }
 
     setCompanyName(profile?.company_name || "");
+
+    // Check if user has any audit sessions
+    const auditRes = await fetch("/api/data", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        action: "get_client_sessions",
+        payload: { clientId: user.id, limit: 1 },
+      }),
+    });
+    const auditData = await auditRes.json();
+    setHasAudit(Array.isArray(auditData) && auditData.length > 0);
+
     setChecking(false);
   }
   checkClient();
@@ -86,8 +100,30 @@ export default function ClientLayout({ children }: { children: React.ReactNode }
         {/* Nav */}
         <nav style={{ padding: "16px 12px", flex: 1 }}>
           {NAV_ITEMS.map(item => {
-            const active = pathname === item.href;
-            return (
+            const active  = pathname === item.href;
+            const locked  = item.href === "/client/chat" && !hasAudit;
+            return locked ? (
+              <div
+                key={item.href}
+                title="ИИ Аудитор доступен после создания первого аудита"
+                style={{
+                  display: "flex", alignItems: "center", gap: "10px",
+                  padding: "10px 12px", borderRadius: "8px",
+                  marginBottom: "4px", cursor: "not-allowed",
+                  background: "transparent", opacity: 0.4,
+                  color: "#7a90c0", fontSize: "14px",
+                  borderLeft: "2px solid transparent",
+                  position: "relative",
+                }}
+              >
+                <span>{item.icon}</span>
+                {item.label}
+                <span style={{
+                  marginLeft: "auto", fontSize: "10px",
+                  color: "#3d4f7a", letterSpacing: "0.02em",
+                }}>🔒</span>
+              </div>
+            ) : (
               <a key={item.href} href={item.href} style={{
                 display: "flex", alignItems: "center", gap: "10px",
                 padding: "10px 12px", borderRadius: "8px",
