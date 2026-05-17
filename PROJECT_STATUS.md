@@ -22,6 +22,8 @@ Never direct from Russia to Supabase or Anthropic.
 ## Completed Features
 - Login page with role-based redirect (admin/client)
 - Admin portal: dashboard, clients list, new client, pricing tiers
+- Admin portal: per-client audit billing log (paid/unpaid toggle per session)
+- Admin dashboard: unpaid metric card + paid vs unpaid donut chart
 - Client portal: dashboard, AI chat, documents upload, usage tracking
 - Pay-per-audit pricing model (automatic based on transaction count)
 - New audit flow: file upload OR live 1C connection
@@ -55,8 +57,9 @@ audit_messages, documents, usage_events
 
 ## What Still Needs Building
 - [x] File parser (count rows from xlsx/csv/xml)
+- [x] Admin: per-client audit billing log
+- [x] Admin dashboard: unpaid metrics + donut chart
+- [ ] Client portal: audit history page (audits currently open chat only; no standalone history/detail view)
 - [ ] 1C live connection testing
-- [ ] Client portal: audit history page
-- [ ] Admin: per-client audit billing log
 - [ ] Report generation in Russian
 - [ ] Email notifications

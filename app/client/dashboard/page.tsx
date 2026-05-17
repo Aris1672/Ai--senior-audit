@@ -18,7 +18,7 @@ interface DashboardData {
   sessions:     SessionData[];
   findings:     any[];
   totalAudits:  number;
-  totalSpend:   number; // sum of fixed audit prices only
+  totalSpend:   number;
 }
 
 export default function ClientDashboard() {
@@ -39,9 +39,6 @@ export default function ClientDashboard() {
       const { profile, sessions, findings } = await dataRes.json();
 
       const sess: SessionData[] = sessions || [];
-
-      // Total spend = sum of the fixed audit prices stored at confirmation time
-      // cost_rub on audit_sessions is set to the tier price, not token cost
       const totalSpend = sess.reduce((a, s) => a + (s.cost_rub || 0), 0);
 
       setData({
@@ -153,7 +150,6 @@ export default function ClientDashboard() {
             </div>
           ) : data.sessions.map((sess) => {
             const st = SESSION_STATUS[sess.status] || SESSION_STATUS.active;
-            // Show only the fixed audit price (cost_rub saved at confirmation)
             const displayCost = sess.cost_rub
               ? sess.cost_rub.toLocaleString("ru", { style: "currency", currency: "RUB", maximumFractionDigits: 0 })
               : "—";
@@ -162,7 +158,7 @@ export default function ClientDashboard() {
             return (
               <a
                 key={sess.id}
-                href={`/client/chat?session=${sess.id}`}
+                href={`/client/audit/${sess.id}`}
                 style={{ textDecoration: "none" }}
               >
                 <div style={{

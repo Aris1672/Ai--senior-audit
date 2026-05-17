@@ -274,6 +274,51 @@ case "update_session_paid": {
   return NextResponse.json({ success: true });
 }
 
+      // ── Audit detail page ──────────────────────────────────
+      case "audit_detail": {
+        const { sessionId } = payload;
+        const [
+          { data: sessionRaw },
+          { data: findings },
+          { data: messages },
+        ] = await Promise.all([
+          supabase
+            .from("audit_sessions")
+            .select("id, title, status, transactions_ct, findings_ct, cost_rub, created_at")
+            .eq("id", sessionId)
+            .single(),
+          supabase
+            .from("findings")
+            .select("id, risk_level, title, description, recommendation, amount_rub, created_at")
+            .eq("session_id", sessionId)
+            .order("created_at", { ascending: true }),
+          supabase
+            .from("audit_messages")
+            .select("role, content")
+            .eq("session_id", sessionId)
+            .order("created_at", { ascending: true }),
+        ]);
+
+        if (!sessionRaw) return NextResponse.json({ error: "Not found" }, { status: 404 });
+
+        // Parse company name and period from title
+        const title        = sessionRaw.title || "";
+        const companyMatch = title.match(/Аудит:\s*(.+?)(?:\s*\(|$)/);
+        const periodMatch  = title.match(/\((.+?)\)/);
+
+        const session = {
+          ...sessionRaw,
+          company_name: companyMatch?.[1]?.trim() || title,
+          period:       periodMatch?.[1]?.trim()  || "",
+        };
+
+        return NextResponse.json({
+          session,
+          findings: findings || [],
+          messages: messages || [],
+        });
+      }
+
       default:
         return NextResponse.json({ error: "Unknown action" }, { status: 400 });
     }
