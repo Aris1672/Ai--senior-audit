@@ -12,7 +12,7 @@
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
-export type ParseMethod = "xlsx" | "xls" | "csv" | "xml" | "docx" | "fallback";
+export type ParseMethod = "xlsx" | "xls" | "csv" | "xml" | "docx" | "doc" | "fallback";
 
 export interface ParseResult {
   rowCount: number;
@@ -215,16 +215,42 @@ export async function parseXLSX(buffer: ArrayBuffer): Promise<ParseResult> {
   }
 }
 
+
+// ─── DOC (legacy binary Word format, pre-2007) ────────────────────────────────
+// Uses 'mammoth' npm package to extract text from binary .doc files.
+// Install with: npm install mammoth
+
+export async function parseDOC(buffer: ArrayBuffer): Promise<ParseResult> {
+  try {
+    const mammoth = await import("mammoth");
+    const result  = await mammoth.extractRawText({ buffer: Buffer.from(buffer) });
+    const rawText = result.value.trim();
+
+    // Count non-empty lines as "rows"
+    const lines    = rawText.split(/\n/).filter(l => l.trim().length > 0);
+    const rowCount = lines.length;
+
+    const textContent = rawText.slice(0, MAX_CONTENT_CHARS) +
+      (rawText.length > MAX_CONTENT_CHARS ? "\n\n[Текст обрезан]" : "");
+
+    return { rowCount, parseMethod: "doc", textContent, parsedAt: now() };
+  } catch (err) {
+    console.warn("[file-parser] DOC parse failed:", err);
+    return { rowCount: 0, parseMethod: "fallback", textContent: "[Не удалось прочитать содержимое файла DOC]", parsedAt: now() };
+  }
+}
+
 // ─── Dispatcher ───────────────────────────────────────────────────────────────
 
 export async function parseFile(
   buffer: ArrayBuffer,
-  fileType: "xlsx" | "xls" | "csv" | "xml" | "docx"
+  fileType: "xlsx" | "xls" | "csv" | "xml" | "docx" | "doc"
 ): Promise<ParseResult> {
   if (fileType === "csv")  return parseCSV(buffer);
   if (fileType === "xml")  return parseXML(buffer);
   if (fileType === "docx") return parseDOCX(buffer);
   if (fileType === "xls")  return parseXLS(buffer);
+  if (fileType === "doc")  return parseDOC(buffer);
   return parseXLSX(buffer);
 }
 

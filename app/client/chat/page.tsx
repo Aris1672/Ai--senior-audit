@@ -399,7 +399,7 @@ export default function ChatPage() {
         <input
           ref={fileInputRef}
           type="file"
-          accept=".xlsx,.csv,.xml,.xls,.pdf,.docx"
+          accept=".xlsx,.csv,.xml,.xls,.pdf,.docx,.doc"
           style={{ display: "none" }}
           onChange={handleFileSelect}
         />
