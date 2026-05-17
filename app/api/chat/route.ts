@@ -132,12 +132,27 @@ async function extractAndSaveFindings(
 
     let findings: any[] = [];
     try {
-      const clean = rawJson.replace(/^```json?\s*/i, "").replace(/```\s*$/i, "").trim();
+      // Strip ALL markdown fences — Claude sometimes ignores instructions
+      const clean = rawJson
+        .replace(/^```(?:json)?\s*/im, "")  // opening fence
+        .replace(/```\s*$/im, "")            // closing fence
+        .trim();
       findings = JSON.parse(clean);
       if (!Array.isArray(findings)) findings = [];
-    } catch {
-      console.warn("[chat] Failed to parse findings JSON:", rawJson.slice(0, 200));
-      return;
+    } catch (parseErr) {
+      // Try to extract JSON array from anywhere in the response
+      const match = rawJson.match(/\[\s*\{[\s\S]*\}\s*\]/);
+      if (match) {
+        try {
+          findings = JSON.parse(match[0]);
+        } catch {
+          console.warn("[chat] Failed to parse findings JSON:", rawJson.slice(0, 200));
+          return;
+        }
+      } else {
+        console.warn("[chat] Failed to parse findings JSON:", rawJson.slice(0, 200));
+        return;
+      }
     }
 
     if (findings.length === 0) return;
