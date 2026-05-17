@@ -306,6 +306,12 @@ export default function ChatPage() {
 
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "calc(100vh - 64px)" }}>
+      <style>{`
+        @keyframes pulse {
+          0%, 100% { opacity: 0.2; transform: scale(0.8); }
+          50%       { opacity: 1;   transform: scale(1.2); }
+        }
+      `}</style>
       {/* Header */}
       <div style={{ marginBottom: "16px" }}>
         <h1 style={{ fontSize: "20px", fontWeight: "700", color: "#e8edf8", margin: 0 }}>
@@ -399,7 +405,7 @@ export default function ChatPage() {
         <input
           ref={fileInputRef}
           type="file"
-          accept=".xlsx,.csv,.xml,.xls,.pdf,.docx,.doc"
+          accept=".xlsx,.csv,.xml,.xls,.pdf,.docx"
           style={{ display: "none" }}
           onChange={handleFileSelect}
         />
