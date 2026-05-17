@@ -55,9 +55,10 @@ async function getAllDocumentsContent(
       const fileType =
         ext === "csv" ? "csv"
         : ext === "xml" ? "xml"
+        : ext === "docx" ? "docx"
         : "xlsx";
 
-      const parsed = await parseFile(arrayBuffer, fileType);
+      const parsed = await parseFile(arrayBuffer, fileType as "xlsx" | "csv" | "xml" | "docx");
 
       console.log("[chat]", doc.file_name, "— rowCount:", parsed.rowCount,
         "textContent length:", parsed.textContent?.length ?? 0);
