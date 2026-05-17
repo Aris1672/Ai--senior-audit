@@ -5,7 +5,7 @@
  * Browser → Vercel → Supabase (never direct from Russia)
  */
 
-import { createClient } from "@supabase/supabase-js";
+import { createServerClient } from "@supabase/ssr";
 import { createAdminClient } from "@/lib/supabase-server";
 import { NextRequest, NextResponse } from "next/server";
 
@@ -20,19 +20,27 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // Sign in via Supabase Auth — runs on Vercel, not in Russia
-    const supabaseAuth = createClient(
+    // We need a mutable response to collect cookies from the SSR client
+    const cookieRes = new NextResponse();
+
+    const supabase = createServerClient(
       process.env.NEXT_PUBLIC_SUPABASE_URL!,
       process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-      { auth: { persistSession: false } }
+      {
+        cookies: {
+          get(name) { return req.cookies.get(name)?.value; },
+          set(name, value, options) { cookieRes.cookies.set({ name, value, ...options }); },
+          remove(name, options) { cookieRes.cookies.set({ name, value: "", ...options }); },
+        },
+      }
     );
 
-    const { data, error: authError } = await supabaseAuth.auth.signInWithPassword({
+    const { data, error: authError } = await supabase.auth.signInWithPassword({
       email,
       password,
     });
 
-    if (authError || !data.user || !data.session) {
+    if (authError || !data.user) {
       return NextResponse.json(
         { error: "Неверный email или пароль" },
         { status: 401 }
@@ -40,8 +48,8 @@ export async function POST(req: NextRequest) {
     }
 
     // Get profile via admin client
-    const supabase = createAdminClient();
-    const { data: profile } = await supabase
+    const adminClient = createAdminClient();
+    const { data: profile } = await adminClient
       .from("profiles")
       .select("role, status, company_name")
       .eq("id", data.user.id)
@@ -54,26 +62,18 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // Set auth cookies so the session persists in the browser
-    const res = NextResponse.json({
+    // Build final response with role info
+    const finalRes = NextResponse.json({
       role:        profile?.role || "client",
       companyName: profile?.company_name || "",
     });
 
-    // Set Supabase session cookies
-    const { access_token, refresh_token } = data.session;
-    const cookieOptions = {
-      httpOnly: false, // must be readable by Supabase client
-      secure:   process.env.NODE_ENV === "production",
-      sameSite: "lax" as const,
-      path:     "/",
-      maxAge:   60 * 60 * 24 * 7, // 7 days
-    };
+    // Copy all Supabase session cookies to the final response
+    cookieRes.cookies.getAll().forEach(cookie => {
+      finalRes.cookies.set(cookie);
+    });
 
-    res.cookies.set("sb-access-token",  access_token,  cookieOptions);
-    res.cookies.set("sb-refresh-token", refresh_token, cookieOptions);
-
-    return res;
+    return finalRes;
 
   } catch (err) {
     console.error("[login] error:", err);
