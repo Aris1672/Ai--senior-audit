@@ -1,23 +1,11 @@
-import { createServerClient } from "@supabase/ssr";
 import { NextRequest, NextResponse } from "next/server";
 
+// Auth is handled server-side via /api/auth/me and /api/auth/profile
+// No direct Supabase calls here — all Supabase traffic goes through
+// Vercel API routes to avoid Russia network restrictions.
+
 export async function middleware(req: NextRequest) {
-  const res = NextResponse.next();
-
-  const supabase = createServerClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-    {
-      cookies: {
-        get(name) { return req.cookies.get(name)?.value; },
-        set(name, value, options) { res.cookies.set({ name, value, ...options }); },
-        remove(name, options) { res.cookies.set({ name, value: "", ...options }); },
-      },
-    }
-  );
-
-  await supabase.auth.getUser();
-  return res;
+  return NextResponse.next();
 }
 
 // Also export as proxy for Next.js 16 compatibility
