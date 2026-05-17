@@ -3,82 +3,95 @@ import { createAdminClient } from "@/lib/supabase-server";
 import { parseFile } from "@/lib/file-parser";
 import { NextRequest, NextResponse } from "next/server";
 
-// ─── Fetch + parse the uploaded document from Supabase Storage ───────────────
-async function getDocumentTextContent(
+// ─── Fetch + parse ALL documents linked to this session ───────────────────────
+async function getAllDocumentsContent(
   supabase: ReturnType<typeof createAdminClient>,
   sessionId: string
 ): Promise<string | null> {
   try {
-    console.log("[chat] Looking up document for sessionId:", sessionId);
+    console.log("[chat] Looking up all documents for sessionId:", sessionId);
 
-    const { data: doc, error: docErr } = await supabase
+    // Get ALL documents for this session, oldest first
+    const { data: docs, error: docErr } = await supabase
       .from("documents")
       .select("storage_path, file_name, file_type, page_count")
       .eq("session_id", sessionId)
-      .order("uploaded_at", { ascending: false })
-      .limit(1)
-      .single();
+      .order("uploaded_at", { ascending: true });
 
     if (docErr) {
       console.error("[chat] Document lookup error:", docErr.message);
       return null;
     }
-    if (!doc?.storage_path) {
-      console.warn("[chat] No document found for session:", sessionId);
+    if (!docs || docs.length === 0) {
+      console.warn("[chat] No documents found for session:", sessionId);
       return null;
     }
 
-    console.log("[chat] Found document:", doc.file_name, "at path:", doc.storage_path);
+    console.log(`[chat] Found ${docs.length} document(s) for session`);
 
-    // Download file bytes from Supabase Storage via service role
-    const { data: blob, error: dlErr } = await supabase
-      .storage
-      .from("audit-documents")
-      .download(doc.storage_path);
+    // Parse each document and collect content
+    const sections: string[] = [];
 
-    if (dlErr || !blob) {
-      console.error("[chat] Storage download failed:", dlErr?.message);
-      return `[Документ: ${doc.file_name} — ошибка загрузки: ${dlErr?.message}]`;
+    for (const doc of docs) {
+      if (!doc.storage_path) continue;
+
+      console.log("[chat] Downloading:", doc.file_name);
+
+      const { data: blob, error: dlErr } = await supabase
+        .storage
+        .from("audit-documents")
+        .download(doc.storage_path);
+
+      if (dlErr || !blob) {
+        console.error("[chat] Download failed for", doc.file_name, ":", dlErr?.message);
+        sections.push(`[Документ: ${doc.file_name} — ошибка загрузки: ${dlErr?.message}]`);
+        continue;
+      }
+
+      console.log("[chat] Downloaded", doc.file_name, "—", blob.size, "bytes");
+
+      const arrayBuffer = await blob.arrayBuffer();
+      const ext = doc.file_name?.split(".").pop()?.toLowerCase();
+      const fileType =
+        ext === "csv" ? "csv"
+        : ext === "xml" ? "xml"
+        : "xlsx";
+
+      const parsed = await parseFile(arrayBuffer, fileType);
+
+      console.log("[chat]", doc.file_name, "— rowCount:", parsed.rowCount,
+        "textContent length:", parsed.textContent?.length ?? 0);
+
+      const header = [
+        `Файл: ${doc.file_name}`,
+        `Формат: ${parsed.parseMethod.toUpperCase()}`,
+        parsed.sheetName ? `Лист: ${parsed.sheetName}` : null,
+        `Строк данных: ${parsed.rowCount}`,
+        parsed.detectedColumns?.length
+          ? `Колонки: ${parsed.detectedColumns.join(" | ")}`
+          : null,
+      ]
+        .filter(Boolean)
+        .join("\n");
+
+      const content = parsed.textContent
+        || `[Содержимое не извлечено. Строк: ${parsed.rowCount}]`;
+
+      sections.push(
+        `=== ДОКУМЕНТ: ${doc.file_name} ===\n${header}\n\n${content}\n=== КОНЕЦ: ${doc.file_name} ===`
+      );
     }
 
-    console.log("[chat] Downloaded blob size:", blob.size, "bytes");
+    if (sections.length === 0) return null;
 
-    const arrayBuffer = await blob.arrayBuffer();
+    const intro = docs.length > 1
+      ? `Загружено документов: ${docs.length}\n\n`
+      : "";
 
-    // Detect file type from extension
-    const ext = doc.file_name?.split(".").pop()?.toLowerCase();
-    const fileType =
-      ext === "csv" ? "csv"
-      : ext === "xml" ? "xml"
-      : "xlsx";
-
-    console.log("[chat] Parsing as:", fileType);
-
-    const parsed = await parseFile(arrayBuffer, fileType);
-
-    console.log("[chat] Parse result — rowCount:", parsed.rowCount,
-      "textContent length:", parsed.textContent?.length ?? 0);
-
-    if (!parsed.textContent) {
-      return `[Документ: ${doc.file_name}, строк: ${parsed.rowCount}. Содержимое не извлечено.]`;
-    }
-
-    const header = [
-      `Файл: ${doc.file_name}`,
-      `Формат: ${parsed.parseMethod.toUpperCase()}`,
-      parsed.sheetName ? `Лист: ${parsed.sheetName}` : null,
-      `Строк данных: ${parsed.rowCount}`,
-      parsed.detectedColumns?.length
-        ? `Колонки: ${parsed.detectedColumns.join(" | ")}`
-        : null,
-    ]
-      .filter(Boolean)
-      .join("\n");
-
-    return `=== ЗАГРУЖЕННЫЙ ФИНАНСОВЫЙ ДОКУМЕНТ ===\n${header}\n\n${parsed.textContent}\n=== КОНЕЦ ДОКУМЕНТА ===`;
+    return intro + sections.join("\n\n");
 
   } catch (err) {
-    console.error("[chat] getDocumentTextContent exception:", err);
+    console.error("[chat] getAllDocumentsContent exception:", err);
     return null;
   }
 }
@@ -113,27 +126,25 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // Fetch and parse the uploaded document
+    // Fetch and parse ALL uploaded documents for this session
     let fileSection = "";
     if (sessionId) {
-      const fileContent = await getDocumentTextContent(supabase, sessionId);
+      const fileContent = await getAllDocumentsContent(supabase, sessionId);
       if (fileContent) {
-        fileSection = `\n\n${fileContent}`;
-        console.log("[chat] File content added to prompt, length:", fileContent.length);
+        fileSection = `\n\n=== ЗАГРУЖЕННЫЕ ФИНАНСОВЫЕ ДОКУМЕНТЫ ===\n${fileContent}\n=== КОНЕЦ ДОКУМЕНТОВ ===`;
+        console.log("[chat] File section length:", fileSection.length);
       } else {
-        console.warn("[chat] No file content retrieved for session:", sessionId);
+        console.warn("[chat] No file content for session:", sessionId);
       }
-    } else {
-      console.warn("[chat] No sessionId provided — skipping file lookup");
     }
 
-    // Build system prompt
+    // Build system prompt: base + audit context + all file contents
     const systemPrompt = context
       ? `${AUDIT_SYSTEM_PROMPT}\n\n${buildAuditContext(context)}${fileSection}`
       : `${AUDIT_SYSTEM_PROMPT}${fileSection}`;
 
     console.log("[chat] System prompt length:", systemPrompt.length,
-      "| Has file:", fileSection.length > 0);
+      "| Has files:", fileSection.length > 0);
 
     const response = await anthropic.messages.create({
       model:      "claude-haiku-4-5",
