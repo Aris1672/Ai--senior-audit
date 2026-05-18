@@ -140,8 +140,12 @@ export default function AuditDetailPage() {
             <button
               onClick={async () => {
                 try {
-                  console.log("[PDF] Fetching:", `/api/report/${session.id}`);
-                  const res = await fetch(`/api/report/${session.id}`);
+                  console.log("[PDF] Requesting via /api/data...");
+                  const res = await fetch("/api/data", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ action: "generate_report", payload: { sessionId: session.id } }),
+                  });
                   console.log("[PDF] Status:", res.status, res.ok);
                   console.log("[PDF] Content-Type:", res.headers.get("content-type"));
                   if (!res.ok) {
