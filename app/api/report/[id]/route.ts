@@ -349,9 +349,8 @@ export async function GET(
 
   // ── 3. Generate and stream PDF ───────────────────────────────────────────
   const pdfBuffer = await new Promise<Buffer>((resolve, reject) => {
-    const doc    = pdfMake.createPdf(docDefinition);
-    const chunks: Uint8Array[] = [];
-    doc.getBuffer((buffer: Uint8Array) => resolve(Buffer.from(buffer)));
+    const doc = pdfMake.createPdf(docDefinition);
+    (doc as any).getBuffer((buffer: Uint8Array) => resolve(Buffer.from(buffer)));
   });
 
   const safeName = companyName.replace(/[^а-яёА-ЯЁa-zA-Z0-9]/g, "_");
