@@ -15,6 +15,7 @@ export async function GET(
   req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
+  try {
   const { id: sessionId } = await params;
   const supabase  = createAdminClient();
 
@@ -343,9 +344,13 @@ export async function GET(
   };
 
   // ── 3. Generate and stream PDF ───────────────────────────────────────────
-  const pdfBuffer = await new Promise<Buffer>((resolve) => {
-    const doc = pdfMake.createPdf(docDefinition);
-    (doc as any).getBuffer((buffer: Uint8Array) => resolve(Buffer.from(buffer)));
+  const pdfBuffer = await new Promise<Buffer>((resolve, reject) => {
+    try {
+      const doc = pdfMake.createPdf(docDefinition);
+      (doc as any).getBuffer((buffer: Uint8Array) => resolve(Buffer.from(buffer)));
+    } catch (e) {
+      reject(e);
+    }
   });
 
   const safeName = companyName.replace(/[^а-яёА-ЯЁa-zA-Z0-9]/g, "_");
@@ -358,4 +363,8 @@ export async function GET(
       "Content-Disposition": `attachment; filename*=UTF-8''${encodeURIComponent(fileName)}`,
     },
   });
+  } catch (err: any) {
+    console.error("[report] PDF generation error:", err?.message || err);
+    return NextResponse.json({ error: "PDF generation failed", detail: err?.message }, { status: 500 });
+  }
 }
