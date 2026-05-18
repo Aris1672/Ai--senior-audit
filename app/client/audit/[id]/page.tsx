@@ -5,13 +5,13 @@ import { useParams, useRouter } from "next/navigation";
 import { getRiskColor, getRiskBgColor, type RiskLevel } from "@/lib/billing";
 
 interface Finding {
-  id:           string;
-  risk_level:   RiskLevel;
-  title:        string;
-  description:  string;
+  id:             string;
+  risk_level:     RiskLevel;
+  title:          string;
+  description:    string;
+  legal_basis:    string;
   recommendation: string;
-  amount_rub:   number;
-  created_at:   string;
+  created_at:     string;
 }
 
 interface Message {
@@ -88,8 +88,6 @@ export default function AuditDetailPage() {
     return acc;
   }, {});
 
-  const totalExposure = findings.reduce((s, f) => s + (f.amount_rub || 0), 0);
-
   return (
     <div style={{ maxWidth: "1100px" }}>
 
@@ -115,7 +113,7 @@ export default function AuditDetailPage() {
             <h1 style={{ fontSize: "22px", fontWeight: "700", color: "#e8edf8", margin: "0 0 6px 0" }}>
               {session.company_name}
             </h1>
-            {session.period && (
+            {session.period && session.period !== "All periods" && (
               <div style={{ fontSize: "13px", color: "#7a90c0", marginBottom: "12px" }}>
                 Период: {session.period}
               </div>
@@ -148,15 +146,12 @@ export default function AuditDetailPage() {
           gap: "12px", marginTop: "20px",
         }}>
           {[
-            { label: "Нарушений",      value: findings.length,     color: findings.length > 0 ? "#e84040" : "#2ecc8f" },
-            { label: "Транзакций",     value: session.transactions_ct || "—", color: "#4d91ff" },
-            { label: "Стоимость",      value: session.cost_rub
+            { label: "Нарушений",  value: findings.length, color: findings.length > 0 ? "#e84040" : "#2ecc8f" },
+            { label: "Транзакций", value: session.transactions_ct || "—", color: "#4d91ff" },
+            { label: "Стоимость",  value: session.cost_rub
                 ? session.cost_rub.toLocaleString("ru", { style: "currency", currency: "RUB", maximumFractionDigits: 0 })
-                : "—",                                             color: "#f59e0b" },
-            { label: "Сумма под риском", value: totalExposure > 0
-                ? totalExposure.toLocaleString("ru", { style: "currency", currency: "RUB", maximumFractionDigits: 0 })
-                : "—",                                             color: "#e84040" },
-            { label: "Дата",           value: new Date(session.created_at).toLocaleDateString("ru", { day: "numeric", month: "long", year: "numeric" }), color: "#7a90c0" },
+                : "—", color: "#f59e0b" },
+            { label: "Дата", value: new Date(session.created_at).toLocaleDateString("ru", { day: "numeric", month: "long", year: "numeric" }), color: "#7a90c0" },
           ].map((s, i) => (
             <div key={i} style={{
               background: "#080f1e", borderRadius: "8px", padding: "12px 14px",
@@ -230,19 +225,17 @@ export default function AuditDetailPage() {
                       <div style={{ fontSize: "14px", fontWeight: "600", color: "#e8edf8", flex: 1 }}>
                         {i + 1}. {f.title}
                       </div>
-                      {f.amount_rub > 0 && (
-                        <div style={{
-                          fontSize: "13px", fontWeight: "700",
-                          color: "#e84040", whiteSpace: "nowrap",
-                        }}>
-                          {f.amount_rub.toLocaleString("ru", { style: "currency", currency: "RUB", maximumFractionDigits: 0 })}
-                        </div>
-                      )}
                     </div>
 
                     {f.description && (
                       <div style={{ fontSize: "13px", color: "#7a90c0", marginTop: "8px", lineHeight: "1.5" }}>
                         {f.description}
+                      </div>
+                    )}
+
+                    {f.legal_basis && (
+                      <div style={{ fontSize: "12px", color: "#3d4f7a", marginTop: "6px" }}>
+                        📋 {f.legal_basis}
                       </div>
                     )}
 

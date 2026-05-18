@@ -289,7 +289,7 @@ case "update_session_paid": {
             .single(),
           supabase
             .from("findings")
-            .select("id, risk_level, title, description, recommendation, amount_rub, created_at")
+            .select("id, risk_level, title, description, legal_basis, recommendation, created_at")
             .eq("session_id", sessionId)
             .order("created_at", { ascending: true }),
           supabase
