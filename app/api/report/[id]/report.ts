@@ -348,7 +348,7 @@ export async function GET(
   };
 
   // ── 3. Generate and stream PDF ───────────────────────────────────────────
-  const pdfBuffer = await new Promise<Buffer>((resolve, reject) => {
+  const pdfBuffer = await new Promise<Buffer>((resolve) => {
     const doc = pdfMake.createPdf(docDefinition);
     (doc as any).getBuffer((buffer: Uint8Array) => resolve(Buffer.from(buffer)));
   });
