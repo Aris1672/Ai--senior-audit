@@ -356,7 +356,7 @@ export async function GET(
   const safeName = companyName.replace(/[^а-яёА-ЯЁa-zA-Z0-9]/g, "_");
   const fileName = `Аудит_${safeName}_${new Date().toISOString().slice(0, 10)}.pdf`;
 
-  return new NextResponse(pdfBuffer, {
+  return new NextResponse(new Uint8Array(pdfBuffer), {
     status: 200,
     headers: {
       "Content-Type":        "application/pdf",
