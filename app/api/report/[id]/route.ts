@@ -13,9 +13,9 @@ const RISK_COLORS: Record<string, string> = {
 
 export async function GET(
   req: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
-  const sessionId = params.id;
+  const { id: sessionId } = await params;
   const supabase  = createAdminClient();
 
   // ── 1. Fetch all data ────────────────────────────────────────────────────
