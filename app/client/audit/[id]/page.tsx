@@ -140,9 +140,17 @@ export default function AuditDetailPage() {
             <button
               onClick={async () => {
                 try {
+                  console.log("[PDF] Fetching:", `/api/report/${session.id}`);
                   const res = await fetch(`/api/report/${session.id}`);
-                  if (!res.ok) throw new Error("Ошибка генерации");
+                  console.log("[PDF] Status:", res.status, res.ok);
+                  console.log("[PDF] Content-Type:", res.headers.get("content-type"));
+                  if (!res.ok) {
+                    const text = await res.text();
+                    console.error("[PDF] Error body:", text);
+                    throw new Error("Ошибка генерации");
+                  }
                   const blob = await res.blob();
+                  console.log("[PDF] Blob size:", blob.size, "type:", blob.type);
                   const url  = URL.createObjectURL(blob);
                   const a    = document.createElement("a");
                   a.href     = url;
@@ -150,6 +158,7 @@ export default function AuditDetailPage() {
                   a.click();
                   URL.revokeObjectURL(url);
                 } catch (e) {
+                  console.error("[PDF] Exception:", e);
                   alert("Не удалось сформировать PDF. Попробуйте ещё раз.");
                 }
               }}
