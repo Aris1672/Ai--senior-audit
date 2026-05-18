@@ -137,6 +137,16 @@ export default function AuditDetailPage() {
                 Открыть чат →
               </a>
             )}
+            <a href={`/api/report/${session.id}`} target="_blank" rel="noopener noreferrer" style={{
+              padding: "10px 20px", background: "#0d1f3e",
+              border: "1px solid #1e2d55",
+              borderRadius: "8px", color: "#e8edf8",
+              fontSize: "13px", fontWeight: "600",
+              textDecoration: "none",
+              display: "flex", alignItems: "center", gap: "6px",
+            }}>
+              ↓ Скачать PDF
+            </a>
           </div>
         </div>
 
