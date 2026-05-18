@@ -67,9 +67,9 @@ export async function GET(
 
   // ── 2. Build pdfmake document definition ────────────────────────────────
   // Dynamically import pdfmake (server-side only)
-  const pdfMake      = (await import("pdfmake/build/pdfmake")).default;
-  const pdfFonts     = (await import("pdfmake/build/vfs_fonts")).default;
-  pdfMake.vfs        = pdfFonts.vfs;
+  const pdfMake  = (await import("pdfmake/build/pdfmake")).default;
+  const pdfFonts = (await import("pdfmake/build/vfs_fonts")).default;
+  (pdfMake as any).vfs = (pdfFonts as any).vfs;
 
   const colors = {
     dark:   "#0c1220",
