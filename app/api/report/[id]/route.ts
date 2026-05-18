@@ -92,16 +92,14 @@ export async function GET(
     const rows: any[] = [
       // Section header
       {
-        canvas: [{ type: "rect", x: 0, y: 0, w: 515, h: 28, r: 4, color: "#1a2340" }],
-        margin: [0, 16, 0, 0],
-      },
-      {
         text: [
-          { text: "  ● ", color, fontSize: 14 },
+          { text: "● ", color, fontSize: 14 },
           { text: level, color, fontSize: 12, bold: true },
           { text: `  (${items.length} нарушени${items.length === 1 ? "е" : "й"})`, color: colors.light, fontSize: 11 },
         ],
-        margin: [4, -22, 0, 12],
+        margin: [0, 16, 0, 12],
+        background: "#1a2340",
+        padding: [4, 4, 4, 4],
       },
     ];
 
@@ -175,9 +173,6 @@ export async function GET(
   const docDefinition: any = {
     pageSize:    "A4",
     pageMargins: [40, 60, 40, 60],
-    background:  () => ({
-      canvas: [{ type: "rect", x: 0, y: 0, w: 595, h: 842, color: "#080f1e" }],
-    }),
 
     footer: (currentPage: number, pageCount: number) => ({
       columns: [
@@ -206,7 +201,7 @@ export async function GET(
         margin: [0, 0, 0, 40],
       },
       {
-        canvas: [{ type: "line", x1: 0, y1: 0, x2: 515, y2: 0, lineWidth: 1, lineColor: colors.mid }],
+        text: " ",
         margin: [0, 0, 0, 30],
       },
       {
@@ -318,7 +313,7 @@ export async function GET(
 
       // ── CONCLUSION ───────────────────────────────────────────────────────
       {
-        canvas: [{ type: "line", x1: 0, y1: 0, x2: 515, y2: 0, lineWidth: 1, lineColor: colors.mid }],
+        text: " ",
         margin: [0, 24, 0, 24],
       },
       {
