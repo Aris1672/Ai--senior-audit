@@ -59,7 +59,7 @@ audit_messages, documents, usage_events
 - [x] File parser (count rows from xlsx/csv/xml)
 - [x] Admin: per-client audit billing log
 - [x] Admin dashboard: unpaid metrics + donut chart
-- [ ] Client portal: audit history page (audits currently open chat only; no standalone history/detail view)
+- [x] Client portal: audit history page (audits currently open chat only; no standalone history/detail view)
 - [ ] 1C live connection testing
 - [ ] Report generation in Russian
 - [ ] Email notifications
