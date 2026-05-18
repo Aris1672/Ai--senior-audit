@@ -137,16 +137,33 @@ export default function AuditDetailPage() {
                 Открыть чат →
               </a>
             )}
-            <a href={`/api/report/${session.id}`} target="_blank" rel="noopener noreferrer" style={{
-              padding: "10px 20px", background: "#0d1f3e",
-              border: "1px solid #1e2d55",
-              borderRadius: "8px", color: "#e8edf8",
-              fontSize: "13px", fontWeight: "600",
-              textDecoration: "none",
-              display: "flex", alignItems: "center", gap: "6px",
-            }}>
+            <button
+              onClick={async () => {
+                try {
+                  const res = await fetch(`/api/report/${session.id}`);
+                  if (!res.ok) throw new Error("Ошибка генерации");
+                  const blob = await res.blob();
+                  const url  = URL.createObjectURL(blob);
+                  const a    = document.createElement("a");
+                  a.href     = url;
+                  a.download = `Аудит_${session.company_name}_${new Date().toISOString().slice(0,10)}.pdf`;
+                  a.click();
+                  URL.revokeObjectURL(url);
+                } catch (e) {
+                  alert("Не удалось сформировать PDF. Попробуйте ещё раз.");
+                }
+              }}
+              style={{
+                padding: "10px 20px", background: "#0d1f3e",
+                border: "1px solid #1e2d55",
+                borderRadius: "8px", color: "#e8edf8",
+                fontSize: "13px", fontWeight: "600",
+                cursor: "pointer",
+                display: "flex", alignItems: "center", gap: "6px",
+              }}
+            >
               ↓ Скачать PDF
-            </a>
+            </button>
           </div>
         </div>
 
