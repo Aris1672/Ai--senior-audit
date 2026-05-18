@@ -120,14 +120,10 @@ async function generatePDF(session: SessionDetail, findings: Finding[]) {
     defaultStyle: { font: "Roboto", fontSize: 11, color: colors.white },
   };
 
-  await new Promise<void>((resolve, reject) => {
-    try {
-      const doc = pdfMake.createPdf(docDefinition);
-      const safeName = session.company_name.replace(/[^а-яёА-ЯЁa-zA-Z0-9]/g, "_");
-      const fileName = `Аудит_${safeName}_${new Date().toISOString().slice(0, 10)}.pdf`;
-      doc.download(fileName, resolve);
-    } catch (e) { reject(e); }
-  });
+  const doc = pdfMake.createPdf(docDefinition);
+  const safeName = session.company_name.replace(/[^а-яёА-ЯЁa-zA-Z0-9]/g, "_");
+  const fileName = `Аудит_${safeName}_${new Date().toISOString().slice(0, 10)}.pdf`;
+  doc.download(fileName);
 }
 
 interface Finding {
