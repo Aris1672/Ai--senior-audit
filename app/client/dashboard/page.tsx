@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { getRiskColor, getRiskBgColor, type RiskLevel } from "@/lib/billing";
 
 interface SessionData {
@@ -27,7 +27,6 @@ interface DashboardData {
 export default function ClientDashboard() {
   const [data,    setData]    = useState<DashboardData | null>(null);
   const [loading, setLoading] = useState(true);
-  const [mounted, setMounted] = useState(false);
 
   useEffect(() => {
     async function load() {
@@ -73,60 +72,6 @@ export default function ClientDashboard() {
   const paidCount   = data.sessions.filter(s => s.paid).length;
   const unpaidCount = data.sessions.filter(s => !s.paid && s.cost_rub).length;
 
-  const auditChartRef   = useRef<HTMLCanvasElement>(null);
-  const paymentChartRef = useRef<HTMLCanvasElement>(null);
-
-  useEffect(() => { setMounted(true); }, []);
-
-  useEffect(() => {
-    if (!data || !mounted) return;
-    let auditChart: any;
-    let paymentChart: any;
-
-    async function initCharts() {
-      const { Chart, registerables } = await import("chart.js");
-      Chart.register(...registerables);
-
-      if (auditChartRef.current) {
-        auditChart = new Chart(auditChartRef.current, {
-          type: "doughnut",
-          data: {
-            datasets: [{
-              data: [activeAudits || 0.001, completedAudits || 0.001],
-              backgroundColor: ["#378ADD", "#4a5568"],
-              borderWidth: 0,
-              hoverOffset: 4,
-            }],
-          },
-          options: {
-            responsive: true, maintainAspectRatio: false, cutout: "72%",
-            plugins: { legend: { display: false }, tooltip: { enabled: false } },
-          },
-        });
-      }
-
-      if (paymentChartRef.current) {
-        paymentChart = new Chart(paymentChartRef.current, {
-          type: "doughnut",
-          data: {
-            datasets: [{
-              data: [data?.paidTotal || 0.001, data?.unpaidTotal || 0.001],
-              backgroundColor: ["#1D9E75", "#E24B4A"],
-              borderWidth: 0,
-              hoverOffset: 4,
-            }],
-          },
-          options: {
-            responsive: true, maintainAspectRatio: false, cutout: "72%",
-            plugins: { legend: { display: false }, tooltip: { enabled: false } },
-          },
-        });
-      }
-    }
-
-    initCharts();
-    return () => { auditChart?.destroy(); paymentChart?.destroy(); };
-  }, [data]);
 
   const SIMPLE_METRICS = [
     {
@@ -157,6 +102,26 @@ export default function ClientDashboard() {
     archived:  { label: "Архив",     color: "#3d4f7a" },
   };
 
+  // Pure SVG donut — no external deps, no SSR issues
+  function SvgDonut({ value1, value2, color1, color2 }: { value1: number; value2: number; color1: string; color2: string }) {
+    const total = value1 + value2 || 1;
+    const r = 36;
+    const circ = 2 * Math.PI * r;
+    const dash1 = (value1 / total) * circ;
+    const dash2 = (value2 / total) * circ;
+    const gap = 2;
+    return (
+      <svg width="90" height="90" viewBox="0 0 90 90" style={{ transform: "rotate(-90deg)" }}>
+        <circle cx="45" cy="45" r={r} fill="none" stroke={color2} strokeWidth="10"
+          strokeDasharray={`${dash2 - gap} ${circ - dash2 + gap}`}
+          strokeDashoffset={-(dash1 + gap / 2)} />
+        <circle cx="45" cy="45" r={r} fill="none" stroke={color1} strokeWidth="10"
+          strokeDasharray={`${dash1 - gap} ${circ - dash1 + gap}`}
+          strokeDashoffset={0} />
+      </svg>
+    );
+  }
+
   return (
     <div>
       {/* Header */}
@@ -177,7 +142,7 @@ export default function ClientDashboard() {
           <div style={{ fontSize: "12px", color: "#7a90c0", marginBottom: "14px" }}>Всего аудитов</div>
           <div style={{ display: "flex", alignItems: "center", gap: "20px" }}>
             <div style={{ position: "relative", width: "90px", height: "90px", flexShrink: 0 }}>
-              {mounted && <canvas ref={auditChartRef} role="img" aria-label={`Аудитов: ${activeAudits} активных, ${completedAudits} завершённых`} />}
+              <SvgDonut value1={activeAudits} value2={completedAudits} color1="#378ADD" color2="#4a5568" />
               <div style={{ position: "absolute", inset: 0, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", pointerEvents: "none" }}>
                 <span style={{ fontSize: "11px", color: "#7a90c0" }}>Всего</span>
                 <span style={{ fontSize: "20px", fontWeight: "700", color: "#e8edf8" }}>{data.totalAudits}</span>
@@ -208,7 +173,7 @@ export default function ClientDashboard() {
           <div style={{ fontSize: "12px", color: "#7a90c0", marginBottom: "14px" }}>Оплата аудитов</div>
           <div style={{ display: "flex", alignItems: "center", gap: "20px" }}>
             <div style={{ position: "relative", width: "90px", height: "90px", flexShrink: 0 }}>
-              {mounted && <canvas ref={paymentChartRef} role="img" aria-label={`Оплачено: ${data.paidTotal}, к оплате: ${data.unpaidTotal}`} />}
+              <SvgDonut value1={data.paidTotal} value2={data.unpaidTotal} color1="#1D9E75" color2="#E24B4A" />
               <div style={{ position: "absolute", inset: 0, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", pointerEvents: "none" }}>
                 <span style={{ fontSize: "11px", color: "#7a90c0" }}>Итого</span>
                 <span style={{ fontSize: "13px", fontWeight: "700", color: "#e8edf8" }}>{data.totalSpend.toLocaleString("ru", { maximumFractionDigits: 0 })} ₽</span>
