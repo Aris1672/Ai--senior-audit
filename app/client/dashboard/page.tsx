@@ -51,38 +51,39 @@ function SvgDonut({ value1, value2, color1, color2, mounted }: {
     // ease out cubic
     const ease = (t: number) => 1 - Math.pow(1 - t, 3);
 
-    const draw = (progress: number) => {
-      const dpr = window.devicePixelRatio || 1;
+   const draw = (progress: number) => {
       ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-      const end1 = START + (2 * Math.PI * frac1 - GAP) * progress;
-      const end2 = START + 2 * Math.PI * frac1 + GAP
-                 + (2 * Math.PI * frac2 - GAP) * progress;
+      // Both arcs sweep from START, reaching their final angles at progress=1.
+      // Arc2's start tracks arc1's current end — they grow as one continuous band.
+      const totalAngle = 2 * Math.PI * progress; // total swept so far
+      const angle1 = 2 * Math.PI * frac1;        // arc1 final angle
+      const angle2 = 2 * Math.PI * frac2;        // arc2 final angle
 
-      // Arc 1 (color1)
-      ctx.beginPath();
-      ctx.arc(cx, cy, r, START, end1);
-      ctx.strokeStyle = color1;
-      ctx.lineWidth   = lw;
-      ctx.lineCap     = "butt";
-      ctx.stroke();
+      const swept1 = Math.min(totalAngle, angle1 - GAP);
+      const swept2 = Math.max(0, totalAngle - angle1) * (angle2 / (angle2 || 1));
 
-      // Arc 2 (color2) — starts right after arc1
-      if (frac2 > 0) {
-        const arc2Start = START + 2 * Math.PI * frac1 + GAP;
+      // Arc1
+      if (swept1 > 0) {
         ctx.beginPath();
-        ctx.arc(cx, cy, r, arc2Start, end2);
+        ctx.arc(cx, cy, r, START, START + swept1);
+        ctx.strokeStyle = color1;
+        ctx.lineWidth = lw;
+        ctx.lineCap = "butt";
+        ctx.stroke();
+      }
+
+      // Arc2 — starts exactly where arc1 ends right now
+      if (swept2 > 0) {
+        const arc2Start = START + angle1 + GAP;
+        ctx.beginPath();
+        ctx.arc(cx, cy, r, arc2Start, arc2Start + swept2);
         ctx.strokeStyle = color2;
-        ctx.lineWidth   = lw;
-        ctx.lineCap     = "butt";
+        ctx.lineWidth = lw;
+        ctx.lineCap = "butt";
         ctx.stroke();
       }
     };
-
-    if (!mounted) {
-      draw(0);
-      return;
-    }
 
     const animate = (ts: number) => {
       if (!startTime) startTime = ts;
