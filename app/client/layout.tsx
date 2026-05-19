@@ -7,7 +7,7 @@ import { useEffect, useState } from "react";
 const NAV_ITEMS = [
   { href: "/client/dashboard", label: "Дашборд",    icon: "▦" },
   { href: "/client/chat",      label: "ИИ Аудитор", icon: "◎" },
-  { href: "/client/documents", label: "Документы",  icon: "↑" },
+  //{ href: "/client/documents", label: "Документы",  icon: "↑" },
   { href: "/client/usage",     label: "Журнал действий",    icon: "₽" },
 ];
 
