@@ -204,9 +204,10 @@ export async function POST(req: NextRequest) {
 
       // ── Confirm audit — save final price ──────────────────
       case "confirm_audit": {
-        const { sessionId, priceRub } = payload;
+        const { sessionId, priceRub, transactionCount } = payload;
         await supabase.from("audit_sessions").update({
-          cost_rub: priceRub,
+          cost_rub:        priceRub,
+          transactions_ct: transactionCount ?? 0,
         }).eq("id", sessionId);
         return NextResponse.json({ success: true });
       }

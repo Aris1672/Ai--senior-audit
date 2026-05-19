@@ -176,7 +176,7 @@ export default function NewAuditPage() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         action: "confirm_audit",
-        payload: { sessionId, priceRub: priceResult?.priceRub },
+        payload: { sessionId, priceRub: priceResult?.priceRub, transactionCount: priceResult?.transactionCount },
       }),
     });
 
