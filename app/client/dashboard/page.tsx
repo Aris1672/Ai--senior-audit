@@ -35,8 +35,18 @@ function SvgDonut({ value1, value2, color1, color2, mounted }: {
   const dash1 = (value1 / total) * circ;
   const dash2 = (value2 / total) * circ;
   const gap = 2;
-  const arc1Offset = mounted ? 0 : circ;
-  const arc2Offset = mounted ? -(dash1 + gap / 2) : circ;
+
+  // Arc1 sits at 0° (12 o'clock after the -90deg SVG rotation).
+  // Hidden = full circumference offset (arc pushed off-screen).
+  // Revealed = circ - dash1 (offset shrinks, arc grows clockwise).
+  const arc1Offset = mounted ? circ - dash1 : circ;
+
+  // Arc2 starts immediately after arc1. Its "zero" position is -(dash1 + gap/2).
+  // Hidden = circ (same full offset trick).
+  // Revealed = circ - dash2 - (dash1 + gap/2) — offset shrinks into its slot.
+  const arc2StartPos = dash1 + gap / 2;
+  const arc2Offset   = mounted ? circ - dash2 - arc2StartPos : circ;
+
   return (
     <svg width="150" height="150" viewBox="0 0 150 150" style={{ transform: "rotate(-90deg)" }}>
       <circle cx="75" cy="75" r={r} fill="none" stroke={color2} strokeWidth="17"
