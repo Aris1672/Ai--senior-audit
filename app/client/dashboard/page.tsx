@@ -112,10 +112,10 @@ export default function ClientDashboard() {
     const gap = 2;
     return (
       <svg width="150" height="150" viewBox="0 0 150 150" style={{ transform: "rotate(-90deg)" }}>
-        <circle cx="75" cy="75" r={r} fill="none" stroke={color2} strokeWidth="11"
+        <circle cx="75" cy="75" r={r} fill="none" stroke={color2} strokeWidth="17"
           strokeDasharray={`${dash2 - gap} ${circ - dash2 + gap}`}
           strokeDashoffset={-(dash1 + gap / 2)} />
-        <circle cx="75" cy="75" r={r} fill="none" stroke={color1} strokeWidth="11"
+        <circle cx="75" cy="75" r={r} fill="none" stroke={color1} strokeWidth="17"
           strokeDasharray={`${dash1 - gap} ${circ - dash1 + gap}`}
           strokeDashoffset={0} />
       </svg>
