@@ -25,7 +25,7 @@ interface DashboardData {
 }
 
 // Top-level custom hook — must live outside the component to satisfy Rules of Hooks
-function useCountUp(target: number, duration = 900, trigger = true) {
+function useCountUp(target: number, duration = 2000, trigger = true) {
   const [val, setVal] = useState(0);
   useEffect(() => {
     if (!trigger) return;
