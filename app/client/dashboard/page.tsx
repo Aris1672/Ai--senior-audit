@@ -48,10 +48,10 @@ export default function ClientDashboard() {
   const [mounted, setMounted] = useState(false);
 
   // These must be called unconditionally at the top level — before any early returns
-  const animTotalAudits     = useCountUp(data?.totalAudits    ?? 0, 900, mounted);
-  const animActiveAudits    = useCountUp(data ? data.sessions.filter(s => s.status === "active").length    : 0, 900, mounted);
-  const animCompletedAudits = useCountUp(data ? data.sessions.filter(s => s.status === "completed").length : 0, 900, mounted);
-  const animFindings        = useCountUp(data?.findings.length ?? 0, 900, mounted);
+  const animTotalAudits     = useCountUp(data?.totalAudits    ?? 0, 2000, mounted);
+  const animActiveAudits    = useCountUp(data ? data.sessions.filter(s => s.status === "active").length    : 0, 2000, mounted);
+  const animCompletedAudits = useCountUp(data ? data.sessions.filter(s => s.status === "completed").length : 0, 2000, mounted);
+  const animFindings        = useCountUp(data?.findings.length ?? 0, 2000, mounted);
 
   useEffect(() => {
     async function load() {
