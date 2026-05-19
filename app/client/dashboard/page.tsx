@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { getRiskColor, getRiskBgColor, type RiskLevel } from "@/lib/billing";
 
 interface SessionData {
@@ -27,6 +27,26 @@ interface DashboardData {
 export default function ClientDashboard() {
   const [data,    setData]    = useState<DashboardData | null>(null);
   const [loading, setLoading] = useState(true);
+  const [mounted, setMounted] = useState(false);
+
+  // Count-up hook
+  function useCountUp(target: number, duration = 900, trigger = true) {
+    const [val, setVal] = useState(0);
+    useEffect(() => {
+      if (!trigger) return;
+      let start: number | null = null;
+      const step = (ts: number) => {
+        if (!start) start = ts;
+        const progress = Math.min((ts - start) / duration, 1);
+        // ease-out cubic
+        const ease = 1 - Math.pow(1 - progress, 3);
+        setVal(Math.round(ease * target));
+        if (progress < 1) requestAnimationFrame(step);
+      };
+      requestAnimationFrame(step);
+    }, [target, trigger]);
+    return val;
+  }
 
   useEffect(() => {
     async function load() {
@@ -57,6 +77,7 @@ export default function ClientDashboard() {
         unpaidTotal,
       });
       setLoading(false);
+      setTimeout(() => setMounted(true), 50); // slight delay so first paint is visible
     }
     load();
   }, []);
@@ -71,6 +92,12 @@ export default function ClientDashboard() {
 
   const paidCount   = data.sessions.filter(s => s.paid).length;
   const unpaidCount = data.sessions.filter(s => !s.paid && s.cost_rub).length;
+
+  // Animated count-up values
+  const animTotalAudits    = useCountUp(data.totalAudits,    900, mounted);
+  const animActiveAudits   = useCountUp(activeAudits,        900, mounted);
+  const animCompletedAudits= useCountUp(completedAudits,     900, mounted);
+  const animFindings       = useCountUp(data.findings.length,900, mounted);
 
 
   const SIMPLE_METRICS = [
@@ -102,7 +129,7 @@ export default function ClientDashboard() {
     archived:  { label: "Архив",     color: "#3d4f7a" },
   };
 
-  // Pure SVG donut — no external deps, no SSR issues
+  // Pure SVG donut — animates arcs on mount
   function SvgDonut({ value1, value2, color1, color2 }: { value1: number; value2: number; color1: string; color2: string }) {
     const total = value1 + value2 || 1;
     const r = 62;
@@ -110,16 +137,30 @@ export default function ClientDashboard() {
     const dash1 = (value1 / total) * circ;
     const dash2 = (value2 / total) * circ;
     const gap = 2;
+    // When not mounted, offset = full circ (invisible). When mounted, animate to real offset.
+    const arc1Offset  = mounted ? 0 : circ;
+    const arc2Offset  = mounted ? -(dash1 + gap / 2) : circ;
     return (
       <svg width="150" height="150" viewBox="0 0 150 150" style={{ transform: "rotate(-90deg)" }}>
         <circle cx="75" cy="75" r={r} fill="none" stroke={color2} strokeWidth="17"
           strokeDasharray={`${dash2 - gap} ${circ - dash2 + gap}`}
-          strokeDashoffset={-(dash1 + gap / 2)} />
+          strokeDashoffset={arc2Offset}
+          style={{ transition: mounted ? "stroke-dashoffset 0.9s cubic-bezier(0.4,0,0.2,1)" : "none" }} />
         <circle cx="75" cy="75" r={r} fill="none" stroke={color1} strokeWidth="17"
           strokeDasharray={`${dash1 - gap} ${circ - dash1 + gap}`}
-          strokeDashoffset={0} />
+          strokeDashoffset={arc1Offset}
+          style={{ transition: mounted ? "stroke-dashoffset 0.9s cubic-bezier(0.4,0,0.2,1) 0.1s" : "none" }} />
       </svg>
     );
+  }
+
+  // Card entrance animation helper
+  function cardStyle(index: number): React.CSSProperties {
+    return {
+      opacity:   mounted ? 1 : 0,
+      transform: mounted ? "translateY(0)" : "translateY(18px)",
+      transition: `opacity 0.5s ease ${index * 80}ms, transform 0.5s ease ${index * 80}ms`,
+    };
   }
 
   return (
@@ -138,14 +179,14 @@ export default function ClientDashboard() {
       <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: "16px", marginBottom: "28px" }}>
 
         {/* Donut — Audits */}
-        <div style={{ background: "#0c1220", border: "1px solid #1e2d55", borderTop: "3px solid #378ADD", borderRadius: "10px", padding: "20px" }}>
+        <div style={{ background: "#0c1220", border: "1px solid #1e2d55", borderTop: "3px solid #378ADD", borderRadius: "10px", padding: "20px", ...cardStyle(0) }}>
           <div style={{ fontSize: "12px", color: "#7a90c0", marginBottom: "14px" }}>Всего аудитов</div>
           <div style={{ display: "flex", alignItems: "stretch", gap: "20px" }}>
             <div style={{ position: "relative", width: "150px", height: "150px", flexShrink: 0, alignSelf: "center" }}>
               <SvgDonut value1={activeAudits} value2={completedAudits} color1="#378ADD" color2="#4a5568" />
               <div style={{ position: "absolute", inset: 0, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", pointerEvents: "none" }}>
                 <span style={{ fontSize: "11px", color: "#7a90c0" }}>Всего</span>
-                <span style={{ fontSize: "20px", fontWeight: "700", color: "#e8edf8" }}>{data.totalAudits}</span>
+                <span style={{ fontSize: "20px", fontWeight: "700", color: "#e8edf8" }}>{animTotalAudits}</span>
               </div>
             </div>
             <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: "10px" }}>
@@ -154,7 +195,7 @@ export default function ClientDashboard() {
                   <span style={{ width: "8px", height: "8px", borderRadius: "2px", background: "#378ADD", flexShrink: 0 }} />
                   <span style={{ fontSize: "11px", color: "#7a90c0" }}>Активных</span>
                 </div>
-                <div style={{ fontSize: "20px", fontWeight: "700", color: "#e8edf8", paddingLeft: "14px" }}>{activeAudits}</div>
+                <div style={{ fontSize: "20px", fontWeight: "700", color: "#e8edf8", paddingLeft: "14px" }}>{animActiveAudits}</div>
               </div>
               <div style={{ height: "1px", background: "#1e2d55" }} />
               <div>
@@ -162,14 +203,14 @@ export default function ClientDashboard() {
                   <span style={{ width: "8px", height: "8px", borderRadius: "2px", background: "#4a5568", flexShrink: 0 }} />
                   <span style={{ fontSize: "11px", color: "#7a90c0" }}>Завершённых</span>
                 </div>
-                <div style={{ fontSize: "20px", fontWeight: "700", color: "#e8edf8", paddingLeft: "14px" }}>{completedAudits}</div>
+                <div style={{ fontSize: "20px", fontWeight: "700", color: "#e8edf8", paddingLeft: "14px" }}>{animCompletedAudits}</div>
               </div>
             </div>
           </div>
         </div>
 
         {/* Donut — Payments */}
-        <div style={{ background: "#0c1220", border: "1px solid #1e2d55", borderTop: "3px solid #1D9E75", borderRadius: "10px", padding: "20px" }}>
+        <div style={{ background: "#0c1220", border: "1px solid #1e2d55", borderTop: "3px solid #1D9E75", borderRadius: "10px", padding: "20px", ...cardStyle(1) }}>
           <div style={{ fontSize: "12px", color: "#7a90c0", marginBottom: "14px" }}>Оплата аудитов</div>
           <div style={{ display: "flex", alignItems: "stretch", gap: "20px" }}>
             <div style={{ position: "relative", width: "150px", height: "150px", flexShrink: 0, alignSelf: "center" }}>
@@ -202,7 +243,7 @@ export default function ClientDashboard() {
         </div>
 
         {/* Simple metrics stacked */}
-        <div style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
+        <div style={{ display: "flex", flexDirection: "column", gap: "16px", ...cardStyle(2) }}>
           {SIMPLE_METRICS.map((m, i) => (
             <div key={i} style={{
               background: "#0c1220", border: "1px solid #1e2d55",
@@ -211,7 +252,9 @@ export default function ClientDashboard() {
               display: "flex", flexDirection: "column", justifyContent: "center",
             }}>
               <div style={{ fontSize: "12px", color: "#7a90c0", marginBottom: "6px" }}>{m.label}</div>
-              <div style={{ fontSize: "20px", fontWeight: "700", color: m.color, marginBottom: "4px" }}>{m.value}</div>
+              <div style={{ fontSize: "20px", fontWeight: "700", color: m.color, marginBottom: "4px" }}>
+                {i === 0 ? animFindings : m.value}
+              </div>
               <div style={{ fontSize: "11px", color: "#3d4f7a" }}>{m.sub}</div>
             </div>
           ))}
@@ -221,7 +264,7 @@ export default function ClientDashboard() {
 
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "20px" }}>
         {/* Recent sessions */}
-        <div style={{ background: "#0c1220", border: "1px solid #1e2d55", borderRadius: "10px", padding: "20px" }}>
+        <div style={{ background: "#0c1220", border: "1px solid #1e2d55", borderRadius: "10px", padding: "20px", ...cardStyle(3) }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "16px" }}>
             <h2 style={{ fontSize: "15px", fontWeight: "600", color: "#e8edf8", margin: 0 }}>
               Последние аудиты
@@ -283,7 +326,7 @@ export default function ClientDashboard() {
         </div>
 
         {/* Open findings */}
-        <div style={{ background: "#0c1220", border: "1px solid #1e2d55", borderRadius: "10px", padding: "20px" }}>
+        <div style={{ background: "#0c1220", border: "1px solid #1e2d55", borderRadius: "10px", padding: "20px", ...cardStyle(4) }}>
           <h2 style={{ fontSize: "15px", fontWeight: "600", color: "#e8edf8", margin: "0 0 16px" }}>
             Открытые нарушения ({data.findings.length})
           </h2>
