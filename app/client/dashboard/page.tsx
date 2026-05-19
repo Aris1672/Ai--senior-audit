@@ -29,28 +29,80 @@ interface DashboardData {
 function SvgDonut({ value1, value2, color1, color2, mounted }: {
   value1: number; value2: number; color1: string; color2: string; mounted: boolean;
 }) {
-  const total = value1 + value2 || 1;
-  const r = 62;
-  const circ = 2 * Math.PI * r;
-  const dash1 = (value1 / total) * circ;
-  const gap = 3;
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const animRef   = useRef<number>(0);
 
-  // Arc2 is a full background ring — always visible, no animation needed.
-  // Arc1 sweeps clockwise over it from 0 → its final length.
-  const arr1 = mounted ? `${dash1 - gap} ${circ}` : `0 ${circ}`;
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
 
+    const total = value1 + value2 || 1;
+    const cx = 75, cy = 75, r = 62, lw = 17;
+    const frac1 = value1 / total;
+    const frac2 = value2 / total;
+    const START = -Math.PI / 2; // 12 o'clock
+    const GAP   = 0.02;         // radians between arcs
+
+    const duration = 1400;
+    let startTime: number | null = null;
+
+    // ease out cubic
+    const ease = (t: number) => 1 - Math.pow(1 - t, 3);
+
+    const draw = (progress: number) => {
+      const dpr = window.devicePixelRatio || 1;
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+      const end1 = START + (2 * Math.PI * frac1 - GAP) * progress;
+      const end2 = START + 2 * Math.PI * frac1 + GAP
+                 + (2 * Math.PI * frac2 - GAP) * progress;
+
+      // Arc 1 (color1)
+      ctx.beginPath();
+      ctx.arc(cx, cy, r, START, end1);
+      ctx.strokeStyle = color1;
+      ctx.lineWidth   = lw;
+      ctx.lineCap     = "butt";
+      ctx.stroke();
+
+      // Arc 2 (color2) — starts right after arc1
+      if (frac2 > 0) {
+        const arc2Start = START + 2 * Math.PI * frac1 + GAP;
+        ctx.beginPath();
+        ctx.arc(cx, cy, r, arc2Start, end2);
+        ctx.strokeStyle = color2;
+        ctx.lineWidth   = lw;
+        ctx.lineCap     = "butt";
+        ctx.stroke();
+      }
+    };
+
+    if (!mounted) {
+      draw(0);
+      return;
+    }
+
+    const animate = (ts: number) => {
+      if (!startTime) startTime = ts;
+      const progress = ease(Math.min((ts - startTime) / duration, 1));
+      draw(progress);
+      if (progress < 1) animRef.current = requestAnimationFrame(animate);
+    };
+
+    animRef.current = requestAnimationFrame(animate);
+    return () => cancelAnimationFrame(animRef.current);
+  }, [mounted, value1, value2, color1, color2]);
+
+  const dpr = typeof window !== "undefined" ? window.devicePixelRatio || 1 : 1;
   return (
-    <svg width="150" height="150" viewBox="0 0 150 150" style={{ transform: "rotate(-90deg)" }}>
-      {/* Full background ring in color2 */}
-      <circle cx="75" cy="75" r={r} fill="none" stroke={color2} strokeWidth="17"
-        strokeDasharray={`${circ} 0`}
-        strokeDashoffset={0} />
-      {/* Arc1 grows clockwise over the background */}
-      <circle cx="75" cy="75" r={r} fill="none" stroke={color1} strokeWidth="17"
-        strokeDasharray={arr1}
-        strokeDashoffset={0}
-        style={{ transition: mounted ? "stroke-dasharray 1.4s cubic-bezier(0.4,0,0.2,1)" : "none" }} />
-    </svg>
+    <canvas
+      ref={canvasRef}
+      width={150 * dpr}
+      height={150 * dpr}
+      style={{ width: 150, height: 150, transform: `scale(${1 / dpr})`, transformOrigin: "top left" }}
+    />
   );
 }
 
