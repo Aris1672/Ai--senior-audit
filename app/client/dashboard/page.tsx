@@ -76,6 +76,7 @@ export default function ClientDashboard() {
   const paymentChartRef = useRef<HTMLCanvasElement>(null);
 
   useEffect(() => {
+    if (!data) return;
     let auditChart: any;
     let paymentChart: any;
 
