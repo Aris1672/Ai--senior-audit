@@ -82,10 +82,18 @@ export default function ClientDashboard() {
         unpaidTotal,
       });
       setLoading(false);
-      setTimeout(() => setMounted(true), 50); // slight delay so first paint is visible
     }
     load();
   }, []);
+
+  // Fire animations only after the dashboard has actually painted with real data.
+  // Double-rAF ensures the browser has committed at least one frame before
+  // we flip mounted, so cards start invisible and transition in visibly.
+  useEffect(() => {
+    if (!loading) {
+      requestAnimationFrame(() => requestAnimationFrame(() => setMounted(true)));
+    }
+  }, [loading]);
 
   if (loading) return (
     <div style={{ color: "#7a90c0", fontFamily: "system-ui, sans-serif" }}>Загрузка...</div>
