@@ -1,4 +1,4 @@
-import { anthropic, AUDIT_SYSTEM_PROMPT, buildAuditContext } from "@/lib/anthropic";
+import { anthropic, AUDIT_SYSTEM_PROMPT, buildAuditContext, SONNET_MODEL, HAIKU_MODEL } from "@/lib/anthropic";
 import { createAdminClient } from "@/lib/supabase-server";
 import { parseFile } from "@/lib/file-parser";
 import { NextRequest, NextResponse } from "next/server";
@@ -94,6 +94,7 @@ async function getAllDocumentsContent(
 }
 
 // ─── Extract and save findings from Claude's response ─────────────────────────
+// Uses Haiku for cost-efficient JSON extraction — no deep reasoning needed here.
 async function extractAndSaveFindings(
   supabase: ReturnType<typeof createAdminClient>,
   sessionId: string,
@@ -105,9 +106,9 @@ async function extractAndSaveFindings(
     const hasViolations = /нарушени|критич|риск|штраф|КРИТИЧНО|СУЩЕСТВЕННО|НЕСУЩЕСТВЕННО/i.test(assistantText);
     if (!hasViolations) return;
 
-    // Ask Claude to extract structured findings
+    // Ask Claude Haiku to extract structured findings (pure JSON parsing, no reasoning needed)
     const extractRes = await anthropic.messages.create({
-      model:      "claude-haiku-4-5",
+      model:      HAIKU_MODEL,
       max_tokens: 1500,
       system: `Ты — парсер аудиторских отчётов. Извлеки все нарушения из текста аудитора.
 Верни ТОЛЬКО валидный JSON массив, без пояснений, без markdown, без backticks.
@@ -246,11 +247,13 @@ export async function POST(req: NextRequest) {
       : `${AUDIT_SYSTEM_PROMPT}${fileSection}`;
 
     console.log("[chat] System prompt length:", systemPrompt.length,
+      "| Model:", SONNET_MODEL,
       "| Has files:", fileSection.length > 0);
 
+    // Main audit call — Sonnet for deep legal and financial reasoning
     const response = await anthropic.messages.create({
-      model:      "claude-haiku-4-5",
-      max_tokens: 2048,
+      model:      SONNET_MODEL,
+      max_tokens: 4096,
       system:     systemPrompt,
       messages,
     });
