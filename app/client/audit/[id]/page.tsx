@@ -14,16 +14,16 @@ async function generatePDF(session: SessionDetail, findings: Finding[]) {
 
   const RISK_ORDER_LOCAL = ["КРИТИЧНО", "СУЩЕСТВЕННО", "НЕСУЩЕСТВЕННО"] as const;
   
-  // Executive Premium Light Palette with Brand Dark Header
+  // Executive Premium Light Palette
   const colors = {
     textMain: "#1a1a1a",
     textMuted: "#555555",
     textLight: "#888888",
     bgCard: "#f8f9fa",
-    bgDarkHeader: "#0c1220", // Matches your exact dashboard & login dark theme background
     primary: "#1e2d55",
     accentBlue: "#1565e8",   // Matches your specific brand color '24'
     brandWhite: "#e8edf8",   // Matches your logo text color
+    outlineDark: "#0c1220",  // Matches your exact dashboard background for structural contrast
     red: "#c0392b",          // Critical
     amber: "#d35400",        // Significant
     green: "#27ae60",        // Minor / Safe
@@ -130,38 +130,67 @@ async function generatePDF(session: SessionDetail, findings: Finding[]) {
     }),
 
     content: [
-      // Full-width Header Panel imitating your dark branding environment
+      // Clean White Background Header with Structured Text Outlining
       {
-        table: {
-          widths: ["*"],
-          body: [[{
-            columns: [
+        columns: [
+          {
+            // Recreated HTML Logo matching exact weights, colors and crisp dark outer strokes
+            stack: [
+              // Quad-Directional Outline Shadow Layer
               {
-                // Recreated HTML Logo matching exact fonts weights and hex colors
                 text: [
-                  { text: "Assistant", bold: true, color: colors.brandWhite, fontSize: 20 },
-                  { text: "24", bold: true, color: colors.accentBlue, fontSize: 20 }
+                  { text: "Assistant", bold: true, color: colors.outlineDark, fontSize: 22 },
+                  { text: "24", bold: true, color: colors.outlineDark, fontSize: 22 }
                 ],
-                margin: [5, 4, 0, 4],
-                width: "*"
+                relativePosition: { x: 0.6, y: 0.6 }
               },
-              { 
-                text: "ОТЧЁТ ОБ АУДИТЕ СИСТЕМЫ", 
-                fontSize: 10, 
-                bold: true, 
-                color: colors.textLight, 
-                alignment: "right" as const, 
-                margin: [0, 12, 5, 0],
-                width: "auto"
+              {
+                text: [
+                  { text: "Assistant", bold: true, color: colors.outlineDark, fontSize: 22 },
+                  { text: "24", bold: true, color: colors.outlineDark, fontSize: 22 }
+                ],
+                relativePosition: { x: -0.6, y: -0.6 }
+              },
+              {
+                text: [
+                  { text: "Assistant", bold: true, color: colors.outlineDark, fontSize: 22 },
+                  { text: "24", bold: true, color: colors.outlineDark, fontSize: 22 }
+                ],
+                relativePosition: { x: -0.6, y: 0.6 }
+              },
+              {
+                text: [
+                  { text: "Assistant", bold: true, color: colors.outlineDark, fontSize: 22 },
+                  { text: "24", bold: true, color: colors.outlineDark, fontSize: 22 }
+                ],
+                relativePosition: { x: 0.6, y: -0.6 }
+              },
+              // Vibrant Top Foreground Text Layer
+              {
+                text: [
+                  { text: "Assistant", bold: true, color: colors.brandWhite, fontSize: 22 },
+                  { text: "24", bold: true, color: colors.accentBlue, fontSize: 22 }
+                ]
               }
             ],
-            fillColor: colors.bgDarkHeader,
-            padding: [12, 10, 12, 10],
-          }]],
-        },
-        layout: "noBorders",
-        margin: [-45, -45, -45, 25] // Negative margins stretch it to the full physical width of the PDF canvas
+            margin: [0, 0, 0, 0],
+            width: "*"
+          },
+          { 
+            text: "ОТЧЁТ ОБ АУДИТЕ СИСТЕМЫ", 
+            fontSize: 10, 
+            bold: true, 
+            color: colors.textLight, 
+            alignment: "right" as const, 
+            margin: [0, 12, 0, 0],
+            width: "auto"
+          }
+        ],
+        margin: [0, 0, 0, 15]
       },
+
+      // Thin Elegant Top Dividing Ruler Line
+      { canvas: [{ type: "line", x1: 0, y1: 0, x2: 505, y2: 0, lineWidth: 1, strokeColor: "#e2e8f0" }], margin: [0, 0, 0, 20] },
 
       // Metadata Block
       {
