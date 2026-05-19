@@ -78,7 +78,7 @@ export default function ClientDashboard() {
       label: "Открытых нарушений",
       value: data.findings.length,
       sub:   data.findings.length === 0 ? "Нарушений не выявлено" : "Требуют внимания",
-      color: data.findings.length === 0 ? "#2ecc8f" : "#e84040",
+      color: data.findings.length === 0 ? "#2ecc8f" : "#f59e0b",
     },
     {
       label: "Потрачено на аудиты",
@@ -105,17 +105,17 @@ export default function ClientDashboard() {
   // Pure SVG donut — no external deps, no SSR issues
   function SvgDonut({ value1, value2, color1, color2 }: { value1: number; value2: number; color1: string; color2: string }) {
     const total = value1 + value2 || 1;
-    const r = 50;
+    const r = 62;
     const circ = 2 * Math.PI * r;
     const dash1 = (value1 / total) * circ;
     const dash2 = (value2 / total) * circ;
     const gap = 2;
     return (
-      <svg width="120" height="120" viewBox="0 0 120 120" style={{ transform: "rotate(-90deg)" }}>
-        <circle cx="60" cy="60" r={r} fill="none" stroke={color2} strokeWidth="10"
+      <svg width="150" height="150" viewBox="0 0 150 150" style={{ transform: "rotate(-90deg)" }}>
+        <circle cx="75" cy="75" r={r} fill="none" stroke={color2} strokeWidth="11"
           strokeDasharray={`${dash2 - gap} ${circ - dash2 + gap}`}
           strokeDashoffset={-(dash1 + gap / 2)} />
-        <circle cx="60" cy="60" r={r} fill="none" stroke={color1} strokeWidth="10"
+        <circle cx="75" cy="75" r={r} fill="none" stroke={color1} strokeWidth="11"
           strokeDasharray={`${dash1 - gap} ${circ - dash1 + gap}`}
           strokeDashoffset={0} />
       </svg>
@@ -141,7 +141,7 @@ export default function ClientDashboard() {
         <div style={{ background: "#0c1220", border: "1px solid #1e2d55", borderTop: "3px solid #378ADD", borderRadius: "10px", padding: "20px" }}>
           <div style={{ fontSize: "12px", color: "#7a90c0", marginBottom: "14px" }}>Всего аудитов</div>
           <div style={{ display: "flex", alignItems: "stretch", gap: "20px" }}>
-            <div style={{ position: "relative", width: "120px", height: "120px", flexShrink: 0, alignSelf: "center" }}>
+            <div style={{ position: "relative", width: "150px", height: "150px", flexShrink: 0, alignSelf: "center" }}>
               <SvgDonut value1={activeAudits} value2={completedAudits} color1="#378ADD" color2="#4a5568" />
               <div style={{ position: "absolute", inset: 0, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", pointerEvents: "none" }}>
                 <span style={{ fontSize: "11px", color: "#7a90c0" }}>Всего</span>
@@ -172,8 +172,8 @@ export default function ClientDashboard() {
         <div style={{ background: "#0c1220", border: "1px solid #1e2d55", borderTop: "3px solid #1D9E75", borderRadius: "10px", padding: "20px" }}>
           <div style={{ fontSize: "12px", color: "#7a90c0", marginBottom: "14px" }}>Оплата аудитов</div>
           <div style={{ display: "flex", alignItems: "stretch", gap: "20px" }}>
-            <div style={{ position: "relative", width: "120px", height: "120px", flexShrink: 0, alignSelf: "center" }}>
-              <SvgDonut value1={data.paidTotal} value2={data.unpaidTotal} color1="#1D9E75" color2="#E24B4A" />
+            <div style={{ position: "relative", width: "150px", height: "150px", flexShrink: 0, alignSelf: "center" }}>
+              <SvgDonut value1={data.paidTotal} value2={data.unpaidTotal} color1="#1D9E75" color2="#f59e0b" />
               <div style={{ position: "absolute", inset: 0, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", pointerEvents: "none" }}>
                 <span style={{ fontSize: "11px", color: "#7a90c0" }}>Итого</span>
                 <span style={{ fontSize: "13px", fontWeight: "700", color: "#e8edf8" }}>{data.totalSpend.toLocaleString("ru", { maximumFractionDigits: 0 })} ₽</span>
@@ -191,10 +191,10 @@ export default function ClientDashboard() {
               <div style={{ height: "1px", background: "#1e2d55" }} />
               <div>
                 <div style={{ display: "flex", alignItems: "center", gap: "6px", marginBottom: "2px" }}>
-                  <span style={{ width: "8px", height: "8px", borderRadius: "2px", background: "#E24B4A", flexShrink: 0 }} />
+                  <span style={{ width: "8px", height: "8px", borderRadius: "2px", background: "#f59e0b", flexShrink: 0 }} />
                   <span style={{ fontSize: "11px", color: "#7a90c0" }}>К оплате</span>
                 </div>
-                <div style={{ fontSize: "15px", fontWeight: "700", color: data.unpaidTotal > 0 ? "#E24B4A" : "#e8edf8", paddingLeft: "14px" }}>{data.unpaidTotal.toLocaleString("ru", { style: "currency", currency: "RUB", maximumFractionDigits: 0 })}</div>
+                <div style={{ fontSize: "15px", fontWeight: "700", color: data.unpaidTotal > 0 ? "#f59e0b" : "#e8edf8", paddingLeft: "14px" }}>{data.unpaidTotal.toLocaleString("ru", { style: "currency", currency: "RUB", maximumFractionDigits: 0 })}</div>
                 <div style={{ fontSize: "11px", color: "#3d4f7a", paddingLeft: "14px" }}>{data.unpaidTotal === 0 ? "Задолженностей нет" : `${unpaidCount} аудит${unpaidCount === 1 ? "" : unpaidCount < 5 ? "а" : "ов"}`}</div>
               </div>
             </div>
@@ -208,6 +208,7 @@ export default function ClientDashboard() {
               background: "#0c1220", border: "1px solid #1e2d55",
               borderTop: `3px solid ${m.color}`, borderRadius: "10px", padding: "14px 20px",
               flex: 1,
+              display: "flex", flexDirection: "column", justifyContent: "center",
             }}>
               <div style={{ fontSize: "12px", color: "#7a90c0", marginBottom: "6px" }}>{m.label}</div>
               <div style={{ fontSize: "20px", fontWeight: "700", color: m.color, marginBottom: "4px" }}>{m.value}</div>
