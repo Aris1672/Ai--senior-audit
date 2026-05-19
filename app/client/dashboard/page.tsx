@@ -33,32 +33,23 @@ function SvgDonut({ value1, value2, color1, color2, mounted }: {
   const r = 62;
   const circ = 2 * Math.PI * r;
   const dash1 = (value1 / total) * circ;
-  const dash2 = (value2 / total) * circ;
   const gap = 3;
 
-  // Arc1: starts at 12 o'clock (top, because SVG is rotated -90deg).
-  // Animate strokeDasharray from "0 circ" → "dash1 circ" so it GROWS clockwise.
-  // strokeDashoffset stays at 0 — no spinning, just growth.
-  const arr1 = mounted ? `${dash1 - gap} ${circ - dash1 + gap}` : `0 ${circ}`;
+  // Arc2 is a full background ring — always visible, no animation needed.
+  // Arc1 sweeps clockwise over it from 0 → its final length.
+  const arr1 = mounted ? `${dash1 - gap} ${circ}` : `0 ${circ}`;
 
-  // Arc2: needs to start right after arc1 ends.
-  // We position it with a negative dashoffset = -(dash1 + gap).
-  // Same grow animation on its own dasharray.
-  const arr2 = mounted ? `${dash2 - gap} ${circ - dash2 + gap}` : `0 ${circ}`;
-  const offset2 = -(dash1 + gap);
-
-  const transition = "stroke-dasharray 1.4s cubic-bezier(0.4,0,0.2,1)";
-
- return (
+  return (
     <svg width="150" height="150" viewBox="0 0 150 150" style={{ transform: "rotate(-90deg)" }}>
+      {/* Full background ring in color2 */}
       <circle cx="75" cy="75" r={r} fill="none" stroke={color2} strokeWidth="17"
-        strokeDasharray={arr2}
-        strokeDashoffset={offset2}
-        style={{ transition: mounted ? transition : "none" }} />
+        strokeDasharray={`${circ} 0`}
+        strokeDashoffset={0} />
+      {/* Arc1 grows clockwise over the background */}
       <circle cx="75" cy="75" r={r} fill="none" stroke={color1} strokeWidth="17"
         strokeDasharray={arr1}
         strokeDashoffset={0}
-        style={{ transition: mounted ? transition : "none" }} />  {/* ← remove the 0.15s delay */}
+        style={{ transition: mounted ? "stroke-dasharray 1.4s cubic-bezier(0.4,0,0.2,1)" : "none" }} />
     </svg>
   );
 }
