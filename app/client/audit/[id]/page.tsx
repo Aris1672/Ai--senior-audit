@@ -14,18 +14,19 @@ async function generatePDF(session: SessionDetail, findings: Finding[]) {
 
   const RISK_ORDER_LOCAL = ["КРИТИЧНО", "СУЩЕСТВЕННО", "НЕСУЩЕСТВЕННО"] as const;
   
-  // Executive Light Palette
+  // Executive Premium Light Palette with Brand Dark Header
   const colors = {
     textMain: "#1a1a1a",
     textMuted: "#555555",
     textLight: "#888888",
     bgCard: "#f8f9fa",
-    bgTableHead: "#1e2d55",
+    bgDarkHeader: "#0c1220", // Matches your exact dashboard & login dark theme background
     primary: "#1e2d55",
-    accentBlue: "#1565e8",
-    red: "#c0392b",       // Critical
-    amber: "#d35400",     // Significant
-    green: "#27ae60",     // Minor / Safe
+    accentBlue: "#1565e8",   // Matches your specific brand color '24'
+    brandWhite: "#e8edf8",   // Matches your logo text color
+    red: "#c0392b",          // Critical
+    amber: "#d35400",        // Significant
+    green: "#27ae60",        // Minor / Safe
   };
 
   const RISK_COLORS: Record<string, string> = {
@@ -57,9 +58,8 @@ async function generatePDF(session: SessionDetail, findings: Finding[]) {
 
     items.forEach((f, i) => {
       rows.push({
-        // dontBreakRows keeps the entire violation block on the same page
         table: {
-          dontBreakRows: true,
+          dontBreakRows: true, // Keeps single finding cards from breaking across pages awkwardly
           widths: ["*"],
           body: [[{
             stack: [
@@ -97,13 +97,12 @@ async function generatePDF(session: SessionDetail, findings: Finding[]) {
             ],
             fillColor: colors.bgCard,
             padding: [12, 12, 12, 12],
-            // Create a sharp, colored left accent border based on risk level
             border: [true, false, false, false],
           }]],
         },
         layout: {
           vLineColor: () => color,
-          vLineWidth: () => 4, // 4px colored strip on the left margin
+          vLineWidth: () => 4, // 4px thick vertical severity indicator line on the left
         },
         margin: [0, 0, 0, 12],
       });
@@ -113,7 +112,7 @@ async function generatePDF(session: SessionDetail, findings: Finding[]) {
 
   const docDefinition: any = {
     pageSize: "A4",
-    pageMargins: [45, 55, 45, 55],
+    pageMargins: [45, 45, 45, 55],
     
     footer: (currentPage: number, pageCount: number) => ({
       stack: [
@@ -131,16 +130,38 @@ async function generatePDF(session: SessionDetail, findings: Finding[]) {
     }),
 
     content: [
-      // Top Header Branding Layout
+      // Full-width Header Panel imitating your dark branding environment
       {
-        columns: [
-          ...(LOGO_BASE64 ? [{ image: LOGO_BASE64, width: 130, alignment: "left" as const }] : [{ text: "Assistant24", fontSize: 16, bold: true, color: colors.primary }]),
-          { text: "ОТЧЁТ ОБ АУДИТЕ СИСТЕМЫ", fontSize: 10, bold: true, color: colors.textLight, alignment: "right" as const, margin: [0, 10, 0, 0] }
-        ],
-        margin: [0, 0, 0, 25]
+        table: {
+          widths: ["*"],
+          body: [[{
+            columns: [
+              {
+                // Recreated HTML Logo matching exact fonts weights and hex colors
+                text: [
+                  { text: "Assistant", bold: true, color: colors.brandWhite, fontSize: 20 },
+                  { text: "24", bold: true, color: colors.accentBlue, fontSize: 20 }
+                ],
+                margin: [5, 4, 0, 4],
+                width: "*"
+              },
+              { 
+                text: "ОТЧЁТ ОБ АУДИТЕ СИСТЕМЫ", 
+                fontSize: 10, 
+                bold: true, 
+                color: colors.textLight, 
+                alignment: "right" as const, 
+                margin: [0, 12, 5, 0],
+                width: "auto"
+              }
+            ],
+            fillColor: colors.bgDarkHeader,
+            padding: [12, 10, 12, 10],
+          }]],
+        },
+        layout: "noBorders",
+        margin: [-45, -45, -45, 25] // Negative margins stretch it to the full physical width of the PDF canvas
       },
-      
-      { canvas: [{ type: "line", x1: 0, y1: 0, x2: 505, y2: 0, lineWidth: 1, strokeColor: colors.primary }], margin: [0, 0, 0, 20] },
 
       // Metadata Block
       {
@@ -156,7 +177,7 @@ async function generatePDF(session: SessionDetail, findings: Finding[]) {
           {
             stack: [
               { text: `Дата проверки: ${auditDate}`, fontSize: 10, color: colors.textMuted, alignment: "right" },
-              { text: `Дата генерации: ${reportDate}`, fontSize: 10, color: colors.textMuted, alignment: "right", margin: [0, 4, 0, 0] },
+              { text: `Дата отчёта: ${reportDate}`, fontSize: 10, color: colors.textMuted, alignment: "right", margin: [0, 4, 0, 0] },
             ],
             width: "auto"
           }
@@ -166,7 +187,7 @@ async function generatePDF(session: SessionDetail, findings: Finding[]) {
 
       { text: "Сводные показатели", fontSize: 13, bold: true, color: colors.primary, margin: [0, 10, 0, 10] },
       
-      // KPI Dashboard Cards Grid instead of flat vertical rows
+      // Horizontal KPI Dashboard Metrics Grid
       {
         columns: [
           {
@@ -198,7 +219,7 @@ async function generatePDF(session: SessionDetail, findings: Finding[]) {
           },
           {
             stack: [
-              { text: "Расчётная стоимость", fontSize: 9, color: colors.textLight, alignment: "center" },
+              { text: "Стоимость аудита", fontSize: 9, color: colors.textLight, alignment: "center" },
               { text: session.cost_rub ? `${session.cost_rub.toLocaleString("ru-RU")} ₽` : "—", fontSize: 15, bold: true, color: colors.primary, alignment: "center", margin: [0, 6, 0, 0] }
             ],
             fillColor: colors.bgCard,
@@ -209,7 +230,7 @@ async function generatePDF(session: SessionDetail, findings: Finding[]) {
         margin: [0, 0, 0, 25]
       },
 
-      // Executive Summary Summary Box
+      // Executive Summary Panel
       {
         table: {
           widths: ["*"],
@@ -238,7 +259,7 @@ async function generatePDF(session: SessionDetail, findings: Finding[]) {
         margin: [0, 0, 0, 30]
       },
 
-      // Findings Section Breakdown
+      // Detailed Registry of Findings Breakdown
       ...(allFindings.length === 0 ? [] : [
         { text: "Подробный реестр выявленных нарушений", fontSize: 14, bold: true, color: colors.primary, margin: [0, 10, 0, 5], pageBreak: "before" as const },
         ...RISK_ORDER_LOCAL.flatMap(level => findingsSection(level)),
