@@ -1,4 +1,4 @@
-import { anthropic, AUDIT_SYSTEM_PROMPT, buildAuditContext, HAIKU_PRICING } from "@/lib/anthropic";
+import { anthropic, AUDIT_SYSTEM_PROMPT, buildAuditContext } from "@/lib/anthropic";
 import { createAdminClient } from "@/lib/supabase-server";
 import { parseFile } from "@/lib/file-parser";
 import { NextRequest, NextResponse } from "next/server";
@@ -255,49 +255,21 @@ export async function POST(req: NextRequest) {
       messages,
     });
 
-    const text      = response.content[0].type === "text" ? response.content[0].text : "";
-    const tokensIn  = response.usage.input_tokens;
-    const tokensOut = response.usage.output_tokens;
+    const text = response.content[0].type === "text" ? response.content[0].text : "";
 
-    const usdToRub = Number(process.env.USD_TO_RUB) || 90;
-    const costRub  =
-      ((tokensIn  / 1000) * HAIKU_PRICING.inputPer1K +
-       (tokensOut / 1000) * HAIKU_PRICING.outputPer1K) * usdToRub;
-
-    // Run all DB operations + findings extraction in parallel, all awaited
+    // Save message and extract findings in parallel
     await Promise.all([
       supabase.from("audit_messages").insert({
         session_id: sessionId,
         client_id:  clientId,
         role:       "assistant",
         content:    text,
-        tokens_in:  tokensIn,
-        tokens_out: tokensOut,
-      }),
-
-      supabase.from("usage_events").insert({
-        client_id:  clientId,
-        session_id: sessionId,
-        event_type: "ai_message",
-        tokens_in:  tokensIn,
-        tokens_out: tokensOut,
-        cost_rub:   costRub,
-      }),
-
-      supabase.rpc("increment_session_cost", {
-        p_session_id: sessionId,
-        p_amount:     costRub,
       }),
 
       extractAndSaveFindings(supabase, sessionId, clientId, text),
     ]);
 
-    return NextResponse.json({
-      message:  text,
-      tokensIn,
-      tokensOut,
-      costRub:  Math.round(costRub * 100) / 100,
-    });
+    return NextResponse.json({ message: text });
 
   } catch (err) {
     console.error("[chat] route error:", err);
