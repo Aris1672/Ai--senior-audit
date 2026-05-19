@@ -24,29 +24,34 @@ interface DashboardData {
   unpaidTotal:  number;
 }
 
+// Top-level custom hook — must live outside the component to satisfy Rules of Hooks
+function useCountUp(target: number, duration = 900, trigger = true) {
+  const [val, setVal] = useState(0);
+  useEffect(() => {
+    if (!trigger) return;
+    let start: number | null = null;
+    const step = (ts: number) => {
+      if (!start) start = ts;
+      const progress = Math.min((ts - start) / duration, 1);
+      const ease = 1 - Math.pow(1 - progress, 3);
+      setVal(Math.round(ease * target));
+      if (progress < 1) requestAnimationFrame(step);
+    };
+    requestAnimationFrame(step);
+  }, [target, trigger]);
+  return val;
+}
+
 export default function ClientDashboard() {
   const [data,    setData]    = useState<DashboardData | null>(null);
   const [loading, setLoading] = useState(true);
   const [mounted, setMounted] = useState(false);
 
-  // Count-up hook
-  function useCountUp(target: number, duration = 900, trigger = true) {
-    const [val, setVal] = useState(0);
-    useEffect(() => {
-      if (!trigger) return;
-      let start: number | null = null;
-      const step = (ts: number) => {
-        if (!start) start = ts;
-        const progress = Math.min((ts - start) / duration, 1);
-        // ease-out cubic
-        const ease = 1 - Math.pow(1 - progress, 3);
-        setVal(Math.round(ease * target));
-        if (progress < 1) requestAnimationFrame(step);
-      };
-      requestAnimationFrame(step);
-    }, [target, trigger]);
-    return val;
-  }
+  // These must be called unconditionally at the top level — before any early returns
+  const animTotalAudits     = useCountUp(data?.totalAudits    ?? 0, 900, mounted);
+  const animActiveAudits    = useCountUp(data ? data.sessions.filter(s => s.status === "active").length    : 0, 900, mounted);
+  const animCompletedAudits = useCountUp(data ? data.sessions.filter(s => s.status === "completed").length : 0, 900, mounted);
+  const animFindings        = useCountUp(data?.findings.length ?? 0, 900, mounted);
 
   useEffect(() => {
     async function load() {
@@ -92,13 +97,6 @@ export default function ClientDashboard() {
 
   const paidCount   = data.sessions.filter(s => s.paid).length;
   const unpaidCount = data.sessions.filter(s => !s.paid && s.cost_rub).length;
-
-  // Animated count-up values
-  const animTotalAudits    = useCountUp(data.totalAudits,    900, mounted);
-  const animActiveAudits   = useCountUp(activeAudits,        900, mounted);
-  const animCompletedAudits= useCountUp(completedAudits,     900, mounted);
-  const animFindings       = useCountUp(data.findings.length,900, mounted);
-
 
   const SIMPLE_METRICS = [
     {
