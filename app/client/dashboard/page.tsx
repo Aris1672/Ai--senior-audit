@@ -10,6 +10,7 @@ interface SessionData {
   transactions_ct: number;
   findings_ct:     number;
   cost_rub:        number;
+  paid:            boolean;
   created_at:      string;
 }
 
@@ -19,6 +20,8 @@ interface DashboardData {
   findings:     any[];
   totalAudits:  number;
   totalSpend:   number;
+  paidTotal:    number;
+  unpaidTotal:  number;
 }
 
 export default function ClientDashboard() {
@@ -41,12 +44,17 @@ export default function ClientDashboard() {
       const sess: SessionData[] = sessions || [];
       const totalSpend = sess.reduce((a, s) => a + (s.cost_rub || 0), 0);
 
+      const paidTotal   = sess.filter(s => s.paid).reduce((a, s) => a + (s.cost_rub || 0), 0);
+      const unpaidTotal = sess.filter(s => !s.paid).reduce((a, s) => a + (s.cost_rub || 0), 0);
+
       setData({
         company_name: profile?.company_name || "",
         sessions:     sess,
         findings:     findings || [],
         totalAudits:  sess.length,
         totalSpend,
+        paidTotal,
+        unpaidTotal,
       });
       setLoading(false);
     }
@@ -81,6 +89,18 @@ export default function ClientDashboard() {
       color: "#f59e0b",
     },
     {
+      label: "Оплачено",
+      value: data.paidTotal.toLocaleString("ru", { style: "currency", currency: "RUB", maximumFractionDigits: 0 }),
+      sub:   `${data.sessions.filter(s => s.paid).length} аудит${data.sessions.filter(s => s.paid).length === 1 ? "" : "ов"} оплачено`,
+      color: "#2ecc8f",
+    },
+    {
+      label: "К оплате",
+      value: data.unpaidTotal.toLocaleString("ru", { style: "currency", currency: "RUB", maximumFractionDigits: 0 }),
+      sub:   data.unpaidTotal === 0 ? "Задолженностей нет" : `${data.sessions.filter(s => !s.paid && s.cost_rub).length} аудит${data.sessions.filter(s => !s.paid && s.cost_rub).length === 1 ? "" : "ов"} не оплачено`,
+      color: data.unpaidTotal === 0 ? "#3d4f7a" : "#e84040",
+    },
+    {
       label: "Последний аудит",
       value: data.sessions[0]
         ? new Date(data.sessions[0].created_at).toLocaleDateString("ru", { day: "numeric", month: "long" })
@@ -110,7 +130,7 @@ export default function ClientDashboard() {
 
       {/* Metric cards */}
       <div style={{
-        display: "grid", gridTemplateColumns: "repeat(4, 1fr)",
+        display: "grid", gridTemplateColumns: "repeat(3, 1fr)",
         gap: "16px", marginBottom: "28px",
       }}>
         {METRICS.map((m, i) => (

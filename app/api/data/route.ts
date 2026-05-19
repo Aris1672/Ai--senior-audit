@@ -96,7 +96,7 @@ export async function POST(req: NextRequest) {
             .select("audits_purchased, audits_used, custom_price_rub, custom_max_tx, pricing_tiers(name, price_rub, max_transactions)")
             .eq("client_id", clientId).order("created_at", { ascending: false }).limit(1),
           supabase.from("audit_sessions")
-            .select("id, title, status, transactions_ct, findings_ct, cost_rub, created_at")
+            .select("id, title, status, transactions_ct, findings_ct, cost_rub, paid, created_at")
             .eq("client_id", clientId).order("created_at", { ascending: false }).limit(5),
           supabase.from("findings")
             .select("id, risk_level, title, created_at")
