@@ -13,14 +13,26 @@ async function generatePDF(session: SessionDetail, findings: Finding[]) {
   (pdfMake as any).vfs = (pdfFonts as any).vfs;
 
   const RISK_ORDER_LOCAL = ["КРИТИЧНО", "СУЩЕСТВЕННО", "НЕСУЩЕСТВЕННО"] as const;
-  const RISK_COLORS: Record<string, string> = {
-    "КРИТИЧНО":      "#e84040",
-    "СУЩЕСТВЕННО":   "#f59e0b",
-    "НЕСУЩЕСТВЕННО": "#2ecc8f",
-  };
+  
+  // Executive Premium Light Palette
   const colors = {
-    mid: "#1e2d55", light: "#7a90c0", white: "#e8edf8",
-    blue: "#4d91ff", green: "#2ecc8f", amber: "#f59e0b", red: "#e84040",
+    textMain: "#1a1a1a",
+    textMuted: "#555555",
+    textLight: "#888888",
+    bgCard: "#f8f9fa",
+    primary: "#1e2d55",
+    accentBlue: "#1565e8",   // Matches your specific brand color '24'
+    brandWhite: "#e8edf8",   // Matches your logo text color
+    outlineDark: "#0c1220",  // Matches your exact dashboard background for structural contrast
+    red: "#c0392b",          // Critical
+    amber: "#d35400",        // Significant
+    green: "#27ae60",        // Minor / Safe
+  };
+
+  const RISK_COLORS: Record<string, string> = {
+    "КРИТИЧНО":      colors.red,
+    "СУЩЕСТВЕННО":   colors.amber,
+    "НЕСУЩЕСТВЕННО": colors.green,
   };
 
   const allFindings  = findings;
@@ -34,34 +46,65 @@ async function generatePDF(session: SessionDetail, findings: Finding[]) {
   function findingsSection(level: string): any[] {
     const items = allFindings.filter(f => f.risk_level === level);
     if (!items.length) return [];
-    const color = RISK_COLORS[level] || "#888";
+    const color = RISK_COLORS[level] || colors.textLight;
+    
     const rows: any[] = [{
       text: [
-        { text: "● ", color, fontSize: 14 },
-        { text: level, color, fontSize: 12, bold: true },
-        { text: `  (${items.length} нарушени${items.length === 1 ? "е" : "й"})`, color: colors.light, fontSize: 11 },
+        { text: `■ ${level}`, color, fontSize: 13, bold: true },
+        { text: `  (${items.length} нарушени${items.length === 1 ? "е" : "й"})`, color: colors.textLight, fontSize: 11, bold: false },
       ],
-      margin: [0, 16, 0, 12],
+      margin: [0, 20, 0, 10],
     }];
+
     items.forEach((f, i) => {
       rows.push({
         table: {
+          dontBreakRows: true, // Keeps single finding cards from breaking across pages awkwardly
           widths: ["*"],
           body: [[{
             stack: [
-              { text: `${i + 1}. ${f.title}`, bold: true, fontSize: 11, color: colors.white, margin: [0, 0, 0, 6] },
-              ...(f.description    ? [{ text: f.description,    fontSize: 10, color: colors.light, margin: [0, 0, 0, 6] }] : []),
-              ...(f.legal_basis    ? [{ text: `📋 ${f.legal_basis}`,    fontSize: 9, color: "#4d5f8a", margin: [0, 0, 0, 6] }] : []),
+              {
+                columns: [
+                  { text: `${i + 1}. ${f.title}`, bold: true, fontSize: 12, color: colors.textMain, width: "*" },
+                  { text: level, bold: true, fontSize: 9, color: color, alignment: "right", width: "auto" }
+                ],
+                margin: [0, 0, 0, 8]
+              },
+              ...(f.description ? [{ text: f.description, fontSize: 10, color: colors.textMuted, margin: [0, 0, 0, 8], lineHeight: 1.3 }] : []),
+              ...(f.legal_basis ? [{ 
+                text: [
+                  { text: "Основание: ", bold: true, color: colors.textMain },
+                  { text: f.legal_basis }
+                ], 
+                fontSize: 9, 
+                color: colors.textMuted, 
+                margin: [0, 0, 0, 8] 
+              }] : []),
               ...(f.recommendation ? [{
-                table: { widths: ["*"], body: [[{ text: `💡 ${f.recommendation}`, fontSize: 9, color: colors.blue, fillColor: "#080f1e", margin: [6, 4, 6, 4] }]] },
-                layout: "noBorders", margin: [0, 2, 0, 0],
+                table: {
+                  widths: ["*"],
+                  body: [[{
+                    text: `💡 Рекомендация: ${f.recommendation}`,
+                    fontSize: 9.5,
+                    color: colors.primary,
+                    lineHeight: 1.3
+                  }]]
+                },
+                layout: "noBorders",
+                fillColor: "#eef3f9",
+                margin: [0, 4, 0, 0]
               }] : []),
             ],
-            fillColor: "#0d1830", margin: [10, 10, 10, 10], border: [true, true, true, true],
+            fillColor: colors.bgCard,
+            padding: [12, 12, 12, 12],
+            border: [true, false, false, false],
           }]],
         },
-        layout: { hLineColor: () => color, vLineColor: () => color, hLineWidth: () => 1, vLineWidth: () => 1 },
-        margin: [0, 0, 0, 10],
+        layout: {
+          vLineColor: () => color,
+          vLineWidth: () => 4, // 4px thick vertical severity indicator line on the left
+        },
+        margin: [0, 0, 0, 12],
       });
     });
     return rows;
@@ -69,55 +112,189 @@ async function generatePDF(session: SessionDetail, findings: Finding[]) {
 
   const docDefinition: any = {
     pageSize: "A4",
-    pageMargins: [40, 60, 40, 60],
+    pageMargins: [45, 45, 45, 55],
+    
     footer: (currentPage: number, pageCount: number) => ({
-      columns: [
-        { text: "Сформировано системой Assistant24", fontSize: 8, color: colors.light, margin: [40, 0, 0, 0] },
-        { text: `Стр. ${currentPage} из ${pageCount}`, fontSize: 8, color: colors.light, alignment: "right", margin: [0, 0, 40, 0] },
-      ],
-      margin: [0, 10, 0, 0],
+      stack: [
+        {
+          canvas: [{ type: "line", x1: 45, y1: 0, x2: 550, y2: 0, lineWidth: 0.5, strokeColor: "#e0e0e0" }],
+          margin: [0, 0, 0, 8]
+        },
+        {
+          columns: [
+            { text: "Автоматический аудит платформы Assistant24", fontSize: 8, color: colors.textLight, margin: [45, 0, 0, 0] },
+            { text: `Страница ${currentPage} из ${pageCount}`, fontSize: 8, color: colors.textLight, alignment: "right", margin: [0, 0, 45, 0] },
+          ]
+        }
+      ]
     }),
+
     content: [
-      { image: LOGO_BASE64, width: 180, margin: [0, 0, 0, 30] },
-      { text: " ", margin: [0, 0, 0, 10] },
-      { text: "ОТЧЁТ ОБ АУДИТЕ", fontSize: 28, bold: true, color: colors.white, margin: [0, 0, 0, 12] },
-      { text: session.company_name, fontSize: 20, color: colors.blue, margin: [0, 0, 0, 8] },
-      ...(validPeriod ? [{ text: `Период: ${validPeriod}`, fontSize: 12, color: colors.light, margin: [0, 0, 0, 6] }] : []),
-      { text: `Дата аудита: ${auditDate}`,   fontSize: 12, color: colors.light, margin: [0, 0, 0, 6] },
-      { text: `Дата отчёта: ${reportDate}`,  fontSize: 12, color: colors.light, margin: [0, 0, 0, 40] },
-      { text: "Сводная информация", fontSize: 14, bold: true, color: colors.white, margin: [0, 0, 0, 12] },
+      // Clean White Background Header with Structured Text Outlining
+      {
+        columns: [
+          {
+            // Recreated HTML Logo matching exact weights, colors and crisp dark outer strokes
+            stack: [
+              // Quad-Directional Outline Shadow Layer
+              {
+                text: [
+                  { text: "Assistant", bold: true, color: colors.outlineDark, fontSize: 22 },
+                  { text: "24", bold: true, color: colors.outlineDark, fontSize: 22 }
+                ],
+                relativePosition: { x: 0.6, y: 0.6 }
+              },
+              {
+                text: [
+                  { text: "Assistant", bold: true, color: colors.outlineDark, fontSize: 22 },
+                  { text: "24", bold: true, color: colors.outlineDark, fontSize: 22 }
+                ],
+                relativePosition: { x: -0.6, y: -0.6 }
+              },
+              {
+                text: [
+                  { text: "Assistant", bold: true, color: colors.outlineDark, fontSize: 22 },
+                  { text: "24", bold: true, color: colors.outlineDark, fontSize: 22 }
+                ],
+                relativePosition: { x: -0.6, y: 0.6 }
+              },
+              {
+                text: [
+                  { text: "Assistant", bold: true, color: colors.outlineDark, fontSize: 22 },
+                  { text: "24", bold: true, color: colors.outlineDark, fontSize: 22 }
+                ],
+                relativePosition: { x: 0.6, y: -0.6 }
+              },
+              // Vibrant Top Foreground Text Layer
+              {
+                text: [
+                  { text: "Assistant", bold: true, color: colors.brandWhite, fontSize: 22 },
+                  { text: "24", bold: true, color: colors.accentBlue, fontSize: 22 }
+                ]
+              }
+            ],
+            margin: [0, 0, 0, 0],
+            width: "*"
+          },
+          { 
+            text: "ОТЧЁТ ОБ АУДИТЕ СИСТЕМЫ", 
+            fontSize: 10, 
+            bold: true, 
+            color: colors.textLight, 
+            alignment: "right" as const, 
+            margin: [0, 12, 0, 0],
+            width: "auto"
+          }
+        ],
+        margin: [0, 0, 0, 15]
+      },
+
+      // Thin Elegant Top Dividing Ruler Line
+      { canvas: [{ type: "line", x1: 0, y1: 0, x2: 505, y2: 0, lineWidth: 1, strokeColor: "#e2e8f0" }], margin: [0, 0, 0, 20] },
+
+      // Metadata Block
+      {
+        columns: [
+          {
+            stack: [
+              { text: "Объект аудита:", fontSize: 9, color: colors.textLight },
+              { text: session.company_name, fontSize: 18, bold: true, color: colors.primary, margin: [0, 2, 0, 12] },
+              ...(validPeriod ? [{ text: `Проверяемый период: ${validPeriod}`, fontSize: 10, color: colors.textMuted }] : []),
+            ],
+            width: "*"
+          },
+          {
+            stack: [
+              { text: `Дата проверки: ${auditDate}`, fontSize: 10, color: colors.textMuted, alignment: "right" },
+              { text: `Дата отчёта: ${reportDate}`, fontSize: 10, color: colors.textMuted, alignment: "right", margin: [0, 4, 0, 0] },
+            ],
+            width: "auto"
+          }
+        ],
+        margin: [0, 0, 0, 25]
+      },
+
+      { text: "Сводные показатели", fontSize: 13, bold: true, color: colors.primary, margin: [0, 10, 0, 10] },
+      
+      // Horizontal KPI Dashboard Metrics Grid
+      {
+        columns: [
+          {
+            stack: [
+              { text: "Проверено транзакций", fontSize: 9, color: colors.textLight, alignment: "center" },
+              { text: session.transactions_ct?.toLocaleString("ru-RU") || "0", fontSize: 18, bold: true, color: colors.accentBlue, alignment: "center", margin: [0, 4, 0, 0] }
+            ],
+            fillColor: colors.bgCard,
+            margin: [0, 0, 6, 0],
+            padding: [10, 10, 10, 10]
+          },
+          {
+            stack: [
+              { text: "Критичные риски", fontSize: 9, color: colors.textLight, alignment: "center" },
+              { text: criticalCt.toString(), fontSize: 18, bold: true, color: criticalCt > 0 ? colors.red : colors.green, alignment: "center", margin: [0, 4, 0, 0] }
+            ],
+            fillColor: colors.bgCard,
+            margin: [3, 0, 3, 0],
+            padding: [10, 10, 10, 10]
+          },
+          {
+            stack: [
+              { text: "Существенные риски", fontSize: 9, color: colors.textLight, alignment: "center" },
+              { text: majorCt.toString(), fontSize: 18, bold: true, color: majorCt > 0 ? colors.amber : colors.textMuted, alignment: "center", margin: [0, 4, 0, 0] }
+            ],
+            fillColor: colors.bgCard,
+            margin: [3, 0, 3, 0],
+            padding: [10, 10, 10, 10]
+          },
+          {
+            stack: [
+              { text: "Стоимость аудита", fontSize: 9, color: colors.textLight, alignment: "center" },
+              { text: session.cost_rub ? `${session.cost_rub.toLocaleString("ru-RU")} ₽` : "—", fontSize: 15, bold: true, color: colors.primary, alignment: "center", margin: [0, 6, 0, 0] }
+            ],
+            fillColor: colors.bgCard,
+            margin: [6, 0, 0, 0],
+            padding: [10, 10, 10, 10]
+          }
+        ],
+        margin: [0, 0, 0, 25]
+      },
+
+      // Executive Summary Panel
       {
         table: {
-          widths: ["*", "*"],
-          body: [
-            [{ text: "Параметр", bold: true, color: colors.light, fillColor: "#1a2340", margin: [8,6,8,6] }, { text: "Значение", bold: true, color: colors.light, fillColor: "#1a2340", margin: [8,6,8,6] }],
-            [{ text: "Транзакций проверено", color: colors.light, margin: [8,6,8,6] }, { text: session.transactions_ct?.toString() || "—", color: colors.blue,  bold: true, margin: [8,6,8,6] }],
-            [{ text: "Всего нарушений",      color: colors.light, margin: [8,6,8,6] }, { text: allFindings.length.toString(), color: allFindings.length > 0 ? colors.red : colors.green, bold: true, margin: [8,6,8,6] }],
-            [{ text: "Критичных",            color: colors.light, margin: [8,6,8,6] }, { text: criticalCt.toString(), color: colors.red,   bold: true, margin: [8,6,8,6] }],
-            [{ text: "Существенных",          color: colors.light, margin: [8,6,8,6] }, { text: majorCt.toString(),   color: colors.amber, bold: true, margin: [8,6,8,6] }],
-            [{ text: "Несущественных",        color: colors.light, margin: [8,6,8,6] }, { text: minorCt.toString(),   color: colors.green, bold: true, margin: [8,6,8,6] }],
-            [{ text: "Стоимость аудита",      color: colors.light, margin: [8,6,8,6] }, { text: session.cost_rub ? session.cost_rub.toLocaleString("ru-RU", { style: "currency", currency: "RUB", maximumFractionDigits: 0 }) : "—", color: colors.amber, bold: true, margin: [8,6,8,6] }],
-          ],
+          widths: ["*"],
+          body: [[{
+            stack: [
+              { text: "Итоговое заключение", fontSize: 11, bold: true, color: colors.primary, margin: [0, 0, 0, 4] },
+              {
+                text: criticalCt > 0
+                  ? `Внимание: По результатам автоматизированного анализа финансовой активности компании выявлено ${criticalCt} критичных нарушений требований законодательства РФ. Рекомендуется инициировать корректирующие мероприятия незамедлительно для минимизации налоговых и административных рисков.`
+                  : allFindings.length > 0
+                    ? "По результатам аудита критических системных несоответствий не обнаружено. Выявленные замечания носят локальный характер и подлежат штатному исправлению."
+                    : "По результатам комплексного аудита нарушений нормативных регламентов не выявлено. Финансовые транзакции полностью соответствуют действующим стандартам бухгалтерского учёта.",
+                fontSize: 10, color: colors.textMain, lineHeight: 1.4
+              }
+            ],
+            fillColor: criticalCt > 0 ? "#fdf2f2" : "#f0f9f4",
+            padding: [12, 12, 12, 12],
+            border: [true, true, true, true]
+          }]]
         },
-        layout: { fillColor: (r: number) => r % 2 === 0 ? "#0c1220" : "#0d1830", hLineColor: () => colors.mid, vLineColor: () => colors.mid, hLineWidth: () => 1, vLineWidth: () => 1 },
-        margin: [0, 0, 0, 40],
+        layout: {
+          hLineColor: () => criticalCt > 0 ? "#f5c6cb" : "#c3e6cb",
+          vLineColor: () => criticalCt > 0 ? "#f5c6cb" : "#c3e6cb",
+          hLineWidth: () => 1, vLineWidth: () => 1
+        },
+        margin: [0, 0, 0, 30]
       },
-      ...(allFindings.length === 0 ? [{ text: "Нарушений не обнаружено", fontSize: 13, color: colors.green, margin: [0,0,0,20] }] : [
-        { text: "Выявленные нарушения", fontSize: 14, bold: true, color: colors.white, margin: [0,0,0,8], pageBreak: "before" },
+
+      // Detailed Registry of Findings Breakdown
+      ...(allFindings.length === 0 ? [] : [
+        { text: "Подробный реестр выявленных нарушений", fontSize: 14, bold: true, color: colors.primary, margin: [0, 10, 0, 5], pageBreak: "before" as const },
         ...RISK_ORDER_LOCAL.flatMap(level => findingsSection(level)),
       ]),
-      { text: " ", margin: [0, 24, 0, 24] },
-      { text: "Заключение", fontSize: 14, bold: true, color: colors.white, margin: [0, 0, 0, 8] },
-      {
-        text: criticalCt > 0
-          ? `По результатам аудита выявлено ${criticalCt} критичных нарушений, требующих немедленного устранения.`
-          : allFindings.length > 0
-            ? "По результатам аудита серьёзных нарушений не выявлено. Обнаруженные замечания носят устранимый характер."
-            : "По результатам аудита нарушений не выявлено. Финансовая отчётность соответствует требованиям законодательства.",
-        fontSize: 11, color: colors.light, lineHeight: 1.5,
-      },
     ],
-    defaultStyle: { font: "Roboto", fontSize: 11, color: colors.white },
+    defaultStyle: { font: "Roboto", fontSize: 10, color: colors.textMain },
   };
 
   const doc = pdfMake.createPdf(docDefinition);

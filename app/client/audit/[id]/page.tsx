@@ -5,7 +5,7 @@ import { useParams, useRouter } from "next/navigation";
 import { getRiskColor, getRiskBgColor, type RiskLevel } from "@/lib/billing";
 
 const LOGO_BASE64 =
-  "data:image/png;base64,/9j/4AAQSkZJRgABAQAAAQABAAD/4gHYSUNDX1BST0ZJTEUAAQEAAAHIAAAAAAQwAABtbnRyUkdCIFhZWiAH4AABAAEAAAAAAABhY3NwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAQAA9tYAAQAAAADTLQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAlkZXNjAAAA8AAAACRyWFlaAAABFAAAABRnWFlaAAABKAAAABRiWFlaAAABPAAAABR3dHB0AAABUAAAABRyVFJDAAABZAAAAChnVFJDAAABZAAAAChiVFJDAAABZAAAAChjcHJ0AAABjAAAADxtbHVjAAAAAAAAAAEAAAAMZW5VUwAAAAgAAAAcAHMAUgBHAEJYWVogAAAAAAAAb6IAADj1AAADkFhZWiAAAAAAAABimQAAt4UAABjaWFlaIAAAAAAAACSgAAAPhAAAts9YWVogAAAAAAAA9tYAAQAAAADTLXBhcmEAAAAAAAQAAAACZmYAAPKnAAANWQAAE9AAAApbAAAAAAAAAABtbHVjAAAAAAAAAAEAAAAMZW5VUwAAACAAAAAcAEcAbwBvAGcAbABlACAASQBuAGMALgAgADIAMAAxADb/2wBDAAUDBAQEAwUEBAQFBQUGBwwIBwcHBw8LCwkMEQ8SEhEPERETFhwXExQaFRERGCEYGh0dHx8fExciJCIeJBweHx7/2wBDAQUFBQcGBw4ICA4eFBEUHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh7/wAARCAAzAmsDASIAAhEBAxEB/8QAHAAAAgIDAQEAAAAAAAAAAAAAAAcFBgMECAIB/8QAWRAAAQMCAwEHDQsIBwUJAAAAAQACAwQFBgcREiExQVFhcRQXFzI2UnSBg6Gxs8HSFSIjN2ZykZOksuIzQlRVYsLD0RYkRYKElKI0RURW8SVDRlNjkqPh8P/EABsBAAIDAQEBAAAAAAAAAAAAAAUGAAQHAwIB/8QAQxEAAQMDAAQJBwsEAQUAAAAAAQACAwQFEQYhMXESIkFRYYGRsdEWNDVyocHhExQVMjNCUlOCsvAjNpLSoiRDYsLx/9oADAMBAAIRAxEAPwDjJCEKKITdyfwnFFQG+XOnZJJUN0po5GghrO60PGeLm6VSst8NOxFfWtmaeoafR9Q7l5GdJ82qfcskFJSulkcyGCFhLid5rGgeYBO+idoEhNbMOKPq55+U9XfuStpDcSwfNojrO3w6/wCbV4koqOSmkpn0sJhkaWPZsABwO8QkBj3Dc2G726n0c6kl1fTSHjbyHnHAfAeNMnB2YMV5xNVW2oa2GGZ/9Qcd4kAdi7nOmo8I5FZMZWCnxHZJaGbRso9/BKR+TeOA9HEeZG7lS01+ozJSnLmk46uTr2jqQuiqJrTU8CccV2M+PVyrnFCz3CkqKCtmoquMxTwvLHtPEQsCy5zS0kEawnwEOGQhCFlpKaerqY6alhfNNI7ZYxg1LioAXHAUJAGSsSEybJlPXzxNlutwjpCRruUTd0cOYnUAHo1U03KWz6e+udcTzBg9SP";
+  "data:image/png;base64,/9j/4AAQSkZJRgABAQAAAQABAAD/4gHYSUNDX1BST0ZJTEUAAQEAAAHIAAAAAAQwAABtbnRyUkdCIFhZWiAH4AABAAEAAAAAAABhY3NwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAQAA9tYAAQAAAADTLQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAlkZXNjAAAA8AAAACRyWFlaAAABFAAAABRnWFlaAAABKAAAABRiWFlaAAABPAAAABR3dHB0AAABUAAAABRyVFJDAAABZAAAAChnVFJDAAABZAAAAChiVFJDAAABZAAAAChjcHJ0AAABjAAAADxtbHVjAAAAAAAAAAEAAAAMZW5VUwAAAAgAAAAcAHMAUgBHAEJYWVogAAAAAAAAb6IAADj1AAADkFhZWiAAAAAAAABimQAAt4UAABjaWFlaIAAAAAAAACSgAAAPhAAAts9YWVogAAAAAAAA9tYAAQAAAADTLXBhcmEAAAAAAAQAAAACZmYAAPKnAAANWQAAE9AAAApbAAAAAAAAAABtbHVjAAAAAAAAAAEAAAAMZW5VUwAAACAAAAAcAEcAbwBvAGcAbABlACAASQBuAGMALgAgADIAMAAxADb/2wBDAAUDBAQEAwUEBAQFBQUGBwwIBwcHBw8LCwkMEQ8SEhEPERETFhwXExQaFRERGCEYGh0dHx8fExciJCIeJBweHx7/2wBDAQUFBQcGBw4ICA4eFBEUHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh7/wAARCAAzAmsDASIAAhEBAxEB/8QAHAAAAgIDAQEAAAAAAAAAAAAAAAcFBgMECAIB/8QAWRAAAQMCAwEHDQsIBwUJAAAAAQACAwQFBgcREiExQVFhcRQXFzI2UnSBg6Gxs8HSFSIjN2ZykZOksuIzUkRUYsLD0RYkRYKElKI0RURW8SVDRlNjkqPh8P/EABsBAAIDAQEBAAAAAAAAAAAAAAUGAAQHAwIB/8QAQxEAAQMDAAQJBwsEAQUAAAAAAQACAwQFEQYhMXESIkFRYYGRsdEWNDZyocHhExQVMjNCUlOCsvAjNpLSoiRDYsLx/9oADAMBAAIRAxEAPwDjJCEKKITdyfwnFFQG+XOnZJJUN0po5GghrO60PGeLm6VSst8NOxFfWtmaeoafR9Q7l5GdJ82qfcskFJSulkcyGCFhLid5rGgeYBO+idoEhNbMOKPq55+U9XfuStpDcSwfNojrO3w6/wCbV4koqOSmkpn0sJhkaWPZsABwO8QkBj3Dc2G726n0c6kl1fTSHjbyHnHAfAeNMnB2YMV5xNVW2oa2GGZ/9Qcd4kAdi7nOmo8I5FZMZWCnxHZJaGbRso9/BKR+TeOA9HEeZG7lS01+ozJSnLmk46uTr2jqQuiqJrTU8CccV2M+PVyrnFCz3CkqKCtmoquMxTwvли9HEeZG7lS01+ozJSnLmk46uTr2jqQuiqJrTU8CccV2M+PVyrnFCz3CkqKCtmoquMxTwvли9/BKR+TeOA9HEeZG7lS01+ozJSnLmk46uTr2jqQuiqJrTU8CccV2M+PVyrnFCz3CkqKCtmoquMxTwvMnEWsGAoUXHEUJAGSsSEybJlPXzxNlutwjpCRruUTd0cOYnUAHo1U03KWz6e+udcTzBg9SP";
 
 async function generatePDF(session: SessionDetail, findings: Finding[]) {
   const pdfMake  = (await import("pdfmake/build/pdfmake")).default;
@@ -22,8 +22,7 @@ async function generatePDF(session: SessionDetail, findings: Finding[]) {
     bgCard: "#f8f9fa",
     primary: "#1e2d55",
     accentBlue: "#1565e8",   // Matches your specific brand color '24'
-    brandWhite: "#e8edf8",   // Matches your logo text color
-    outlineDark: "#0c1220",  // Matches your exact dashboard background for structural contrast
+    brandDark: "#0c1220",    // Premium dark color for clean typography contrast
     red: "#c0392b",          // Critical
     amber: "#d35400",        // Significant
     green: "#27ae60",        // Minor / Safe
@@ -59,7 +58,7 @@ async function generatePDF(session: SessionDetail, findings: Finding[]) {
     items.forEach((f, i) => {
       rows.push({
         table: {
-          dontBreakRows: true, // Keeps single finding cards from breaking across pages awkwardly
+          dontBreakRows: true,
           widths: ["*"],
           body: [[{
             stack: [
@@ -102,7 +101,7 @@ async function generatePDF(session: SessionDetail, findings: Finding[]) {
         },
         layout: {
           vLineColor: () => color,
-          vLineWidth: () => 4, // 4px thick vertical severity indicator line on the left
+          vLineWidth: () => 4,
         },
         margin: [0, 0, 0, 12],
       });
@@ -130,48 +129,13 @@ async function generatePDF(session: SessionDetail, findings: Finding[]) {
     }),
 
     content: [
-      // Clean White Background Header with Structured Text Outlining
+      // Clean Minimalist Header Layout
       {
         columns: [
           {
-            // Recreated HTML Logo matching exact weights, colors and crisp dark outer strokes
-            stack: [
-              // Quad-Directional Outline Shadow Layer
-              {
-                text: [
-                  { text: "Assistant", bold: true, color: colors.outlineDark, fontSize: 22 },
-                  { text: "24", bold: true, color: colors.outlineDark, fontSize: 22 }
-                ],
-                relativePosition: { x: 0.6, y: 0.6 }
-              },
-              {
-                text: [
-                  { text: "Assistant", bold: true, color: colors.outlineDark, fontSize: 22 },
-                  { text: "24", bold: true, color: colors.outlineDark, fontSize: 22 }
-                ],
-                relativePosition: { x: -0.6, y: -0.6 }
-              },
-              {
-                text: [
-                  { text: "Assistant", bold: true, color: colors.outlineDark, fontSize: 22 },
-                  { text: "24", bold: true, color: colors.outlineDark, fontSize: 22 }
-                ],
-                relativePosition: { x: -0.6, y: 0.6 }
-              },
-              {
-                text: [
-                  { text: "Assistant", bold: true, color: colors.outlineDark, fontSize: 22 },
-                  { text: "24", bold: true, color: colors.outlineDark, fontSize: 22 }
-                ],
-                relativePosition: { x: 0.6, y: -0.6 }
-              },
-              // Vibrant Top Foreground Text Layer
-              {
-                text: [
-                  { text: "Assistant", bold: true, color: colors.brandWhite, fontSize: 22 },
-                  { text: "24", bold: true, color: colors.accentBlue, fontSize: 22 }
-                ]
-              }
+            text: [
+              { text: "Assistant", bold: true, color: colors.brandDark, fontSize: 22 },
+              { text: "24", bold: true, color: colors.accentBlue, fontSize: 22 }
             ],
             margin: [0, 0, 0, 0],
             width: "*"
@@ -186,7 +150,7 @@ async function generatePDF(session: SessionDetail, findings: Finding[]) {
             width: "auto"
           }
         ],
-        margin: [0, 0, 0, 15]
+        margin: [0, 5, 0, 15]
       },
 
       // Thin Elegant Top Dividing Ruler Line
@@ -268,7 +232,7 @@ async function generatePDF(session: SessionDetail, findings: Finding[]) {
               { text: "Итоговое заключение", fontSize: 11, bold: true, color: colors.primary, margin: [0, 0, 0, 4] },
               {
                 text: criticalCt > 0
-                  ? `Внимание: По результатам автоматизированного анализа финансовой активности компании выявлено ${criticalCt} критичных нарушений требований законодательства РФ. Рекомендуется инициировать корректирующие мероприятия незамедлительно для минимизации налоговых и административных рисков.`
+                  ? `Внимание: По результатам автоматизированного анализа financial активности компании выявлено ${criticalCt} критичных нарушений требований законодательства РФ. Рекомендуется инициировать корректирующие мероприятия незамедлительно для минимизации налоговых и административных рисков.`
                   : allFindings.length > 0
                     ? "По результатам аудита критических системных несоответствий не обнаружено. Выявленные замечания носят локальный характер и подлежат штатному исправлению."
                     : "По результатам комплексного аудита нарушений нормативных регламентов не выявлено. Финансовые транзакции полностью соответствуют действующим стандартам бухгалтерского учёта.",
@@ -380,7 +344,6 @@ export default function AuditDetailPage() {
   const { session, findings, messages } = data;
   const st = SESSION_STATUS[session.status] || SESSION_STATUS.active;
 
-  // Group findings by risk level
   const grouped = RISK_ORDER.reduce<Record<string, Finding[]>>((acc, level) => {
     const items = findings.filter(f => f.risk_level === level);
     if (items.length) acc[level] = items;
@@ -389,8 +352,6 @@ export default function AuditDetailPage() {
 
   return (
     <div style={{ maxWidth: "1100px" }}>
-
-      {/* Back button */}
       <button
         onClick={() => router.push("/client/dashboard")}
         style={{
@@ -402,7 +363,6 @@ export default function AuditDetailPage() {
         ← Назад к дашборду
       </button>
 
-      {/* Header card */}
       <div style={{
         background: "#0c1220", border: "1px solid #1e2d55",
         borderRadius: "12px", padding: "24px", marginBottom: "24px",
@@ -459,7 +419,6 @@ export default function AuditDetailPage() {
           </div>
         </div>
 
-        {/* Stats row */}
         <div style={{
           display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(160px, 1fr))",
           gap: "12px", marginTop: "20px",
@@ -483,7 +442,6 @@ export default function AuditDetailPage() {
         </div>
       </div>
 
-      {/* Tabs */}
       <div style={{ display: "flex", gap: "4px", marginBottom: "20px" }}>
         {(["findings", "chat"] as const).map(t => (
           <button key={t} onClick={() => setTab(t)} style={{
@@ -500,7 +458,6 @@ export default function AuditDetailPage() {
         ))}
       </div>
 
-      {/* Findings tab */}
       {tab === "findings" && (
         <div>
           {findings.length === 0 ? (
@@ -514,7 +471,6 @@ export default function AuditDetailPage() {
           ) : (
             Object.entries(grouped).map(([level, items]) => (
               <div key={level} style={{ marginBottom: "24px" }}>
-                {/* Risk group header */}
                 <div style={{
                   display: "flex", alignItems: "center", gap: "10px",
                   marginBottom: "12px",
@@ -532,7 +488,6 @@ export default function AuditDetailPage() {
                   </span>
                 </div>
 
-                {/* Finding cards */}
                 {items.map((f, i) => (
                   <div key={f.id} style={{
                     background: "#0c1220", border: "1px solid #1e2d55",
@@ -575,7 +530,6 @@ export default function AuditDetailPage() {
         </div>
       )}
 
-      {/* Chat history tab */}
       {tab === "chat" && (
         <div style={{
           background: "#0c1220", border: "1px solid #1e2d55",
