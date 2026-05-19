@@ -34,29 +34,33 @@ function SvgDonut({ value1, value2, color1, color2, mounted }: {
   const circ = 2 * Math.PI * r;
   const dash1 = (value1 / total) * circ;
   const dash2 = (value2 / total) * circ;
-  const gap = 2;
+  const gap = 3;
 
-  // Arc1 sits at 0° (12 o'clock after the -90deg SVG rotation).
-  // Hidden = full circumference offset (arc pushed off-screen).
-  // Revealed = circ - dash1 (offset shrinks, arc grows clockwise).
-  const arc1Offset = mounted ? circ - dash1 : circ;
+  // Arc1: starts at 12 o'clock (top, because SVG is rotated -90deg).
+  // Animate strokeDasharray from "0 circ" → "dash1 circ" so it GROWS clockwise.
+  // strokeDashoffset stays at 0 — no spinning, just growth.
+  const arr1 = mounted ? `${dash1 - gap} ${circ - dash1 + gap}` : `0 ${circ}`;
 
-  // Arc2 starts immediately after arc1. Its "zero" position is -(dash1 + gap/2).
-  // Hidden = circ (same full offset trick).
-  // Revealed = circ - dash2 - (dash1 + gap/2) — offset shrinks into its slot.
-  const arc2StartPos = dash1 + gap / 2;
-  const arc2Offset   = mounted ? circ - dash2 - arc2StartPos : circ;
+  // Arc2: needs to start right after arc1 ends.
+  // We position it with a negative dashoffset = -(dash1 + gap).
+  // Same grow animation on its own dasharray.
+  const arr2 = mounted ? `${dash2 - gap} ${circ - dash2 + gap}` : `0 ${circ}`;
+  const offset2 = -(dash1 + gap);
+
+  const transition = "stroke-dasharray 1.4s cubic-bezier(0.4,0,0.2,1)";
 
   return (
     <svg width="150" height="150" viewBox="0 0 150 150" style={{ transform: "rotate(-90deg)" }}>
+      {/* Arc2 (color2) — drawn first so arc1 sits on top at the seam */}
       <circle cx="75" cy="75" r={r} fill="none" stroke={color2} strokeWidth="17"
-        strokeDasharray={`${dash2 - gap} ${circ - dash2 + gap}`}
-        strokeDashoffset={arc2Offset}
-        style={{ transition: mounted ? "stroke-dashoffset 2s cubic-bezier(0.4,0,0.2,1)" : "none" }} />
+        strokeDasharray={arr2}
+        strokeDashoffset={offset2}
+        style={{ transition: mounted ? transition : "none" }} />
+      {/* Arc1 (color1) — starts at top */}
       <circle cx="75" cy="75" r={r} fill="none" stroke={color1} strokeWidth="17"
-        strokeDasharray={`${dash1 - gap} ${circ - dash1 + gap}`}
-        strokeDashoffset={arc1Offset}
-        style={{ transition: mounted ? "stroke-dashoffset 2s cubic-bezier(0.4,0,0.2,1) 0.1s" : "none" }} />
+        strokeDasharray={arr1}
+        strokeDashoffset={0}
+        style={{ transition: mounted ? `${transition} 0.15s` : "none" }} />
     </svg>
   );
 }
