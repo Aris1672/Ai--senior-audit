@@ -13,7 +13,17 @@ async function generatePDF(session: SessionDetail, findings: Finding[]) {
   (pdfMake as any).vfs = (pdfFonts as any).vfs;
 
   const RISK_ORDER_LOCAL = ["КРИТИЧНО", "СУЩЕСТВЕННО", "НЕСУЩЕСТВЕННО"] as const;
-  
+
+  // transactions_ct is often 0 in DB — extract real count from findings text
+  const txFromFindings = (() => {
+    for (const f of findings) {
+      const m = (f.description + " " + f.title).match(/(\d+)\s*(финансов|транзакц|операци)/i);
+      if (m) return parseInt(m[1], 10);
+    }
+    return null;
+  })();
+  const transactionCount = session.transactions_ct || txFromFindings;
+
   // Executive Premium Light Palette
   const colors = {
     textMain: "#1a1a1a",
@@ -186,7 +196,7 @@ async function generatePDF(session: SessionDetail, findings: Finding[]) {
           {
             stack: [
               { text: "Проверено транзакций", fontSize: 9, color: colors.textLight, alignment: "center" },
-              { text: session.transactions_ct?.toLocaleString("ru-RU") || "0", fontSize: 18, bold: true, color: colors.accentBlue, alignment: "center", margin: [0, 4, 0, 0] }
+              { text: transactionCount?.toLocaleString("ru-RU") || "—", fontSize: 18, bold: true, color: colors.accentBlue, alignment: "center", margin: [0, 4, 0, 0] }
             ],
             fillColor: colors.bgCard,
             margin: [0, 0, 6, 0],
