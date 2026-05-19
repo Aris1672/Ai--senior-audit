@@ -107,7 +107,7 @@ export default function ClientDashboard() {
           type: "doughnut",
           data: {
             datasets: [{
-              data: [data.paidTotal || 0.001, data.unpaidTotal || 0.001],
+              data: [data?.paidTotal || 0.001, data?.unpaidTotal || 0.001],
               backgroundColor: ["#1D9E75", "#E24B4A"],
               borderWidth: 0,
               hoverOffset: 4,
