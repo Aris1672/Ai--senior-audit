@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { getRiskColor, getRiskBgColor, type RiskLevel } from "@/lib/billing";
 
 interface SessionData {
@@ -69,13 +69,62 @@ export default function ClientDashboard() {
   const completedAudits = data.sessions.filter(s => s.status === "completed").length;
   const activeAudits    = data.sessions.filter(s => s.status === "active").length;
 
-  const METRICS = [
-    {
-      label: "Всего аудитов",
-      value: data.totalAudits,
-      sub:   `${activeAudits} активных · ${completedAudits} завершённых`,
-      color: "#4d91ff",
-    },
+  const paidCount   = data.sessions.filter(s => s.paid).length;
+  const unpaidCount = data.sessions.filter(s => !s.paid && s.cost_rub).length;
+
+  const auditChartRef   = useRef<HTMLCanvasElement>(null);
+  const paymentChartRef = useRef<HTMLCanvasElement>(null);
+
+  useEffect(() => {
+    let auditChart: any;
+    let paymentChart: any;
+
+    async function initCharts() {
+      const { Chart, registerables } = await import("chart.js");
+      Chart.register(...registerables);
+
+      if (auditChartRef.current) {
+        auditChart = new Chart(auditChartRef.current, {
+          type: "doughnut",
+          data: {
+            datasets: [{
+              data: [activeAudits || 0.001, completedAudits || 0.001],
+              backgroundColor: ["#378ADD", "#4a5568"],
+              borderWidth: 0,
+              hoverOffset: 4,
+            }],
+          },
+          options: {
+            responsive: true, maintainAspectRatio: false, cutout: "72%",
+            plugins: { legend: { display: false }, tooltip: { enabled: false } },
+          },
+        });
+      }
+
+      if (paymentChartRef.current) {
+        paymentChart = new Chart(paymentChartRef.current, {
+          type: "doughnut",
+          data: {
+            datasets: [{
+              data: [data.paidTotal || 0.001, data.unpaidTotal || 0.001],
+              backgroundColor: ["#1D9E75", "#E24B4A"],
+              borderWidth: 0,
+              hoverOffset: 4,
+            }],
+          },
+          options: {
+            responsive: true, maintainAspectRatio: false, cutout: "72%",
+            plugins: { legend: { display: false }, tooltip: { enabled: false } },
+          },
+        });
+      }
+    }
+
+    initCharts();
+    return () => { auditChart?.destroy(); paymentChart?.destroy(); };
+  }, [data]);
+
+  const SIMPLE_METRICS = [
     {
       label: "Открытых нарушений",
       value: data.findings.length,
@@ -87,18 +136,6 @@ export default function ClientDashboard() {
       value: data.totalSpend.toLocaleString("ru", { style: "currency", currency: "RUB", maximumFractionDigits: 0 }),
       sub:   `За ${data.totalAudits} аудит${data.totalAudits === 1 ? "" : data.totalAudits < 5 ? "а" : "ов"}`,
       color: "#f59e0b",
-    },
-    {
-      label: "Оплачено",
-      value: data.paidTotal.toLocaleString("ru", { style: "currency", currency: "RUB", maximumFractionDigits: 0 }),
-      sub:   `${data.sessions.filter(s => s.paid).length} аудит${data.sessions.filter(s => s.paid).length === 1 ? "" : "ов"} оплачено`,
-      color: "#2ecc8f",
-    },
-    {
-      label: "К оплате",
-      value: data.unpaidTotal.toLocaleString("ru", { style: "currency", currency: "RUB", maximumFractionDigits: 0 }),
-      sub:   data.unpaidTotal === 0 ? "Задолженностей нет" : `${data.sessions.filter(s => !s.paid && s.cost_rub).length} аудит${data.sessions.filter(s => !s.paid && s.cost_rub).length === 1 ? "" : "ов"} не оплачено`,
-      color: data.unpaidTotal === 0 ? "#3d4f7a" : "#e84040",
     },
     {
       label: "Последний аудит",
@@ -129,22 +166,87 @@ export default function ClientDashboard() {
       </div>
 
       {/* Metric cards */}
-      <div style={{
-        display: "grid", gridTemplateColumns: "repeat(3, 1fr)",
-        gap: "16px", marginBottom: "28px",
-      }}>
-        {METRICS.map((m, i) => (
-          <div key={i} style={{
-            background: "#0c1220", border: "1px solid #1e2d55",
-            borderTop: `3px solid ${m.color}`, borderRadius: "10px", padding: "20px",
-          }}>
-            <div style={{ fontSize: "12px", color: "#7a90c0", marginBottom: "8px" }}>{m.label}</div>
-            <div style={{ fontSize: "22px", fontWeight: "700", color: m.color, marginBottom: "6px" }}>
-              {m.value}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: "16px", marginBottom: "28px" }}>
+
+        {/* Donut — Audits */}
+        <div style={{ background: "#0c1220", border: "1px solid #1e2d55", borderTop: "3px solid #378ADD", borderRadius: "10px", padding: "20px" }}>
+          <div style={{ fontSize: "12px", color: "#7a90c0", marginBottom: "14px" }}>Всего аудитов</div>
+          <div style={{ display: "flex", alignItems: "center", gap: "20px" }}>
+            <div style={{ position: "relative", width: "90px", height: "90px", flexShrink: 0 }}>
+              <canvas ref={auditChartRef} role="img" aria-label={`Аудитов: ${activeAudits} активных, ${completedAudits} завершённых`} />
+              <div style={{ position: "absolute", inset: 0, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", pointerEvents: "none" }}>
+                <span style={{ fontSize: "11px", color: "#7a90c0" }}>Всего</span>
+                <span style={{ fontSize: "20px", fontWeight: "700", color: "#e8edf8" }}>{data.totalAudits}</span>
+              </div>
             </div>
-            <div style={{ fontSize: "11px", color: "#3d4f7a" }}>{m.sub}</div>
+            <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: "10px" }}>
+              <div>
+                <div style={{ display: "flex", alignItems: "center", gap: "6px", marginBottom: "2px" }}>
+                  <span style={{ width: "8px", height: "8px", borderRadius: "2px", background: "#378ADD", flexShrink: 0 }} />
+                  <span style={{ fontSize: "11px", color: "#7a90c0" }}>Активных</span>
+                </div>
+                <div style={{ fontSize: "20px", fontWeight: "700", color: "#e8edf8", paddingLeft: "14px" }}>{activeAudits}</div>
+              </div>
+              <div style={{ height: "1px", background: "#1e2d55" }} />
+              <div>
+                <div style={{ display: "flex", alignItems: "center", gap: "6px", marginBottom: "2px" }}>
+                  <span style={{ width: "8px", height: "8px", borderRadius: "2px", background: "#4a5568", flexShrink: 0 }} />
+                  <span style={{ fontSize: "11px", color: "#7a90c0" }}>Завершённых</span>
+                </div>
+                <div style={{ fontSize: "20px", fontWeight: "700", color: "#e8edf8", paddingLeft: "14px" }}>{completedAudits}</div>
+              </div>
+            </div>
           </div>
-        ))}
+        </div>
+
+        {/* Donut — Payments */}
+        <div style={{ background: "#0c1220", border: "1px solid #1e2d55", borderTop: "3px solid #1D9E75", borderRadius: "10px", padding: "20px" }}>
+          <div style={{ fontSize: "12px", color: "#7a90c0", marginBottom: "14px" }}>Оплата аудитов</div>
+          <div style={{ display: "flex", alignItems: "center", gap: "20px" }}>
+            <div style={{ position: "relative", width: "90px", height: "90px", flexShrink: 0 }}>
+              <canvas ref={paymentChartRef} role="img" aria-label={`Оплачено: ${data.paidTotal}, к оплате: ${data.unpaidTotal}`} />
+              <div style={{ position: "absolute", inset: 0, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", pointerEvents: "none" }}>
+                <span style={{ fontSize: "11px", color: "#7a90c0" }}>Итого</span>
+                <span style={{ fontSize: "13px", fontWeight: "700", color: "#e8edf8" }}>{data.totalSpend.toLocaleString("ru", { maximumFractionDigits: 0 })} ₽</span>
+              </div>
+            </div>
+            <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: "10px" }}>
+              <div>
+                <div style={{ display: "flex", alignItems: "center", gap: "6px", marginBottom: "2px" }}>
+                  <span style={{ width: "8px", height: "8px", borderRadius: "2px", background: "#1D9E75", flexShrink: 0 }} />
+                  <span style={{ fontSize: "11px", color: "#7a90c0" }}>Оплачено</span>
+                </div>
+                <div style={{ fontSize: "15px", fontWeight: "700", color: "#e8edf8", paddingLeft: "14px" }}>{data.paidTotal.toLocaleString("ru", { style: "currency", currency: "RUB", maximumFractionDigits: 0 })}</div>
+                <div style={{ fontSize: "11px", color: "#3d4f7a", paddingLeft: "14px" }}>{paidCount} аудит{paidCount === 1 ? "" : paidCount < 5 ? "а" : "ов"}</div>
+              </div>
+              <div style={{ height: "1px", background: "#1e2d55" }} />
+              <div>
+                <div style={{ display: "flex", alignItems: "center", gap: "6px", marginBottom: "2px" }}>
+                  <span style={{ width: "8px", height: "8px", borderRadius: "2px", background: "#E24B4A", flexShrink: 0 }} />
+                  <span style={{ fontSize: "11px", color: "#7a90c0" }}>К оплате</span>
+                </div>
+                <div style={{ fontSize: "15px", fontWeight: "700", color: data.unpaidTotal > 0 ? "#E24B4A" : "#e8edf8", paddingLeft: "14px" }}>{data.unpaidTotal.toLocaleString("ru", { style: "currency", currency: "RUB", maximumFractionDigits: 0 })}</div>
+                <div style={{ fontSize: "11px", color: "#3d4f7a", paddingLeft: "14px" }}>{data.unpaidTotal === 0 ? "Задолженностей нет" : `${unpaidCount} аудит${unpaidCount === 1 ? "" : unpaidCount < 5 ? "а" : "ов"}`}</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* Simple metrics stacked */}
+        <div style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
+          {SIMPLE_METRICS.map((m, i) => (
+            <div key={i} style={{
+              background: "#0c1220", border: "1px solid #1e2d55",
+              borderTop: `3px solid ${m.color}`, borderRadius: "10px", padding: "14px 20px",
+              flex: 1,
+            }}>
+              <div style={{ fontSize: "12px", color: "#7a90c0", marginBottom: "6px" }}>{m.label}</div>
+              <div style={{ fontSize: "20px", fontWeight: "700", color: m.color, marginBottom: "4px" }}>{m.value}</div>
+              <div style={{ fontSize: "11px", color: "#3d4f7a" }}>{m.sub}</div>
+            </div>
+          ))}
+        </div>
+
       </div>
 
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "20px" }}>
