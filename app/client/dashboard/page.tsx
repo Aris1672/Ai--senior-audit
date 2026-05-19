@@ -151,11 +151,11 @@ export default function ClientDashboard() {
         <circle cx="75" cy="75" r={r} fill="none" stroke={color2} strokeWidth="17"
           strokeDasharray={`${dash2 - gap} ${circ - dash2 + gap}`}
           strokeDashoffset={arc2Offset}
-          style={{ transition: mounted ? "stroke-dashoffset 0.9s cubic-bezier(0.4,0,0.2,1)" : "none" }} />
+          style={{ transition: mounted ? "stroke-dashoffset 2s cubic-bezier(0.4,0,0.2,1)" : "none" }} />
         <circle cx="75" cy="75" r={r} fill="none" stroke={color1} strokeWidth="17"
           strokeDasharray={`${dash1 - gap} ${circ - dash1 + gap}`}
           strokeDashoffset={arc1Offset}
-          style={{ transition: mounted ? "stroke-dashoffset 0.9s cubic-bezier(0.4,0,0.2,1) 0.1s" : "none" }} />
+          style={{ transition: mounted ? "stroke-dashoffset 2s cubic-bezier(0.4,0,0.2,1) 0.1s" : "none" }} />
       </svg>
     );
   }
