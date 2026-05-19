@@ -24,6 +24,33 @@ interface DashboardData {
   unpaidTotal:  number;
 }
 
+// Top-level component — must live outside ClientDashboard so React doesn't
+// remount it on every render (which would kill the CSS transition)
+function SvgDonut({ value1, value2, color1, color2, mounted }: {
+  value1: number; value2: number; color1: string; color2: string; mounted: boolean;
+}) {
+  const total = value1 + value2 || 1;
+  const r = 62;
+  const circ = 2 * Math.PI * r;
+  const dash1 = (value1 / total) * circ;
+  const dash2 = (value2 / total) * circ;
+  const gap = 2;
+  const arc1Offset = mounted ? 0 : circ;
+  const arc2Offset = mounted ? -(dash1 + gap / 2) : circ;
+  return (
+    <svg width="150" height="150" viewBox="0 0 150 150" style={{ transform: "rotate(-90deg)" }}>
+      <circle cx="75" cy="75" r={r} fill="none" stroke={color2} strokeWidth="17"
+        strokeDasharray={`${dash2 - gap} ${circ - dash2 + gap}`}
+        strokeDashoffset={arc2Offset}
+        style={{ transition: mounted ? "stroke-dashoffset 2s cubic-bezier(0.4,0,0.2,1)" : "none" }} />
+      <circle cx="75" cy="75" r={r} fill="none" stroke={color1} strokeWidth="17"
+        strokeDasharray={`${dash1 - gap} ${circ - dash1 + gap}`}
+        strokeDashoffset={arc1Offset}
+        style={{ transition: mounted ? "stroke-dashoffset 2s cubic-bezier(0.4,0,0.2,1) 0.1s" : "none" }} />
+    </svg>
+  );
+}
+
 // Top-level custom hook — must live outside the component to satisfy Rules of Hooks
 function useCountUp(target: number, duration = 2000, trigger = true) {
   const [val, setVal] = useState(0);
@@ -135,31 +162,6 @@ export default function ClientDashboard() {
     archived:  { label: "Архив",     color: "#3d4f7a" },
   };
 
-  // Pure SVG donut — animates arcs on mount
-  function SvgDonut({ value1, value2, color1, color2 }: { value1: number; value2: number; color1: string; color2: string }) {
-    const total = value1 + value2 || 1;
-    const r = 62;
-    const circ = 2 * Math.PI * r;
-    const dash1 = (value1 / total) * circ;
-    const dash2 = (value2 / total) * circ;
-    const gap = 2;
-    // When not mounted, offset = full circ (invisible). When mounted, animate to real offset.
-    const arc1Offset  = mounted ? 0 : circ;
-    const arc2Offset  = mounted ? -(dash1 + gap / 2) : circ;
-    return (
-      <svg width="150" height="150" viewBox="0 0 150 150" style={{ transform: "rotate(-90deg)" }}>
-        <circle cx="75" cy="75" r={r} fill="none" stroke={color2} strokeWidth="17"
-          strokeDasharray={`${dash2 - gap} ${circ - dash2 + gap}`}
-          strokeDashoffset={arc2Offset}
-          style={{ transition: mounted ? "stroke-dashoffset 2s cubic-bezier(0.4,0,0.2,1)" : "none" }} />
-        <circle cx="75" cy="75" r={r} fill="none" stroke={color1} strokeWidth="17"
-          strokeDasharray={`${dash1 - gap} ${circ - dash1 + gap}`}
-          strokeDashoffset={arc1Offset}
-          style={{ transition: mounted ? "stroke-dashoffset 2s cubic-bezier(0.4,0,0.2,1) 0.1s" : "none" }} />
-      </svg>
-    );
-  }
-
   // Card entrance animation helper
   function cardStyle(index: number): React.CSSProperties {
     return {
@@ -189,7 +191,7 @@ export default function ClientDashboard() {
           <div style={{ fontSize: "12px", color: "#7a90c0", marginBottom: "14px" }}>Всего аудитов</div>
           <div style={{ display: "flex", alignItems: "stretch", gap: "20px" }}>
             <div style={{ position: "relative", width: "150px", height: "150px", flexShrink: 0, alignSelf: "center" }}>
-              <SvgDonut value1={activeAudits} value2={completedAudits} color1="#378ADD" color2="#4a5568" />
+              <SvgDonut value1={activeAudits} value2={completedAudits} color1="#378ADD" color2="#4a5568" mounted={mounted} />
               <div style={{ position: "absolute", inset: 0, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", pointerEvents: "none" }}>
                 <span style={{ fontSize: "11px", color: "#7a90c0" }}>Всего</span>
                 <span style={{ fontSize: "20px", fontWeight: "700", color: "#e8edf8" }}>{animTotalAudits}</span>
@@ -220,7 +222,7 @@ export default function ClientDashboard() {
           <div style={{ fontSize: "12px", color: "#7a90c0", marginBottom: "14px" }}>Оплата аудитов</div>
           <div style={{ display: "flex", alignItems: "stretch", gap: "20px" }}>
             <div style={{ position: "relative", width: "150px", height: "150px", flexShrink: 0, alignSelf: "center" }}>
-              <SvgDonut value1={data.paidTotal} value2={data.unpaidTotal} color1="#1D9E75" color2="#f59e0b" />
+              <SvgDonut value1={data.paidTotal} value2={data.unpaidTotal} color1="#1D9E75" color2="#f59e0b" mounted={mounted} />
               <div style={{ position: "absolute", inset: 0, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", pointerEvents: "none" }}>
                 <span style={{ fontSize: "11px", color: "#7a90c0" }}>Итого</span>
                 <span style={{ fontSize: "13px", fontWeight: "700", color: "#e8edf8" }}>{data.totalSpend.toLocaleString("ru", { maximumFractionDigits: 0 })} ₽</span>
