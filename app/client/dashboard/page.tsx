@@ -105,17 +105,17 @@ export default function ClientDashboard() {
   // Pure SVG donut — no external deps, no SSR issues
   function SvgDonut({ value1, value2, color1, color2 }: { value1: number; value2: number; color1: string; color2: string }) {
     const total = value1 + value2 || 1;
-    const r = 36;
+    const r = 50;
     const circ = 2 * Math.PI * r;
     const dash1 = (value1 / total) * circ;
     const dash2 = (value2 / total) * circ;
     const gap = 2;
     return (
-      <svg width="90" height="90" viewBox="0 0 90 90" style={{ transform: "rotate(-90deg)" }}>
-        <circle cx="45" cy="45" r={r} fill="none" stroke={color2} strokeWidth="10"
+      <svg width="120" height="120" viewBox="0 0 120 120" style={{ transform: "rotate(-90deg)" }}>
+        <circle cx="60" cy="60" r={r} fill="none" stroke={color2} strokeWidth="10"
           strokeDasharray={`${dash2 - gap} ${circ - dash2 + gap}`}
           strokeDashoffset={-(dash1 + gap / 2)} />
-        <circle cx="45" cy="45" r={r} fill="none" stroke={color1} strokeWidth="10"
+        <circle cx="60" cy="60" r={r} fill="none" stroke={color1} strokeWidth="10"
           strokeDasharray={`${dash1 - gap} ${circ - dash1 + gap}`}
           strokeDashoffset={0} />
       </svg>
@@ -140,8 +140,8 @@ export default function ClientDashboard() {
         {/* Donut — Audits */}
         <div style={{ background: "#0c1220", border: "1px solid #1e2d55", borderTop: "3px solid #378ADD", borderRadius: "10px", padding: "20px" }}>
           <div style={{ fontSize: "12px", color: "#7a90c0", marginBottom: "14px" }}>Всего аудитов</div>
-          <div style={{ display: "flex", alignItems: "center", gap: "20px" }}>
-            <div style={{ position: "relative", width: "90px", height: "90px", flexShrink: 0 }}>
+          <div style={{ display: "flex", alignItems: "stretch", gap: "20px" }}>
+            <div style={{ position: "relative", width: "120px", height: "120px", flexShrink: 0, alignSelf: "center" }}>
               <SvgDonut value1={activeAudits} value2={completedAudits} color1="#378ADD" color2="#4a5568" />
               <div style={{ position: "absolute", inset: 0, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", pointerEvents: "none" }}>
                 <span style={{ fontSize: "11px", color: "#7a90c0" }}>Всего</span>
@@ -171,8 +171,8 @@ export default function ClientDashboard() {
         {/* Donut — Payments */}
         <div style={{ background: "#0c1220", border: "1px solid #1e2d55", borderTop: "3px solid #1D9E75", borderRadius: "10px", padding: "20px" }}>
           <div style={{ fontSize: "12px", color: "#7a90c0", marginBottom: "14px" }}>Оплата аудитов</div>
-          <div style={{ display: "flex", alignItems: "center", gap: "20px" }}>
-            <div style={{ position: "relative", width: "90px", height: "90px", flexShrink: 0 }}>
+          <div style={{ display: "flex", alignItems: "stretch", gap: "20px" }}>
+            <div style={{ position: "relative", width: "120px", height: "120px", flexShrink: 0, alignSelf: "center" }}>
               <SvgDonut value1={data.paidTotal} value2={data.unpaidTotal} color1="#1D9E75" color2="#E24B4A" />
               <div style={{ position: "absolute", inset: 0, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", pointerEvents: "none" }}>
                 <span style={{ fontSize: "11px", color: "#7a90c0" }}>Итого</span>
