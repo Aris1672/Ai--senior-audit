@@ -6,7 +6,9 @@ import { useSearchParams } from "next/navigation";
 interface Message { role: "user" | "assistant"; content: string; costRub?: number; }
 
 // ── Typewriter component ───────────────────────────────────────────────────
-function TypewriterMessage({ text, onDone }: { text: string; onDone: () => void }) {
+function TypewriterMessage({ text, onDone, onScroll }: { 
+  text: string; onDone: () => void; onScroll: () => void; 
+}) {
   const [displayed, setDisplayed] = useState("");
   const indexRef = useRef(0);
   const rafRef   = useRef(0);
@@ -15,7 +17,6 @@ function TypewriterMessage({ text, onDone }: { text: string; onDone: () => void 
     indexRef.current = 0;
     setDisplayed("");
 
-    // ~18ms per char ≈ 55 chars/sec — feels natural, not slow
     const INTERVAL = 18;
     let last = 0;
 
@@ -25,6 +26,7 @@ function TypewriterMessage({ text, onDone }: { text: string; onDone: () => void 
         if (indexRef.current < text.length) {
           indexRef.current++;
           setDisplayed(text.slice(0, indexRef.current));
+          onScroll(); // ← scroll on every character
         } else {
           onDone();
           return;
@@ -337,7 +339,11 @@ export default function ChatPage() {
             }}>
               {/* Typewriter only on the latest assistant message; rest render instantly */}
               {msg.role === "assistant" && i === typingIndex
-                ? <TypewriterMessage text={msg.content} onDone={() => setTypingIndex(-1)} />
+                ? <TypewriterMessage
+    text={msg.content}
+    onDone={() => setTypingIndex(-1)}
+    onScroll={() => bottomRef.current?.scrollIntoView({ behavior: "smooth" })}
+  />
                 : msg.content
               }
             </div>
