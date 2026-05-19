@@ -49,18 +49,16 @@ function SvgDonut({ value1, value2, color1, color2, mounted }: {
 
   const transition = "stroke-dasharray 1.4s cubic-bezier(0.4,0,0.2,1)";
 
-  return (
+ return (
     <svg width="150" height="150" viewBox="0 0 150 150" style={{ transform: "rotate(-90deg)" }}>
-      {/* Arc2 (color2) — drawn first so arc1 sits on top at the seam */}
       <circle cx="75" cy="75" r={r} fill="none" stroke={color2} strokeWidth="17"
         strokeDasharray={arr2}
         strokeDashoffset={offset2}
         style={{ transition: mounted ? transition : "none" }} />
-      {/* Arc1 (color1) — starts at top */}
       <circle cx="75" cy="75" r={r} fill="none" stroke={color1} strokeWidth="17"
         strokeDasharray={arr1}
         strokeDashoffset={0}
-        style={{ transition: mounted ? `${transition} 0.15s` : "none" }} />
+        style={{ transition: mounted ? transition : "none" }} />  {/* ← remove the 0.15s delay */}
     </svg>
   );
 }
