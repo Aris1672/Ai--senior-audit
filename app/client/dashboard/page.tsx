@@ -27,6 +27,7 @@ interface DashboardData {
 export default function ClientDashboard() {
   const [data,    setData]    = useState<DashboardData | null>(null);
   const [loading, setLoading] = useState(true);
+  const [mounted, setMounted] = useState(false);
 
   useEffect(() => {
     async function load() {
@@ -75,8 +76,10 @@ export default function ClientDashboard() {
   const auditChartRef   = useRef<HTMLCanvasElement>(null);
   const paymentChartRef = useRef<HTMLCanvasElement>(null);
 
+  useEffect(() => { setMounted(true); }, []);
+
   useEffect(() => {
-    if (!data) return;
+    if (!data || !mounted) return;
     let auditChart: any;
     let paymentChart: any;
 
@@ -174,7 +177,7 @@ export default function ClientDashboard() {
           <div style={{ fontSize: "12px", color: "#7a90c0", marginBottom: "14px" }}>Всего аудитов</div>
           <div style={{ display: "flex", alignItems: "center", gap: "20px" }}>
             <div style={{ position: "relative", width: "90px", height: "90px", flexShrink: 0 }}>
-              <canvas ref={auditChartRef} role="img" aria-label={`Аудитов: ${activeAudits} активных, ${completedAudits} завершённых`} />
+              {mounted && <canvas ref={auditChartRef} role="img" aria-label={`Аудитов: ${activeAudits} активных, ${completedAudits} завершённых`} />}
               <div style={{ position: "absolute", inset: 0, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", pointerEvents: "none" }}>
                 <span style={{ fontSize: "11px", color: "#7a90c0" }}>Всего</span>
                 <span style={{ fontSize: "20px", fontWeight: "700", color: "#e8edf8" }}>{data.totalAudits}</span>
@@ -205,7 +208,7 @@ export default function ClientDashboard() {
           <div style={{ fontSize: "12px", color: "#7a90c0", marginBottom: "14px" }}>Оплата аудитов</div>
           <div style={{ display: "flex", alignItems: "center", gap: "20px" }}>
             <div style={{ position: "relative", width: "90px", height: "90px", flexShrink: 0 }}>
-              <canvas ref={paymentChartRef} role="img" aria-label={`Оплачено: ${data.paidTotal}, к оплате: ${data.unpaidTotal}`} />
+              {mounted && <canvas ref={paymentChartRef} role="img" aria-label={`Оплачено: ${data.paidTotal}, к оплате: ${data.unpaidTotal}`} />}
               <div style={{ position: "absolute", inset: 0, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", pointerEvents: "none" }}>
                 <span style={{ fontSize: "11px", color: "#7a90c0" }}>Итого</span>
                 <span style={{ fontSize: "13px", fontWeight: "700", color: "#e8edf8" }}>{data.totalSpend.toLocaleString("ru", { maximumFractionDigits: 0 })} ₽</span>
