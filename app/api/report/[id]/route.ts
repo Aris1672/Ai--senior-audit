@@ -273,7 +273,7 @@ export async function GET(
               { text: "Несущественных",       color: colors.light, margin: [8, 6, 8, 6] },
               { text: minorCt.toString(),     color: colors.green, bold: true, margin: [8, 6, 8, 6] },
             ],
-            [
+            /*[
               { text: "Стоимость аудита",     color: colors.light, margin: [8, 6, 8, 6] },
               {
                 text: sessionRaw.cost_rub
@@ -281,7 +281,7 @@ export async function GET(
                   : "—",
                 color: colors.amber, bold: true, margin: [8, 6, 8, 6],
               },
-            ],
+            ],*/
           ],
         },
         layout: {
