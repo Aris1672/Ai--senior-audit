@@ -451,7 +451,7 @@ function ViolationsDonut({ findings, mounted }: { findings: Finding[]; mounted: 
               width: "8px", height: "8px", borderRadius: "2px",
               background: seg.color, flexShrink: 0,
             }} />
-            <span style={{ fontSize: "12px", color: "#7a90c0", flex: 1 }}>{seg.label}</span>
+            <span style={{ fontSize: "12px", color: "#7a90c0", flex: 1 }}>{seg.label}</span>            
             <span style={{ fontSize: "14px", fontWeight: "700", color: seg.color }}>{seg.count}</span>
             <span style={{ fontSize: "11px", color: "#3d4f7a", minWidth: "34px", textAlign: "right" }}>
               {Math.round(seg.fraction * 100)}%
