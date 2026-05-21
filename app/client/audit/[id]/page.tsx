@@ -419,7 +419,6 @@ function ViolationsDonut({ findings, mounted }: { findings: Finding[]; mounted: 
       border: "1px solid #1a2340",
       borderRadius: "12px",
       padding: "20px 24px",
-      marginTop: "16px",
       display: "flex",
       alignItems: "center",
       gap: "28px",
@@ -482,7 +481,6 @@ function ResolutionDonut({ findings, mounted }: { findings: Finding[]; mounted: 
       border: "1px solid #1a2340",
       borderRadius: "12px",
       padding: "20px 24px",
-      marginTop: "12px",
       display: "flex",
       alignItems: "center",
       gap: "28px",
@@ -690,8 +688,19 @@ export default function AuditDetailPage() {
           ))}
         </div>
 
-        <ViolationsDonut findings={findings} mounted={mounted} />
-        <ResolutionDonut findings={findings} mounted={mounted} />
+        <div style={{
+          display: "flex",
+          gap: "16px",
+          marginTop: "16px",
+          flexWrap: "wrap",
+        }}>
+          <div style={{ flex: 1, minWidth: "260px" }}>
+            <ViolationsDonut findings={findings} mounted={mounted} />
+          </div>
+          <div style={{ flex: 1, minWidth: "260px" }}>
+            <ResolutionDonut findings={findings} mounted={mounted} />
+          </div>
+        </div>
       </div>
 
       <div style={{ display: "flex", gap: "4px", marginBottom: "20px" }}>
