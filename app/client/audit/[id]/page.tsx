@@ -393,7 +393,7 @@ function DonutCanvas({ segments, mounted }: {
       ref={canvasRef}
       width={150 * dpr}
       height={150 * dpr}
-      style={{ width: 150, height: 150, transform: `scale(${1 / dpr})`, transformOrigin: "top left" }}
+      style={{ width: 150, height: 150, transform: `scale(${1.1 / dpr})`, transformOrigin: "center" }}
     />
   );
 }
