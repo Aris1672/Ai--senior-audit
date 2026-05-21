@@ -290,7 +290,7 @@ export async function POST(req: NextRequest) {
             .single(),
           supabase
             .from("findings")
-            .select("id, risk_level, title, description, legal_basis, recommendation, created_at")
+            .select("id, risk_level, title, description, legal_basis, recommendation, status, created_at")
             .eq("session_id", sessionId)
             .order("created_at", { ascending: true }),
           supabase

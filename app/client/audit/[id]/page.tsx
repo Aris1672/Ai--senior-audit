@@ -284,6 +284,7 @@ interface Finding {
   description:    string;
   legal_basis:    string;
   recommendation: string;
+  status:         string;
   created_at:     string;
 }
 
@@ -463,6 +464,86 @@ function ViolationsDonut({ findings, mounted }: { findings: Finding[]; mounted: 
   );
 }
 
+function ResolutionDonut({ findings, mounted }: { findings: Finding[]; mounted: boolean }) {
+  const total    = findings.length;
+  const resolved = findings.filter(f => f.status === "resolved").length;
+  const open     = total - resolved;
+
+  if (total === 0) return null;
+
+  const segments = [
+    { color: "#2ecc8f", label: "Решено",  count: resolved, fraction: resolved / total },
+    { color: "#f59e0b", label: "Открыто", count: open,     fraction: open     / total },
+  ].filter(s => s.count > 0);
+
+  return (
+    <div style={{
+      background: "#080f1e",
+      border: "1px solid #1a2340",
+      borderRadius: "12px",
+      padding: "20px 24px",
+      marginTop: "12px",
+      display: "flex",
+      alignItems: "center",
+      gap: "28px",
+      flexWrap: "wrap",
+    }}>
+      {/* Canvas donut */}
+      <div style={{ position: "relative", width: 150, height: 150, flexShrink: 0 }}>
+        <DonutCanvas segments={segments} mounted={mounted} />
+        {/* Centre label */}
+        <div style={{
+          position: "absolute", inset: 0,
+          display: "flex", flexDirection: "column",
+          alignItems: "center", justifyContent: "center",
+          pointerEvents: "none",
+        }}>
+          <div style={{ fontSize: "26px", fontWeight: "700", color: resolved === total ? "#2ecc8f" : "#e8edf8", lineHeight: 1 }}>
+            {resolved === total ? "✓" : `${Math.round((resolved / total) * 100)}%`}
+          </div>
+          <div style={{ fontSize: "10px", color: "#3d4f7a", marginTop: "3px" }}>
+            {resolved === total ? "всё решено" : "решено"}
+          </div>
+        </div>
+      </div>
+
+      {/* Legend */}
+      <div style={{ display: "flex", flexDirection: "column", gap: "12px", flex: 1, minWidth: "160px" }}>
+        {segments.map(seg => (
+          <div key={seg.label} style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+            <span style={{
+              width: "8px", height: "8px", borderRadius: "2px",
+              background: seg.color, flexShrink: 0,
+            }} />
+            <span style={{ fontSize: "12px", color: "#7a90c0", flex: 1 }}>{seg.label}</span>
+            <span style={{ fontSize: "14px", fontWeight: "700", color: seg.color }}>{seg.count}</span>
+            <span style={{ fontSize: "11px", color: "#3d4f7a", minWidth: "34px", textAlign: "right" }}>
+              {Math.round(seg.fraction * 100)}%
+            </span>
+          </div>
+        ))}
+        {/* Progress bar */}
+        <div style={{ marginTop: "4px" }}>
+          <div style={{
+            height: "4px", borderRadius: "2px",
+            background: "#1a2340", overflow: "hidden",
+          }}>
+            <div style={{
+              height: "100%", borderRadius: "2px",
+              background: "#2ecc8f",
+              width: `${Math.round((resolved / total) * 100)}%`,
+              transition: "width 1.2s cubic-bezier(0.16, 1, 0.3, 1)",
+            }} />
+          </div>
+          <div style={{ fontSize: "10px", color: "#3d4f7a", marginTop: "4px" }}>
+            {resolved} из {total} нарушений устранено
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 const SESSION_STATUS: Record<string, { label: string; color: string }> = {
   active:    { label: "Активна",   color: "#2ecc8f" },
   completed: { label: "Завершена", color: "#7a90c0" },
@@ -610,6 +691,7 @@ export default function AuditDetailPage() {
         </div>
 
         <ViolationsDonut findings={findings} mounted={mounted} />
+        <ResolutionDonut findings={findings} mounted={mounted} />
       </div>
 
       <div style={{ display: "flex", gap: "4px", marginBottom: "20px" }}>
