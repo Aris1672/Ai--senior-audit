@@ -312,6 +312,168 @@ interface AuditDetailData {
 
 const RISK_ORDER: RiskLevel[] = ["КРИТИЧНО", "СУЩЕСТВЕННО", "НЕСУЩЕСТВЕННО"];
 
+const RISK_CHART_CONFIG: Record<string, { color: string; label: string }> = {
+  "КРИТИЧНО":      { color: "#e84040", label: "Критично" },
+  "СУЩЕСТВЕННО":   { color: "#f59e0b", label: "Существенно" },
+  "НЕСУЩЕСТВЕННО": { color: "#2ecc8f", label: "Несущественно" },
+};
+
+function ViolationsDonut({ findings }: { findings: Finding[] }) {
+  const [progress, setProgress] = useState(0);
+  const [hovered, setHovered] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (findings.length === 0) return;
+    const start = performance.now();
+    const duration = 900;
+    const raf = (now: number) => {
+      const t = Math.min((now - start) / duration, 1);
+      // ease-out cubic
+      setProgress(1 - Math.pow(1 - t, 3));
+      if (t < 1) requestAnimationFrame(raf);
+    };
+    requestAnimationFrame(raf);
+  }, [findings.length]);
+
+  const total = findings.length;
+  if (total === 0) return null;
+
+  const segments = RISK_ORDER
+    .map(level => ({
+      level,
+      count: findings.filter(f => f.risk_level === level).length,
+      ...RISK_CHART_CONFIG[level],
+    }))
+    .filter(s => s.count > 0);
+
+  // SVG donut params
+  const size    = 140;
+  const cx      = size / 2;
+  const cy      = size / 2;
+  const r       = 52;
+  const stroke  = 18;
+  const circum  = 2 * Math.PI * r;
+
+  let offset = 0; // start from top
+  const arcs = segments.map(seg => {
+    const fraction   = seg.count / total;
+    const dashLen    = circum * fraction * progress;
+    const gapStart   = offset;
+    offset          += fraction;
+    return { ...seg, fraction, dashLen, gapStart };
+  });
+
+  const activeSegment = hovered ? segments.find(s => s.level === hovered) : null;
+
+  return (
+    <div style={{
+      background: "#080f1e",
+      border: "1px solid #1a2340",
+      borderRadius: "12px",
+      padding: "20px 24px",
+      marginTop: "16px",
+      display: "flex",
+      alignItems: "center",
+      gap: "32px",
+      flexWrap: "wrap",
+    }}>
+      {/* SVG Donut */}
+      <div style={{ position: "relative", width: size, height: size, flexShrink: 0 }}>
+        <svg width={size} height={size} style={{ transform: "rotate(-90deg)" }}>
+          {/* track */}
+          <circle
+            cx={cx} cy={cy} r={r}
+            fill="none"
+            stroke="#1a2340"
+            strokeWidth={stroke}
+          />
+          {arcs.map((arc, i) => (
+            <circle
+              key={i}
+              cx={cx} cy={cy} r={r}
+              fill="none"
+              stroke={arc.color}
+              strokeWidth={hovered === arc.level ? stroke + 4 : stroke}
+              strokeDasharray={`${arc.dashLen} ${circum}`}
+              strokeDashoffset={-arc.gapStart * circum}
+              style={{
+                transition: "stroke-width 0.15s ease",
+                cursor: "pointer",
+                filter: hovered === arc.level ? `drop-shadow(0 0 6px ${arc.color})` : "none",
+              }}
+              onMouseEnter={() => setHovered(arc.level)}
+              onMouseLeave={() => setHovered(null)}
+            />
+          ))}
+        </svg>
+        {/* Centre label */}
+        <div style={{
+          position: "absolute", inset: 0,
+          display: "flex", flexDirection: "column",
+          alignItems: "center", justifyContent: "center",
+          pointerEvents: "none",
+        }}>
+          {activeSegment ? (
+            <>
+              <div style={{ fontSize: "20px", fontWeight: "700", color: activeSegment.color, lineHeight: 1 }}>
+                {activeSegment.count}
+              </div>
+              <div style={{ fontSize: "9px", color: "#3d4f7a", marginTop: "2px", textAlign: "center", maxWidth: "50px" }}>
+                {activeSegment.label}
+              </div>
+            </>
+          ) : (
+            <>
+              <div style={{ fontSize: "24px", fontWeight: "700", color: "#e8edf8", lineHeight: 1 }}>
+                {total}
+              </div>
+              <div style={{ fontSize: "9px", color: "#3d4f7a", marginTop: "2px" }}>
+                нарушений
+              </div>
+            </>
+          )}
+        </div>
+      </div>
+
+      {/* Legend */}
+      <div style={{ display: "flex", flexDirection: "column", gap: "10px", flex: 1, minWidth: "160px" }}>
+        {arcs.map(arc => (
+          <div
+            key={arc.level}
+            onMouseEnter={() => setHovered(arc.level)}
+            onMouseLeave={() => setHovered(null)}
+            style={{
+              display: "flex", alignItems: "center", gap: "10px",
+              cursor: "pointer",
+              opacity: hovered && hovered !== arc.level ? 0.45 : 1,
+              transition: "opacity 0.15s",
+            }}
+          >
+            <div style={{
+              width: "10px", height: "10px", borderRadius: "50%",
+              background: arc.color, flexShrink: 0,
+              boxShadow: hovered === arc.level ? `0 0 6px ${arc.color}` : "none",
+              transition: "box-shadow 0.15s",
+            }} />
+            <div style={{ flex: 1, fontSize: "12px", color: "#7a90c0" }}>
+              {arc.label}
+            </div>
+            <div style={{ fontSize: "13px", fontWeight: "700", color: arc.color }}>
+              {arc.count}
+            </div>
+            <div style={{
+              fontSize: "11px", color: "#3d4f7a",
+              minWidth: "36px", textAlign: "right",
+            }}>
+              {Math.round(arc.fraction * 100)}%
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 const SESSION_STATUS: Record<string, { label: string; color: string }> = {
   active:    { label: "Активна",   color: "#2ecc8f" },
   completed: { label: "Завершена", color: "#7a90c0" },
@@ -450,6 +612,8 @@ export default function AuditDetailPage() {
             </div>
           ))}
         </div>
+
+        <ViolationsDonut findings={findings} />
       </div>
 
       <div style={{ display: "flex", gap: "4px", marginBottom: "20px" }}>
