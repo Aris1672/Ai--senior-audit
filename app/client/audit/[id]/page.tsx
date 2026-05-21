@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { getRiskColor, getRiskBgColor, type RiskLevel } from "@/lib/billing";
 
@@ -318,52 +318,99 @@ const RISK_CHART_CONFIG: Record<string, { color: string; label: string }> = {
   "НЕСУЩЕСТВЕННО": { color: "#2ecc8f", label: "Несущественно" },
 };
 
-function ViolationsDonut({ findings }: { findings: Finding[] }) {
-  const [progress, setProgress] = useState(0);
-  const [hovered, setHovered] = useState<string | null>(null);
+// Must live at module level so React never remounts it mid-animation
+function DonutCanvas({ segments, mounted }: {
+  segments: { color: string; fraction: number }[];
+  mounted: boolean;
+}) {
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const animRef   = useRef<number>(0);
 
   useEffect(() => {
-    if (findings.length === 0) return;
-    const start = performance.now();
-    const duration = 900;
-    const raf = (now: number) => {
-      const t = Math.min((now - start) / duration, 1);
-      // ease-out cubic
-      setProgress(1 - Math.pow(1 - t, 3));
-      if (t < 1) requestAnimationFrame(raf);
-    };
-    requestAnimationFrame(raf);
-  }, [findings.length]);
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
 
+    const cx = 75, cy = 75, r = 58, lw = 16;
+    const START    = -Math.PI / 2; // 12 o'clock
+    const GAP      = 0.03;         // gap between arcs in radians
+    const duration = 1200;
+    let startTime: number | null = null;
+
+    const ease = (t: number) => 1 - Math.pow(1 - t, 3);
+
+    const draw = (progress: number) => {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+      // Track ring
+      ctx.beginPath();
+      ctx.arc(cx, cy, r, 0, 2 * Math.PI);
+      ctx.strokeStyle = "#1a2340";
+      ctx.lineWidth = lw;
+      ctx.stroke();
+
+      // All segments drawn in one loop per frame — no separate state per arc
+      const totalSwept = 2 * Math.PI * progress;
+      let cursor = 0; // how many radians we've "consumed" across segments
+
+      segments.forEach((seg) => {
+        const segAngle = 2 * Math.PI * seg.fraction;
+        const segStart = cursor;
+        const segEnd   = cursor + segAngle;
+
+        // How much of this segment is visible at current progress?
+        const visibleEnd   = Math.min(totalSwept, segEnd);
+        const visibleStart = Math.min(totalSwept, segStart + GAP);
+        const swept        = Math.max(0, visibleEnd - visibleStart);
+
+        if (swept > 0) {
+          ctx.beginPath();
+          ctx.arc(cx, cy, r, START + visibleStart, START + visibleStart + swept);
+          ctx.strokeStyle = seg.color;
+          ctx.lineWidth   = lw;
+          ctx.lineCap     = "butt";
+          ctx.stroke();
+        }
+        cursor = segEnd;
+      });
+    };
+
+    const animate = (ts: number) => {
+      if (!startTime) startTime = ts;
+      const p = ease(Math.min((ts - startTime) / duration, 1));
+      draw(p);
+      if (p < 1) animRef.current = requestAnimationFrame(animate);
+    };
+
+    animRef.current = requestAnimationFrame(animate);
+    return () => cancelAnimationFrame(animRef.current);
+  }, [mounted, segments]);
+
+  const dpr = typeof window !== "undefined" ? window.devicePixelRatio || 1 : 1;
+  return (
+    <canvas
+      ref={canvasRef}
+      width={150 * dpr}
+      height={150 * dpr}
+      style={{ width: 150, height: 150, transform: `scale(${1 / dpr})`, transformOrigin: "top left" }}
+    />
+  );
+}
+
+function ViolationsDonut({ findings, mounted }: { findings: Finding[]; mounted: boolean }) {
   const total = findings.length;
   if (total === 0) return null;
 
   const segments = RISK_ORDER
     .map(level => ({
       level,
-      count: findings.filter(f => f.risk_level === level).length,
-      ...RISK_CHART_CONFIG[level],
+      count:    findings.filter(f => f.risk_level === level).length,
+      color:    RISK_CHART_CONFIG[level].color,
+      label:    RISK_CHART_CONFIG[level].label,
+      fraction: findings.filter(f => f.risk_level === level).length / total,
     }))
     .filter(s => s.count > 0);
-
-  // SVG donut params
-  const size    = 140;
-  const cx      = size / 2;
-  const cy      = size / 2;
-  const r       = 52;
-  const stroke  = 18;
-  const circum  = 2 * Math.PI * r;
-
-  let offset = 0; // start from top
-  const arcs = segments.map(seg => {
-    const fraction   = seg.count / total;
-    const dashLen    = circum * fraction * progress;
-    const gapStart   = offset;
-    offset          += fraction;
-    return { ...seg, fraction, dashLen, gapStart };
-  });
-
-  const activeSegment = hovered ? segments.find(s => s.level === hovered) : null;
 
   return (
     <div style={{
@@ -374,38 +421,12 @@ function ViolationsDonut({ findings }: { findings: Finding[] }) {
       marginTop: "16px",
       display: "flex",
       alignItems: "center",
-      gap: "32px",
+      gap: "28px",
       flexWrap: "wrap",
     }}>
-      {/* SVG Donut */}
-      <div style={{ position: "relative", width: size, height: size, flexShrink: 0 }}>
-        <svg width={size} height={size} style={{ transform: "rotate(-90deg)" }}>
-          {/* track */}
-          <circle
-            cx={cx} cy={cy} r={r}
-            fill="none"
-            stroke="#1a2340"
-            strokeWidth={stroke}
-          />
-          {arcs.map((arc, i) => (
-            <circle
-              key={i}
-              cx={cx} cy={cy} r={r}
-              fill="none"
-              stroke={arc.color}
-              strokeWidth={hovered === arc.level ? stroke + 4 : stroke}
-              strokeDasharray={`${arc.dashLen} ${circum}`}
-              strokeDashoffset={-arc.gapStart * circum}
-              style={{
-                transition: "stroke-width 0.15s ease",
-                cursor: "pointer",
-                filter: hovered === arc.level ? `drop-shadow(0 0 6px ${arc.color})` : "none",
-              }}
-              onMouseEnter={() => setHovered(arc.level)}
-              onMouseLeave={() => setHovered(null)}
-            />
-          ))}
-        </svg>
+      {/* Canvas donut */}
+      <div style={{ position: "relative", width: 150, height: 150, flexShrink: 0 }}>
+        <DonutCanvas segments={segments} mounted={mounted} />
         {/* Centre label */}
         <div style={{
           position: "absolute", inset: 0,
@@ -413,60 +434,28 @@ function ViolationsDonut({ findings }: { findings: Finding[] }) {
           alignItems: "center", justifyContent: "center",
           pointerEvents: "none",
         }}>
-          {activeSegment ? (
-            <>
-              <div style={{ fontSize: "20px", fontWeight: "700", color: activeSegment.color, lineHeight: 1 }}>
-                {activeSegment.count}
-              </div>
-              <div style={{ fontSize: "9px", color: "#3d4f7a", marginTop: "2px", textAlign: "center", maxWidth: "50px" }}>
-                {activeSegment.label}
-              </div>
-            </>
-          ) : (
-            <>
-              <div style={{ fontSize: "24px", fontWeight: "700", color: "#e8edf8", lineHeight: 1 }}>
-                {total}
-              </div>
-              <div style={{ fontSize: "9px", color: "#3d4f7a", marginTop: "2px" }}>
-                нарушений
-              </div>
-            </>
-          )}
+          <div style={{ fontSize: "26px", fontWeight: "700", color: "#e8edf8", lineHeight: 1 }}>
+            {total}
+          </div>
+          <div style={{ fontSize: "10px", color: "#3d4f7a", marginTop: "3px" }}>
+            нарушений
+          </div>
         </div>
       </div>
 
       {/* Legend */}
-      <div style={{ display: "flex", flexDirection: "column", gap: "10px", flex: 1, minWidth: "160px" }}>
-        {arcs.map(arc => (
-          <div
-            key={arc.level}
-            onMouseEnter={() => setHovered(arc.level)}
-            onMouseLeave={() => setHovered(null)}
-            style={{
-              display: "flex", alignItems: "center", gap: "10px",
-              cursor: "pointer",
-              opacity: hovered && hovered !== arc.level ? 0.45 : 1,
-              transition: "opacity 0.15s",
-            }}
-          >
-            <div style={{
-              width: "10px", height: "10px", borderRadius: "50%",
-              background: arc.color, flexShrink: 0,
-              boxShadow: hovered === arc.level ? `0 0 6px ${arc.color}` : "none",
-              transition: "box-shadow 0.15s",
+      <div style={{ display: "flex", flexDirection: "column", gap: "12px", flex: 1, minWidth: "160px" }}>
+        {segments.map(seg => (
+          <div key={seg.level} style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+            <span style={{
+              width: "8px", height: "8px", borderRadius: "2px",
+              background: seg.color, flexShrink: 0,
             }} />
-            <div style={{ flex: 1, fontSize: "12px", color: "#7a90c0" }}>
-              {arc.label}
-            </div>
-            <div style={{ fontSize: "13px", fontWeight: "700", color: arc.color }}>
-              {arc.count}
-            </div>
-            <div style={{
-              fontSize: "11px", color: "#3d4f7a",
-              minWidth: "36px", textAlign: "right",
-            }}>
-              {Math.round(arc.fraction * 100)}%
-            </div>
+            <span style={{ fontSize: "12px", color: "#7a90c0", flex: 1 }}>{seg.label}</span>
+            <span style={{ fontSize: "14px", fontWeight: "700", color: seg.color }}>{seg.count}</span>
+            <span style={{ fontSize: "11px", color: "#3d4f7a", minWidth: "34px", textAlign: "right" }}>
+              {Math.round(seg.fraction * 100)}%
+            </span>
           </div>
         ))}
       </div>
@@ -487,6 +476,7 @@ export default function AuditDetailPage() {
 
   const [data,    setData]    = useState<AuditDetailData | null>(null);
   const [loading, setLoading] = useState(true);
+  const [mounted, setMounted] = useState(false);
   const [tab,     setTab]     = useState<"findings" | "chat">("findings");
 
   useEffect(() => {
@@ -503,6 +493,12 @@ export default function AuditDetailPage() {
     }
     load();
   }, [sessionId]);
+
+  useEffect(() => {
+    if (!loading) {
+      requestAnimationFrame(() => requestAnimationFrame(() => setMounted(true)));
+    }
+  }, [loading]);
 
   if (loading) return (
     <div style={{ color: "#7a90c0", fontFamily: "system-ui, sans-serif", padding: "40px" }}>
@@ -613,7 +609,7 @@ export default function AuditDetailPage() {
           ))}
         </div>
 
-        <ViolationsDonut findings={findings} />
+        <ViolationsDonut findings={findings} mounted={mounted} />
       </div>
 
       <div style={{ display: "flex", gap: "4px", marginBottom: "20px" }}>
