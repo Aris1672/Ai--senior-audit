@@ -46,6 +46,43 @@ User message
 
 ---
 
+## LLM Selection Testing — GigaChat vs YandexGPT (Phase 2 Decision)
+
+Three rounds of testing conducted with a real 1C bank transaction file (Апрель–Сентябрь 2024, 135 operations, 7 461 326.61 руб.).
+
+### Test Results Summary
+
+| Category | GigaChat Max | YandexGPT 5 Pro |
+|---|---|---|
+| Quantitative accuracy | ⭐⭐⭐ | ⭐ |
+| Finding depth | ⭐⭐⭐⭐⭐ | ⭐⭐⭐ |
+| Legal citations | ⭐⭐⭐⭐⭐ | ⭐⭐ |
+| System prompt compliance | ⭐⭐⭐ | ⭐⭐⭐⭐ |
+| Hallucination resistance | ⭐⭐⭐ | ⭐ |
+| Actionability | ⭐⭐⭐⭐⭐ | ⭐⭐⭐ |
+| **Overall** | **⭐⭐⭐⭐** | **⭐⭐** |
+
+### Key Findings
+- GigaChat correctly cited ст. 54.1 НК РФ (anti-abuse), ст. 252 НК РФ, ФСАД 8/2018 — YandexGPT missed these entirely
+- GigaChat found the duplicate payment (ИП Радюков, 70 000 руб.) — YandexGPT missed it in all tests
+- YandexGPT produced wildly wrong totals (24.8M руб. vs actual 7.46M руб.) — disqualifying for a financial audit tool
+- GigaChat correctly identified card2card payments to individuals with specific row references
+
+### XLS Multi-Sheet Discovery
+The 1C XLS export contains **two sheets**:
+- **Sheet 1 "Без подтверждающих документов"** — 135 rows, Apr–Sep 2024, 7 461 326.61 руб. (audit focus)
+- **Sheet 2 "Полный список"** — 178 rows, full transaction list including partially documented operations
+
+**Action required:** Update `lib/file-parser.ts` to handle multi-sheet XLS files and expose both sheets to the audit agent for complete analysis.
+
+**Critical rule confirmed by testing:** Never send raw XLS binary files directly to the LLM. Always use `lib/file-parser.ts` to parse and convert to structured text first. The existing parser architecture is correct and essential.
+
+### Decision
+**GigaChat Max confirmed as Phase 2 LLM** for main audit reasoning.
+**GigaChat Pro** for findings extraction (replaces Haiku 4.5).
+
+---
+
 ## Deployment Strategy
 
 ### Phase 1 — Demo (Current)
@@ -56,23 +93,22 @@ Keep the existing stack as-is for demo and client acquisition:
 ### Phase 2 — Production (Per Russian Client, on contract signing)
 When a client is ready to sign, spin up a **dedicated instance** for that client with a fully compliant Russian stack.
 
-**Infrastructure provider: SpaceWeb** (cp.sweb.ru) — existing account, single billing, all services in one place.
+**Infrastructure provider: SpaceWeb Cloud** (`vps.sweb.ru`) — account registered, domain purchased, single billing, all services in one place.
 
 | Component | Demo (Current) | Production (Per Client) |
 |---|---|---|
 | Hosting | Vercel (US) | SpaceWeb Облачный сервер / VPS (Russia) |
-| Database | Supabase PostgreSQL (US) | SpaceWeb DBaaS — Managed PostgreSQL (Russia) |
+| Database | Supabase PostgreSQL (US) | SpaceWeb DBaaS — Managed PostgreSQL 17 (Russia) |
 | File Storage | Supabase Storage (US) | SpaceWeb S3-хранилище — S3-compatible (Russia) |
-| Email | — | SpaceWeb Почта — SMTP (Russia) |
+| Email | — | SpaceWeb Почта — SMTP via `assistant24.tech` |
 | Auth | Supabase Auth | NextAuth.js + own PostgreSQL |
 | LLM | Sonnet 4.6 (audit) + Haiku 4.5 (findings extraction) | GigaChat Max (audit) + GigaChat Pro (findings extraction) |
 | Compliance | Demo only | Federal Law No. 242-FZ compliant |
 
 ### Why SpaceWeb
-- Existing account — no new vendor onboarding
-- DBaaS = managed PostgreSQL, no manual DB admin
+- Account already registered at `vps.sweb.ru` ✅
+- DBaaS = managed PostgreSQL 17, no manual DB admin
 - S3-compatible storage = near-zero code changes (swap endpoint URL only)
-- Built-in email (SpaceWeb Почта) covers email notifications TODO
 - Single billing for all infrastructure
 - Physically located in Russia — fully 242-FZ compliant
 
@@ -87,11 +123,16 @@ When a client is ready to sign, spin up a **dedicated instance** for that client
 - **GigaChat Lite** — not suitable for audit use
 
 ### Domain Strategy
-- **No new domain needed** — use subdomains of existing `assistant24.tech`
-- Per client: `client1.assistant24.tech`, `client2.assistant24.tech`, etc.
-- DNS: add an A record in `cp.sweb.ru` pointing the subdomain to the SpaceWeb VPS IP
-- SSL: GlobalSign AlphaSSL available free via `cp.sweb.ru` ✅
-- ⚠️ **URGENT: `assistant24.tech` expires 15.07.2026** — renew before Phase 2 setup (7,607 ₽)
+- **`assistant24tech.ru`** — dedicated to AI Senior Auditor client deployments ✅
+  - Registered in SpaceWeb Cloud (`vps.sweb.ru`) ✅
+  - Paid until 27.05.2027 ✅
+  - SSL: ❌ not yet issued — request Let's Encrypt via SpaceWeb Cloud domain panel (free, auto-renews every 90 days)
+  - Автопродление: enable before expiry
+  - Per client: `client1.assistant24tech.ru`, `client2.assistant24tech.ru`, etc.
+  - DNS: add A record in SpaceWeb Cloud pointing subdomain → VPS IP
+- **`assistant24.tech`** — kept separate, company homepage and landing pages only. Do not use for client deployments.
+  - SSL ✅ active (via `cp.sweb.ru`)
+  - DDoS protection ✅ active
 
 ### SMTP / Email
 - **Resolved** — SpaceWeb Почта on `cp.sweb.ru` with `assistant24.tech` is already available
@@ -113,16 +154,16 @@ When a client is ready to sign, spin up a **dedicated instance** for that client
 
 ### Phase 2 Migration Checklist (per client)
 **Before starting**
-- [ ] ⚠️ Renew `assistant24.tech` — expires 15.07.2026 (7,607 ₽)
 - [ ] Register GigaChat B2B API — developers.sber.ru/gigachat
 - [ ] Download Russian CA certificate — gosuslugi.ru (`russian_trusted_root_ca.cer`)
+- [ ] Enable Автопродление for `assistant24tech.ru` in SpaceWeb Cloud
 
-**Infrastructure (SpaceWeb)**
+**Infrastructure (SpaceWeb Cloud)**
 - [ ] Provision SpaceWeb Cloud VPS (`vps.sweb.ru` → Виртуальные серверы)
 - [ ] Create SpaceWeb DBaaS PostgreSQL 17 instance (398 ₽/мес, enable replicas)
 - [ ] Create SpaceWeb S3 bucket for audit documents
-- [ ] Add DNS A record in `cp.sweb.ru`: `clientN.assistant24.tech` → VPS IP
-- [ ] Issue GlobalSign AlphaSSL certificate for the subdomain (free via `cp.sweb.ru`)
+- [ ] Add DNS A record: `clientN.assistant24tech.ru` → VPS IP
+- [ ] Issue SSL certificate for the subdomain (already have SSL on root domain)
 - [ ] Configure Nginx reverse proxy on VPS (subdomain → Next.js port)
 - [ ] Install PM2 on VPS (`npm install -g pm2`)
 - [ ] Whitelist only VPS IP in SpaceWeb DBaaS access rules (never 0.0.0.0/0)
@@ -136,6 +177,7 @@ When a client is ready to sign, spin up a **dedicated instance** for that client
 - [ ] Verify all tables: profiles, pricing_tiers, client_subscriptions, audit_sessions, transactions, findings, audit_messages, documents, usage_events
 
 **Code changes**
+- [ ] Update `lib/file-parser.ts` — handle multi-sheet XLS files, expose both sheets to audit agent
 - [ ] Swap Supabase DB client → `pg` (node-postgres) pointed at SpaceWeb DBaaS
 - [ ] Swap Supabase Storage → `@aws-sdk/client-s3` pointed at SpaceWeb S3 endpoint
 - [ ] Install NextAuth.js, configure Credentials provider against own PostgreSQL (biggest dev task)
@@ -189,6 +231,7 @@ audit_messages, documents, usage_events
 - [x] Admin: per-client audit billing log
 - [x] Admin dashboard: unpaid metrics + donut chart
 - [x] Client portal: audit history page (audits currently open chat only; no standalone history/detail view)
+- [ ] Multi-sheet XLS parser (lib/file-parser.ts — expose both sheets to audit agent)
 - [ ] 1C live connection testing
 - [ ] Report generation in Russian
 - [ ] Email notifications
