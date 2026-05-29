@@ -8,7 +8,7 @@
  */
 
 import { createAdminClient } from "@/lib/supabase-server";
-import { parseFile } from "@/lib/file-parser";
+import { parseFile, is1CClientBankExchange } from "@/lib/file-parser";
 import { NextRequest, NextResponse } from "next/server";
 
 const ALLOWED_TYPES: Record<string, string> = {
@@ -22,9 +22,11 @@ const ALLOWED_TYPES: Record<string, string> = {
   "image/png":        "image",
   "application/vnd.ms-excel": "xls",
   "application/msword":      "doc",
+  // 1C bank exchange — banks export as plain text, MIME is often text/plain
+  "text/plain":       "txt",
 };
 
-const PARSEABLE = new Set(["xlsx", "xls", "csv", "xml", "docx", "doc"]);
+const PARSEABLE = new Set(["xlsx", "xls", "csv", "xml", "docx", "doc", "1c_txt"]);
 const MAX_FILE_SIZE = 50 * 1024 * 1024; // 50 MB
 
 export async function POST(req: NextRequest) {
@@ -48,10 +50,11 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const fileType = ALLOWED_TYPES[file.type];
+    // Determine fileType from MIME; for plain text we sniff content below
+    let fileType = ALLOWED_TYPES[file.type];
     if (!fileType) {
       return NextResponse.json(
-        { error: "Неподдерживаемый формат. Разрешены: PDF, XLSX, XLS, DOCX, DOC, CSV, XML, JPG, PNG" },
+        { error: "Неподдерживаемый формат. Разрешены: PDF, XLSX, XLS, DOCX, DOC, CSV, XML, TXT (1C), JPG, PNG" },
         { status: 400 }
       );
     }
@@ -77,6 +80,19 @@ export async function POST(req: NextRequest) {
     const safeName    = file.name.replace(/[^a-zA-Z0-9._-]/g, "_");
     const storagePath = `${clientId}/${sessionId}/${timestamp}_${safeName}`;
     const arrayBuffer = await file.arrayBuffer();
+
+    // ── Sniff 1C format: text/plain files are re-classified if they start with
+    //    the "1CClientBankExchange" magic string. Done after reading arrayBuffer
+    //    so we only read the file once.
+    if (fileType === "txt") {
+      fileType = is1CClientBankExchange(arrayBuffer) ? "1c_txt" : "txt";
+      if (fileType === "txt") {
+        return NextResponse.json(
+          { error: "Текстовый файл не является форматом 1CClientBankExchange. Убедитесь, что файл выгружен из банка в формате 1C." },
+          { status: 400 }
+        );
+      }
+    }
 
     const { error: uploadError } = await supabase.storage
       .from("audit-documents")
@@ -126,7 +142,7 @@ export async function POST(req: NextRequest) {
     // another HTTP hop. Run after response is returned using waitUntil-style
     // fire-and-forget (no await).
     if (PARSEABLE.has(fileType)) {
-      parseFile(arrayBuffer, fileType as "xlsx" | "xls" | "csv" | "xml" | "docx" | "doc")
+      parseFile(arrayBuffer, fileType as "xlsx" | "xls" | "csv" | "xml" | "docx" | "doc" | "1c_txt")
         .then((result) =>
           supabase
             .from("documents")

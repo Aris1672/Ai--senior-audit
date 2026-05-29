@@ -57,7 +57,7 @@ export interface Document {
   client_id: string;
   session_id: string;
   file_name: string;
-  file_type: "xlsx" | "csv" | "xml" | "pdf" | "docx" | "image";
+  file_type: "xlsx" | "csv" | "xml" | "pdf" | "docx" | "image" | "1c_txt";
   file_size: number;
   storage_path: string;
   status: "processing" | "ready" | "error";
@@ -137,6 +137,8 @@ export interface ParseFileResponse {
   sheetName?: string;
   detectedColumns?: string[];
   xmlElement?: string;
+  /** Populated when parseMethod === "1c_txt" */
+  c1AccountSummary?: import("@/lib/file-parser").C1AccountSummary;
 }
 
 export type ApiError = { error: string };

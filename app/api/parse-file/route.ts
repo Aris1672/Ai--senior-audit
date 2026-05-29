@@ -5,14 +5,14 @@
  * counts transaction rows, caches the result in documents.parsed_data.
  *
  * POST { documentId: string }
- * → { documentId, rowCount, parseMethod, sheetName?, detectedColumns?, xmlElement? }
+ * → { documentId, rowCount, parseMethod, sheetName?, detectedColumns?, xmlElement?, c1AccountSummary? }
  */
 
 import { createAdminClient } from "@/lib/supabase-server";
-import { parseFile, type ParseResult } from "@/lib/file-parser";
+import { parseFile, is1CClientBankExchange, type ParseResult } from "@/lib/file-parser";
 import { NextRequest, NextResponse } from "next/server";
 
-const PARSEABLE = new Set(["xlsx", "csv", "xml"]);
+const PARSEABLE = new Set(["xlsx", "csv", "xml", "xls", "docx", "doc", "1c_txt"]);
 
 export async function POST(req: NextRequest) {
   try {
@@ -42,12 +42,13 @@ export async function POST(req: NextRequest) {
     if (doc.status === "ready" && doc.parsed_data?.rowCount != null) {
       const p: ParseResult = doc.parsed_data;
       return NextResponse.json({
-        documentId: doc.id,
-        rowCount:        p.rowCount,
-        parseMethod:     p.parseMethod,
-        sheetName:       p.sheetName,
-        detectedColumns: p.detectedColumns,
-        xmlElement:      p.xmlElement,
+        documentId:       doc.id,
+        rowCount:         p.rowCount,
+        parseMethod:      p.parseMethod,
+        sheetName:        p.sheetName,
+        detectedColumns:  p.detectedColumns,
+        xmlElement:       p.xmlElement,
+        c1AccountSummary: p.c1AccountSummary,
       });
     }
 
@@ -76,8 +77,14 @@ export async function POST(req: NextRequest) {
     }
 
     // ── Parse ─────────────────────────────────────────────────────────────
-    const buffer = await blob.arrayBuffer();
-    const result = await parseFile(buffer, doc.file_type as "xlsx" | "csv" | "xml");
+    const buffer   = await blob.arrayBuffer();
+
+    // Re-verify 1C files in case the stored file_type is the legacy "txt"
+    const fileType = doc.file_type === "txt" && is1CClientBankExchange(buffer)
+      ? "1c_txt"
+      : doc.file_type as "xlsx" | "xls" | "csv" | "xml" | "docx" | "doc" | "1c_txt";
+
+    const result   = await parseFile(buffer, fileType);
 
     // ── Cache result in documents table ───────────────────────────────────
     await supabase
@@ -86,12 +93,13 @@ export async function POST(req: NextRequest) {
       .eq("id", documentId);
 
     return NextResponse.json({
-      documentId:      doc.id,
-      rowCount:        result.rowCount,
-      parseMethod:     result.parseMethod,
-      sheetName:       result.sheetName,
-      detectedColumns: result.detectedColumns,
-      xmlElement:      result.xmlElement,
+      documentId:       doc.id,
+      rowCount:         result.rowCount,
+      parseMethod:      result.parseMethod,
+      sheetName:        result.sheetName,
+      detectedColumns:  result.detectedColumns,
+      xmlElement:       result.xmlElement,
+      c1AccountSummary: result.c1AccountSummary,
     });
 
   } catch (err) {
