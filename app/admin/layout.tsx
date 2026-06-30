@@ -1,6 +1,5 @@
 "use client";
 
-import { createClient } from "@/lib/supabase-client";
 import { useRouter, usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
 
@@ -14,7 +13,6 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
   const [checking, setChecking] = useState(true);
   const router   = useRouter();
   const pathname = usePathname();
-  const supabase = createClient();
 
 useEffect(() => {
   async function checkAdmin() {
@@ -44,7 +42,8 @@ useEffect(() => {
 }, []);
 
   async function handleLogout() {
-    await supabase.auth.signOut();
+    // All auth goes through Vercel → Supabase, never direct from browser
+    await fetch("/api/auth/logout", { method: "POST" });
     router.push("/login");
   }
 
