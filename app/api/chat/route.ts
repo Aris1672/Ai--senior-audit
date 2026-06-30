@@ -1,6 +1,6 @@
 import { anthropic, AUDIT_SYSTEM_PROMPT, buildAuditContext, SONNET_MODEL, HAIKU_MODEL } from "@/lib/anthropic";
 import { createAdminClient } from "@/lib/supabase-server";
-import { parseFile } from "@/lib/file-parser";
+import { parseFile, renderPDFPagesAsImages } from "@/lib/file-parser";
 import { NextRequest, NextResponse } from "next/server";
 
 // ─── Fetch + parse ALL documents linked to this session ───────────────────────
@@ -90,7 +90,36 @@ async function getAllDocumentsContent(
       );
 
       console.log("[chat]", doc.file_name, "— rowCount:", parsed.rowCount,
-        "textContent length:", parsed.textContent?.length ?? 0);
+        "textContent length:", parsed.textContent?.length ?? 0,
+        "likelyScanned:", parsed.likelyScanned ?? false);
+
+      // ── Scanned PDF fallback: render pages as images, route through vision ──
+      // parsePDF() sets likelyScanned=true when it found no real text layer
+      // (common for photographed/scanned invoices, contracts, statements).
+      // Instead of sending the AI an empty document, render each page to a
+      // PNG and attach it the same way as a directly-uploaded JPG/PNG.
+      if (doc.file_type === "pdf" && parsed.likelyScanned) {
+        console.log("[chat]", doc.file_name, "— scanned PDF detected, rendering pages as images");
+        const pageImages = await renderPDFPagesAsImages(arrayBuffer, 10);
+
+        if (pageImages.length > 0) {
+          for (const page of pageImages) {
+            images.push({
+              fileName: `${doc.file_name} (стр. ${page.pageNumber})`,
+              mediaType: page.mediaType,
+              base64: page.base64,
+            });
+          }
+          sections.push(
+            `[Документ: ${doc.file_name} — отсканированный PDF, ${pageImages.length} стр. передано модели как изображения для визуального анализа]`
+          );
+        } else {
+          sections.push(
+            `[Документ: ${doc.file_name} — отсканированный PDF, не удалось отрендерить страницы как изображения]`
+          );
+        }
+        continue;
+      }
 
       const header = [
         `Файл: ${doc.file_name}`,

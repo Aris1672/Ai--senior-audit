@@ -24,6 +24,17 @@ export interface ParseResult {
   textContent?: string;
   // 1C bank statement extras
   c1AccountSummary?: C1AccountSummary;
+  // PDF extra: true when pdf-parse found no embedded text layer (likely a
+  // scanned document), signaling the caller should render pages as images
+  // and route them through vision instead of relying on textContent.
+  likelyScanned?: boolean;
+}
+
+/** A single rendered PDF page, ready to send to Claude's vision input. */
+export interface PDFPageImage {
+  pageNumber: number;
+  mediaType: "image/png";
+  base64: string;
 }
 
 /** Summary section from the СекцияРасчСчет block of a 1CClientBankExchange file. */
@@ -366,22 +377,33 @@ export async function parseDOC(buffer: ArrayBuffer): Promise<ParseResult> {
 
 // ─── PDF ──────────────────────────────────────────────────────────────────────
 // Extracts text from text-based PDFs (invoices, contracts, statements, etc.)
-// using pdf-parse. This does NOT work for scanned/image-only PDFs — those
-// have no embedded text layer and need OCR, which this function does not do.
-// Such PDFs will return an empty or near-empty textContent; callers should
-// treat a very low rowCount as a signal the PDF may be scanned, not text.
+// using pdf-parse. This does NOT do OCR — pdf-parse only reads PDFs that
+// already have an embedded text layer. Scanned/photographed documents have
+// no such layer; for those, set likelyScanned=true so the caller can render
+// pages as images and route them through Claude's vision instead (see
+// renderPDFPagesAsImages below).
 export async function parsePDF(buffer: ArrayBuffer): Promise<ParseResult> {
   try {
     const pdfParse = (await import("pdf-parse")).default;
     const result   = await pdfParse(Buffer.from(buffer));
     const rawText  = (result.text || "").trim();
+    const numPages = result.numpages || 1;
 
-    if (rawText.length === 0) {
+    // Heuristic: near-zero text relative to page count means there's
+    // essentially no real text layer (a few stray characters from a stamp
+    // or watermark shouldn't count as "has text"). ~20 chars/page is a
+    // conservative floor — genuine text documents are always far above this.
+    const avgCharsPerPage = rawText.length / numPages;
+    const likelyScanned   = avgCharsPerPage < 20;
+
+    if (likelyScanned) {
       return {
-        rowCount:    0,
-        parseMethod: "pdf",
-        textContent: "[PDF не содержит извлекаемого текста — возможно, это скан. Текстовый слой отсутствует.]",
-        parsedAt:    now(),
+        rowCount:      0,
+        parseMethod:   "pdf",
+        likelyScanned: true,
+        textContent:   "[PDF не содержит извлекаемого текста — вероятно, это скан. Страницы будут переданы модели как изображения.]",
+        detectedColumns: [`Страниц: ${numPages}`],
+        parsedAt:      now(),
       };
     }
 
@@ -396,7 +418,7 @@ export async function parsePDF(buffer: ArrayBuffer): Promise<ParseResult> {
     return {
       rowCount,
       parseMethod: "pdf",
-      detectedColumns: result.numpages ? [`Страниц: ${result.numpages}`] : undefined,
+      detectedColumns: [`Страниц: ${numPages}`],
       textContent,
       parsedAt: now(),
     };
@@ -408,6 +430,67 @@ export async function parsePDF(buffer: ArrayBuffer): Promise<ParseResult> {
       textContent: "[Не удалось прочитать содержимое файла PDF]",
       parsedAt:    now(),
     };
+  }
+}
+
+// ─── Scanned PDF → images (vision fallback) ───────────────────────────────────
+// Renders PDF pages to PNG images so they can be sent through Claude's native
+// vision instead of text extraction. Used when parsePDF() sets
+// likelyScanned=true. Uses pdfjs-dist for rendering, paired with
+// @napi-rs/canvas (prebuilt binaries, no native build step) instead of the
+// standard "canvas" package, which requires compiling Cairo and is fragile
+// on Vercel's serverless build environment.
+//
+// Dependencies required (add to package.json):
+//   "pdfjs-dist": "^4.x"
+//   "@napi-rs/canvas": "^0.1.x"
+export async function renderPDFPagesAsImages(
+  buffer: ArrayBuffer,
+  maxPages = 10
+): Promise<PDFPageImage[]> {
+  try {
+    // Use the legacy build — it doesn't assume a DOM/Worker environment,
+    // which matters since this runs in a Vercel Node.js serverless function,
+    // not a browser.
+    const pdfjsLib = await import("pdfjs-dist/legacy/build/pdf.mjs");
+    const { createCanvas } = await import("@napi-rs/canvas");
+
+    // No web worker available server-side — run rendering on the main thread.
+    pdfjsLib.GlobalWorkerOptions.workerSrc = "";
+
+    const loadingTask = pdfjsLib.getDocument({ data: new Uint8Array(buffer) });
+    const pdf = await loadingTask.promise;
+
+    const pageCount = Math.min(pdf.numPages, maxPages);
+    const images: PDFPageImage[] = [];
+
+    if (pdf.numPages > maxPages) {
+      console.warn(`[file-parser] PDF has ${pdf.numPages} pages, rendering only first ${maxPages} for vision`);
+    }
+
+    for (let i = 1; i <= pageCount; i++) {
+      const page = await pdf.getPage(i);
+      // scale 1.5 balances legibility (small print, stamps, signatures)
+      // against image size / token cost — higher scale = sharper but pricier.
+      const viewport = page.getViewport({ scale: 1.5 });
+
+      const canvas = createCanvas(Math.ceil(viewport.width), Math.ceil(viewport.height));
+      const ctx    = canvas.getContext("2d");
+
+      await page.render({ canvasContext: ctx as any, viewport }).promise;
+
+      const pngBuffer = canvas.toBuffer("image/png");
+      images.push({
+        pageNumber: i,
+        mediaType:  "image/png",
+        base64:     pngBuffer.toString("base64"),
+      });
+    }
+
+    return images;
+  } catch (err) {
+    console.error("[file-parser] renderPDFPagesAsImages failed:", err);
+    return [];
   }
 }
 
