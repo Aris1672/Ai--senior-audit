@@ -384,7 +384,12 @@ export async function parseDOC(buffer: ArrayBuffer): Promise<ParseResult> {
 // renderPDFPagesAsImages below).
 export async function parsePDF(buffer: ArrayBuffer): Promise<ParseResult> {
   try {
-    const pdfParse = (await import("pdf-parse")).default;
+    // pdf-parse's ESM build doesn't declare a `.default` export in its types
+    // even though some versions provide one at runtime — cast to `any` and
+    // fall back to the namespace itself so this works regardless of which
+    // shape the installed version actually exports, without a TS error.
+    const pdfParseModule: any = await import("pdf-parse");
+    const pdfParse = pdfParseModule.default ?? pdfParseModule;
     const result   = await pdfParse(Buffer.from(buffer));
     const rawText  = (result.text || "").trim();
     const numPages = result.numpages || 1;
