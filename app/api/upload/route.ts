@@ -26,7 +26,7 @@ const ALLOWED_TYPES: Record<string, string> = {
   "text/plain":       "txt",
 };
 
-const PARSEABLE = new Set(["xlsx", "xls", "csv", "xml", "docx", "doc", "1c_txt"]);
+const PARSEABLE = new Set(["xlsx", "xls", "csv", "xml", "docx", "doc", "pdf","1c_txt"]);
 const MAX_FILE_SIZE = 50 * 1024 * 1024; // 50 MB
 
 export async function POST(req: NextRequest) {

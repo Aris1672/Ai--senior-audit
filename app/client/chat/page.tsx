@@ -376,7 +376,7 @@ export default function ChatPage() {
 
       {/* Input row */}
       <div style={{ display: "flex", gap: "10px", alignItems: "flex-end" }}>
-        <input ref={fileInputRef} type="file" accept=".xlsx,.csv,.xml,.xls,.pdf,.docx" style={{ display: "none" }} onChange={handleFileSelect} />
+        <input ref={fileInputRef} type="file" accept=".xlsx,.csv,.xml,.xls,.pdf,.docx,.doc,.txt" style={{ display: "none" }} onChange={handleFileSelect} />
 
         <button onClick={() => fileInputRef.current?.click()} disabled={loading || uploading || auditCompleted} title="Прикрепить документ" style={{
           width: "48px", height: "48px", flexShrink: 0,

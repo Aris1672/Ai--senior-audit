@@ -314,7 +314,7 @@ export default function NewAuditPage() {
                   Excel (.xlsx, .xls), CSV, XML, DOCX, DOC, TXT (1C-Клиент банк) · Максимум 50MB
                 </div>
                 <input ref={fileRef} type="file" style={{ display: "none" }}
-                  accept=".xlsx,.csv,.xml,.xls,.docx,.doc,.txt"
+                  accept=".xlsx,.csv,.xml,.xls,.docx,.doc,.txt,.pdf"
                   onChange={e => setUploadedFile(e.target.files?.[0] || null)} />
               </div>
               <div style={{ display: "flex", gap: "10px", marginTop: "20px" }}>

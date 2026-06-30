@@ -12,7 +12,7 @@ import { createAdminClient } from "@/lib/supabase-server";
 import { parseFile, is1CClientBankExchange, type ParseResult } from "@/lib/file-parser";
 import { NextRequest, NextResponse } from "next/server";
 
-const PARSEABLE = new Set(["xlsx", "csv", "xml", "xls", "docx", "doc", "1c_txt"]);
+const PARSEABLE = new Set(["xlsx", "csv", "xml", "xls", "docx", "doc", "pdf", "1c_txt"]);
 
 export async function POST(req: NextRequest) {
   try {
