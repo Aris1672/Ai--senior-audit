@@ -1,7 +1,10 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { getRiskColor, getRiskBgColor, type RiskLevel } from "@/lib/billing";
+import {
+  getRiskColor, getRiskBgColor, type RiskLevel,
+  getEvidenceStatusLabel, getEvidenceStatusColor, getEvidenceStatusBgColor, type EvidenceStatus,
+} from "@/lib/billing";
 
 interface SessionData {
   id:              string;
@@ -401,7 +404,7 @@ export default function ClientDashboard() {
           ) : data.findings.map((f: any) => (
             <div key={f.id} style={{
               padding: "10px 0", borderBottom: "1px solid #1a2340",
-              display: "flex", alignItems: "center", gap: "10px",
+              display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap",
             }}>
               <span style={{
                 fontSize: "10px", padding: "3px 8px", borderRadius: "10px",
@@ -411,6 +414,16 @@ export default function ClientDashboard() {
               }}>
                 {f.risk_level}
               </span>
+              {f.evidence_status && (
+                <span style={{
+                  fontSize: "9px", padding: "3px 7px", borderRadius: "9px",
+                  fontWeight: "600", whiteSpace: "nowrap",
+                  color:      getEvidenceStatusColor(f.evidence_status as EvidenceStatus),
+                  background: getEvidenceStatusBgColor(f.evidence_status as EvidenceStatus),
+                }}>
+                  {getEvidenceStatusLabel(f.evidence_status as EvidenceStatus)}
+                </span>
+              )}
               <span style={{ color: "#e8edf8", fontSize: "13px" }}>{f.title}</span>
             </div>
           ))}

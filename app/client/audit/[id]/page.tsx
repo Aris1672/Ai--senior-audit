@@ -2,7 +2,10 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
-import { getRiskColor, getRiskBgColor, type RiskLevel } from "@/lib/billing";
+import {
+  getRiskColor, getRiskBgColor, type RiskLevel,
+  getEvidenceStatusLabel, getEvidenceStatusColor, getEvidenceStatusBgColor, type EvidenceStatus,
+} from "@/lib/billing";
 
 const LOGO_BASE64 =
   "data:image/png;base64,/9j/4AAQSkZJRgABAQAAAQABAAD/4gHYSUNDX1BST0ZJTEUAAQEAAAHIAAAAAAQwAABtbnRyUkdCIFhZWiAH4AABAAEAAAAAAABhY3NwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAQAA9tYAAQAAAADTLQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAlkZXNjAAAA8AAAACRyWFlaAAABFAAAABRnWFlaAAABKAAAABRiWFlaAAABPAAAABR3dHB0AAABUAAAABRyVFJDAAABZAAAAChnVFJDAAABZAAAAChiVFJDAAABZAAAAChjcHJ0AAABjAAAADxtbHVjAAAAAAAAAAEAAAAMZW5VUwAAAAgAAAAcAHMAUgBHAEJYWVogAAAAAAAAb6IAADj1AAADkFhZWiAAAAAAAABimQAAt4UAABjaWFlaIAAAAAAAACSgAAAPhAAAts9YWVogAAAAAAAA9tYAAQAAAADTLXBhcmEAAAAAAAQAAAACZmYAAPKnAAANWQAAE9AAAApbAAAAAAAAAABtbHVjAAAAAAAAAAEAAAAMZW5VUwAAACAAAAAcAEcAbwBvAGcAbABlACAASQBuAGMALgAgADIAMAAxADb/2wBDAAUDBAQEAwUEBAQFBQUGBwwIBwcHBw8LCwkMEQ8SEhEPERETFhwXExQaFRERGCEYGh0dHx8fExciJCIeJBweHx7/2wBDAQUFBQcGBw4ICA4eFBEUHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh7/wAARCAAzAmsDASIAAhEBAxEB/8QAHAAAAgIDAQEAAAAAAAAAAAAAAAcFBgMECAIB/8QAWRAAAQMCAwEHDQsIBwUJAAAAAQACAwQFBgcREiExQVFhcRQXFzI2UnSBg6Gxs8HSFSIjN2ZykZOksuIzUkRUYsLD0RYkRYKElKI0RURW8SVDRlNjkqPh8P/EABsBAAIDAQEBAAAAAAAAAAAAAAUGAAQHAwIB/8QAQxEAAQMDAAQJBwsEAQUAAAAAAQACAwQFEQYhMXESIkFRYYGRsdEWNDZyocHhExQVMjNCUlOCsvAjNpLSoiRDYsLx/9oADAMBAAIRAxEAPwDjJCEKKITdyfwnFFQG+XOnZJJUN0po5GghrO60PGeLm6VSst8NOxFfWtmaeoafR9Q7l5GdJ82qfcskFJSulkcyGCFhLid5rGgeYBO+idoEhNbMOKPq55+U9XfuStpDcSwfNojrO3w6/wCbV4koqOSmkpn0sJhkaWPZsABwO8QkBj3Dc2G726n0c6kl1fTSHjbyHnHAfAeNMnB2YMV5xNVW2oa2GGZ/9Qcd4kAdi7nOmo8I5FZMZWCnxHZJaGbRso9/BKR+TeOA9HEeZG7lS01+ozJSnLmk46uTr2jqQuiqJrTU8CccV2M+PVyrnFCz3CkqKCtmoquMxTwvли9HEeZG7lS01+ozJSnLmk46uTr2jqQuiqJrTU8CccV2M+PVyrnFCz3CkqKCtmoquMxTwvли9/BKR+TeOA9HEeZG7lS01+ozJSnLmk46uTr2jqQuiqJrTU8CccV2M+PVyrnFCz3CkqKCtmoquMxTwvMnEWsGAoUXHEUJAGSsSEybJlPXzxNlutwjpCRruUTd0cOYnUAHo1U03KWz6e+udcTzBg9SP";
@@ -44,6 +47,14 @@ async function generatePDF(session: SessionDetail, findings: Finding[]) {
     "НЕСУЩЕСТВЕННО": colors.green,
   };
 
+  // Evidence-confidence labels for the PDF — distinct axis from risk level,
+  // so a reader never mistakes a weak signal for a proven violation.
+  const EVIDENCE_LABELS: Record<EvidenceStatus, string> = {
+    confirmed: "Подтверждённое нарушение",
+    risk_flag:  "Признак риска",
+    indirect:   "Косвенный признак",
+  };
+
   const allFindings  = findings;
   const criticalCt   = allFindings.filter(f => f.risk_level === "КРИТИЧНО").length;
   const majorCt      = allFindings.filter(f => f.risk_level === "СУЩЕСТВЕННО").length;
@@ -66,6 +77,8 @@ async function generatePDF(session: SessionDetail, findings: Finding[]) {
     }];
 
     items.forEach((f, i) => {
+      const evidenceLabel = f.evidence_status ? EVIDENCE_LABELS[f.evidence_status] : null;
+
       rows.push({
         table: {
           dontBreakRows: true,
@@ -77,8 +90,15 @@ async function generatePDF(session: SessionDetail, findings: Finding[]) {
                   { text: `${i + 1}. ${f.title}`, bold: true, fontSize: 12, color: colors.textMain, width: "*" },
                   { text: level, bold: true, fontSize: 9, color: color, alignment: "right", width: "auto" }
                 ],
-                margin: [0, 0, 0, 8]
+                margin: [0, 0, 0, 4]
               },
+              ...(evidenceLabel ? [{
+                text: evidenceLabel,
+                fontSize: 8.5,
+                italics: true,
+                color: colors.textLight,
+                margin: [0, 0, 0, 8],
+              }] : []),
               ...(f.description ? [{ text: f.description, fontSize: 10, color: colors.textMuted, margin: [0, 0, 0, 8], lineHeight: 1.3 }] : []),
               ...(f.legal_basis ? [{ 
                 text: [
@@ -278,14 +298,20 @@ async function generatePDF(session: SessionDetail, findings: Finding[]) {
 }
 
 interface Finding {
-  id:             string;
-  risk_level:     RiskLevel;
-  title:          string;
-  description:    string;
-  legal_basis:    string;
-  recommendation: string;
-  status:         string;
-  created_at:     string;
+  id:              string;
+  risk_level:      RiskLevel;
+  title:           string;
+  description:     string;
+  legal_basis:     string;
+  recommendation:  string;
+  status:          string;
+  // Evidence-confidence tier — separate from `status` (workflow: open/
+  // resolved/disputed) and from `risk_level` (severity). Optional on the
+  // type because findings created before this column existed will come
+  // back from the DB default ("risk_flag"), but older cached/local data
+  // shapes might still omit it — render defensively wherever it's used.
+  evidence_status?: EvidenceStatus;
+  created_at:      string;
 }
 
 interface Message {
@@ -760,6 +786,16 @@ export default function AuditDetailPage() {
                       <div style={{ fontSize: "14px", fontWeight: "600", color: "#e8edf8", flex: 1 }}>
                         {i + 1}. {f.title}
                       </div>
+                      {f.evidence_status && (
+                        <span style={{
+                          fontSize: "10px", padding: "3px 9px", borderRadius: "10px",
+                          fontWeight: "600", whiteSpace: "nowrap",
+                          color:      getEvidenceStatusColor(f.evidence_status),
+                          background: getEvidenceStatusBgColor(f.evidence_status),
+                        }}>
+                          {getEvidenceStatusLabel(f.evidence_status)}
+                        </span>
+                      )}
                     </div>
 
                     {f.description && (

@@ -175,10 +175,22 @@ async function extractAndSaveFindings(
 {
   "title": "краткое название нарушения (до 100 символов)",
   "risk_level": "КРИТИЧНО" | "СУЩЕСТВЕННО" | "НЕСУЩЕСТВЕННО",
+  "evidence_status": "confirmed" | "risk_flag" | "indirect",
   "description": "подробное описание (до 500 символов)",
   "legal_basis": "применимые нормы закона (до 200 символов)",
   "recommendation": "рекомендация по устранению (до 300 символов)"
 }
+
+Поле evidence_status — это уровень уверенности, который аудитор указал в поле
+"Статус:" исходного текста. Сопоставляй так:
+- "Подтверждённое нарушение" → "confirmed"
+- "Признак риска"            → "risk_flag"
+- "Косвенный признак"        → "indirect"
+Если статус явно не указан в тексте — определи наиболее вероятный по формулировкам
+(например "возможный риск", "требует проверки", "не исключено что" указывают на
+"risk_flag" или "indirect"). При сомнении используй "risk_flag" — никогда не
+выбирай "confirmed", если нет явной формулировки об однозначном подтверждении.
+
 Если нарушений нет — верни пустой массив: []`,
       messages: [{
         role:    "user",
@@ -205,6 +217,7 @@ async function extractAndSaveFindings(
       if (match) {
         try {
           findings = JSON.parse(match[0]);
+          if (!Array.isArray(findings)) findings = [];
         } catch {
           console.warn("[chat] Failed to parse findings JSON:", rawJson.slice(0, 200));
           return;
@@ -217,19 +230,24 @@ async function extractAndSaveFindings(
 
     if (findings.length === 0) return;
 
-    const validRiskLevels = new Set(["КРИТИЧНО", "СУЩЕСТВЕННО", "НЕСУЩЕСТВЕННО"]);
+    const validRiskLevels      = new Set(["КРИТИЧНО", "СУЩЕСТВЕННО", "НЕСУЩЕСТВЕННО"]);
+    const validEvidenceStatuses = new Set(["confirmed", "risk_flag", "indirect"]);
 
     const rows = findings
       .filter((f: any) => f.title && validRiskLevels.has(f.risk_level))
       .map((f: any) => ({
-        session_id:     sessionId,
-        client_id:      clientId,
-        title:          String(f.title).slice(0, 100),
-        risk_level:     f.risk_level,
-        description:    String(f.description    || "").slice(0, 500),
-        legal_basis:    String(f.legal_basis    || "").slice(0, 200),
-        recommendation: String(f.recommendation || "").slice(0, 300),
-        status:         "open",
+        session_id:      sessionId,
+        client_id:       clientId,
+        title:           String(f.title).slice(0, 100),
+        risk_level:      f.risk_level,
+        // Default to the middle tier ("risk_flag") rather than "confirmed" if
+        // Haiku omits or mis-formats this field — never let a missing value
+        // silently overstate certainty.
+        evidence_status: validEvidenceStatuses.has(f.evidence_status) ? f.evidence_status : "risk_flag",
+        description:     String(f.description    || "").slice(0, 500),
+        legal_basis:     String(f.legal_basis    || "").slice(0, 200),
+        recommendation:  String(f.recommendation || "").slice(0, 300),
+        status:          "open",
       }));
 
     if (rows.length === 0) return;

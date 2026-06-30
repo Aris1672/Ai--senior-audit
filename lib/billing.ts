@@ -36,6 +36,12 @@ export interface UsageBreakdown {
 // ─── Risk level type (matches DB enum) ───────────────────────────────────────
 export type RiskLevel = "КРИТИЧНО" | "СУЩЕСТВЕННО" | "НЕСУЩЕСТВЕННО";
 
+// ─── Evidence-confidence type (matches DB enum `finding_evidence_status`) ────
+// Distinct from RiskLevel (severity) and from a finding's workflow `status`
+// (open/resolved/disputed). This tracks how certain the AI is, per the
+// three-tier system in AUDIT_SYSTEM_PROMPT: confirmed / risk_flag / indirect.
+export type EvidenceStatus = "confirmed" | "risk_flag" | "indirect";
+
 // ─── Format number as Russian rubles ─────────────────────────────────────────
 export function formatRubles(amount: number): string {
   return new Intl.NumberFormat("ru-RU", {
@@ -75,6 +81,34 @@ export function getRiskBgColor(level: RiskLevel): string {
     case "КРИТИЧНО":       return "#3d1515";
     case "СУЩЕСТВЕННО":    return "#3d2e0a";
     case "НЕСУЩЕСТВЕННО":  return "#0e3d2a";
+  }
+}
+
+// ─── Get human-readable Russian label for evidence-confidence tier ───────────
+export function getEvidenceStatusLabel(status: EvidenceStatus): string {
+  switch (status) {
+    case "confirmed": return "Подтверждённое нарушение";
+    case "risk_flag":  return "Признак риска";
+    case "indirect":   return "Косвенный признак";
+  }
+}
+
+// ─── Get evidence-confidence color for UI badges ──────────────────────────────
+// Deliberately a different palette axis from risk-level color (severity),
+// so the two badges never get visually confused with each other.
+export function getEvidenceStatusColor(status: EvidenceStatus): string {
+  switch (status) {
+    case "confirmed": return "#e8edf8";
+    case "risk_flag":  return "#4d91ff";
+    case "indirect":   return "#7a90c0";
+  }
+}
+
+export function getEvidenceStatusBgColor(status: EvidenceStatus): string {
+  switch (status) {
+    case "confirmed": return "#1a2340";
+    case "risk_flag":  return "#0d1f3e";
+    case "indirect":   return "#101828";
   }
 }
 
