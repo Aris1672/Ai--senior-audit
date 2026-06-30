@@ -109,7 +109,7 @@ async function extractAndSaveFindings(
     // Ask Claude Haiku to extract structured findings (pure JSON parsing, no reasoning needed)
     const extractRes = await anthropic.messages.create({
       model:      HAIKU_MODEL,
-      max_tokens: 1500,
+      max_tokens: 4096, // raised from 1500 — longer reports can have many more findings to extract as JSON
       system: `Ты — парсер аудиторских отчётов. Извлеки все нарушения из текста аудитора.
 Верни ТОЛЬКО валидный JSON массив, без пояснений, без markdown, без backticks.
 Каждый объект должен содержать:
@@ -123,7 +123,7 @@ async function extractAndSaveFindings(
 Если нарушений нет — верни пустой массив: []`,
       messages: [{
         role:    "user",
-        content: `Извлеки все нарушения из этого аудиторского текста:\n\n${assistantText.slice(0, 3000)}`,
+        content: `Извлеки все нарушения из этого аудиторского текста:\n\n${assistantText.slice(0, 12000)}`,
       }],
     });
 
@@ -250,15 +250,52 @@ export async function POST(req: NextRequest) {
       "| Model:", SONNET_MODEL,
       "| Has files:", fileSection.length > 0);
 
-    // Main audit call — Sonnet for deep legal and financial reasoning
-    const response = await anthropic.messages.create({
-      model:      SONNET_MODEL,
-      max_tokens: 4096,
-      system:     systemPrompt,
-      messages,
-    });
+    // Main audit call — Sonnet for deep legal and financial reasoning.
+    // Audit reports can be long (multi-section, tables, per-month breakdowns),
+    // so we raise max_tokens and auto-continue server-side if the model is
+    // cut off mid-response (stop_reason === "max_tokens"), instead of making
+    // the user notice the truncation and type "continue" themselves.
+    const MAX_OUTPUT_TOKENS = 16000; // per-call cap (Sonnet 4.6 ceiling)
+    const MAX_CONTINUATIONS = 5;     // hard safety limit on auto-continue loops
 
-    const text = response.content[0].type === "text" ? response.content[0].text : "";
+    let fullText = "";
+    let workingMessages = [...messages];
+    let continuations = 0;
+    let stopReason: string | null = null;
+
+    do {
+      const response = await anthropic.messages.create({
+        model:      SONNET_MODEL,
+        max_tokens: MAX_OUTPUT_TOKENS,
+        system:     systemPrompt,
+        messages:   workingMessages,
+      });
+
+      const chunk = response.content[0].type === "text" ? response.content[0].text : "";
+      fullText += chunk;
+      stopReason = response.stop_reason;
+
+      console.log("[chat] Sonnet call — stop_reason:", stopReason,
+        "| chunk length:", chunk.length, "| total so far:", fullText.length);
+
+      if (stopReason === "max_tokens" && continuations < MAX_CONTINUATIONS) {
+        // Feed the partial response back as assistant history and ask the
+        // model to continue exactly where it left off — no "continue" prompt
+        // needed from the user, and no duplicated/rephrased seam text.
+        workingMessages = [
+          ...workingMessages,
+          { role: "assistant", content: chunk },
+          { role: "user", content: "Продолжи с того места, где остановился. Не повторяй уже написанное." },
+        ];
+        continuations++;
+      }
+    } while (stopReason === "max_tokens" && continuations <= MAX_CONTINUATIONS);
+
+    if (stopReason === "max_tokens") {
+      console.warn("[chat] Hit MAX_CONTINUATIONS limit — response may still be truncated");
+    }
+
+    const text = fullText;
 
     // Save message and extract findings in parallel
     await Promise.all([
