@@ -391,8 +391,8 @@ export async function parsePDF(buffer: ArrayBuffer): Promise<ParseResult> {
     const pdfParseModule: any = await import("pdf-parse");
     const pdfParse = pdfParseModule.default ?? pdfParseModule;
     const result   = await pdfParse(Buffer.from(buffer));
-    const rawText  = (result.text || "").trim();
-    const numPages = result.numpages || 1;
+    const rawText: string  = String(result.text || "").trim();
+    const numPages: number = Number(result.numpages) || 1;
 
     // Heuristic: near-zero text relative to page count means there's
     // essentially no real text layer (a few stray characters from a stamp
