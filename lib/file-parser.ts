@@ -12,7 +12,7 @@
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
-export type ParseMethod = "xlsx" | "xls" | "csv" | "xml" | "docx" | "doc" | "1c_txt" | "fallback";
+export type ParseMethod = "xlsx" | "xls" | "csv" | "xml" | "docx" | "doc" | "1c_txt" | "pdf" | "fallback";
 
 export interface ParseResult {
   rowCount: number;
@@ -148,42 +148,59 @@ export async function parseXLS(buffer: ArrayBuffer): Promise<ParseResult> {
   try {
     const XLSX = await import("xlsx");
 
-    const workbook  = XLSX.read(new Uint8Array(buffer), { type: "array" });
-    const sheetName = workbook.SheetNames[0];
-    const sheet     = workbook.Sheets[sheetName];
+    const workbook = XLSX.read(new Uint8Array(buffer), { type: "array" });
+    if (workbook.SheetNames.length === 0) throw new Error("No sheets found in XLS");
 
-    if (!sheet) throw new Error("No sheets found in XLS");
+    const ROWS_PER_SHEET_CAP = 500;
+    let totalRowCount = 0;
+    const sheetBlocks: string[] = [];
+    const allHeaders: string[] = [];
 
-    // Convert sheet to array of arrays
-    const rows: any[][] = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: "" });
+    for (const sheetName of workbook.SheetNames) {
+      const sheet = workbook.Sheets[sheetName];
+      if (!sheet) continue;
 
-    if (rows.length === 0) {
-      return { rowCount: 0, parseMethod: "xls", sheetName, textContent: "[Файл пустой]", parsedAt: now() };
+      const rows: any[][] = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: "" });
+      if (rows.length === 0) {
+        sheetBlocks.push(`--- ЛИСТ: ${sheetName} (пусто) ---`);
+        continue;
+      }
+
+      const headers  = (rows[0] as any[]).map(h => String(h ?? "").trim()).filter(Boolean);
+      if (allHeaders.length === 0) allHeaders.push(...headers);
+
+      const dataRows  = rows.slice(1);
+      const totalRows = dataRows.length;
+      totalRowCount  += totalRows;
+      const maxRows   = Math.min(dataRows.length, ROWS_PER_SHEET_CAP);
+
+      const lines = [
+        headers.join(";"),
+        ...dataRows.slice(0, maxRows).map(row =>
+          (row as any[]).map(cell => String(cell ?? "").trim()).join(";")
+        ),
+      ];
+
+      const sheetTruncationNote = totalRows > ROWS_PER_SHEET_CAP
+        ? `\n[Лист "${sheetName}": показаны первые ${ROWS_PER_SHEET_CAP} из ${totalRows} строк]`
+        : "";
+
+      sheetBlocks.push(
+        `--- ЛИСТ: ${sheetName} (${totalRows} строк) ---\n${lines.join("\n")}${sheetTruncationNote}`
+      );
     }
 
-    const headers   = (rows[0] as any[]).map(h => String(h ?? "").trim()).filter(Boolean);
-    const dataRows  = rows.slice(1);
-    const totalRows = dataRows.length;
-    const maxRows   = Math.min(dataRows.length, 500);
-
-    const lines = [
-      headers.join(";"),
-      ...dataRows.slice(0, maxRows).map(row =>
-        (row as any[]).map(cell => String(cell ?? "").trim()).join(";")
-      ),
-    ];
-
-    const truncationNote = totalRows > 500
-      ? `\n[Показаны первые 500 из ${totalRows} строк]`
+    const multiSheetHeader = workbook.SheetNames.length > 1
+      ? `[Файл содержит ${workbook.SheetNames.length} листов: ${workbook.SheetNames.join(", ")}]\n\n`
       : "";
 
-    const textContent = lines.join("\n").slice(0, MAX_CONTENT_CHARS) + truncationNote;
+    const textContent = (multiSheetHeader + sheetBlocks.join("\n\n")).slice(0, MAX_CONTENT_CHARS);
 
     return {
-      rowCount:        totalRows,
+      rowCount:        totalRowCount,
       parseMethod:     "xls",
-      sheetName,
-      detectedColumns: headers.slice(0, 10),
+      sheetName:       workbook.SheetNames.join(", "),
+      detectedColumns: allHeaders.slice(0, 10),
       textContent,
       parsedAt:        now(),
     };
@@ -206,13 +223,51 @@ export async function parseXLSX(buffer: ArrayBuffer): Promise<ParseResult> {
     const fflate   = await import("fflate");
     const unzipped = fflate.unzipSync(new Uint8Array(buffer));
 
-    const sheetKeys = Object.keys(unzipped).filter(k => /xl\/worksheets\/sheet\d+\.xml/.test(k));
+    const sheetKeys = Object.keys(unzipped)
+      .filter(k => /xl\/worksheets\/sheet\d+\.xml/.test(k))
+      .sort((a, b) => {
+        // Sort numerically by sheet number (sheet1, sheet2, ... sheet10), not lexically
+        const numA = parseInt(a.match(/sheet(\d+)\.xml/)?.[1] || "0", 10);
+        const numB = parseInt(b.match(/sheet(\d+)\.xml/)?.[1] || "0", 10);
+        return numA - numB;
+      });
     if (sheetKeys.length === 0) throw new Error("No worksheets found in XLSX");
 
-    const sheetKey  = sheetKeys.find(k => k === "xl/worksheets/sheet1.xml") || sheetKeys[0];
-    const sheetName = sheetKey.replace("xl/worksheets/", "").replace(".xml", "");
-    const sheetXml  = new TextDecoder("utf-8").decode(unzipped[sheetKey]);
-    const rowCount  = Math.max(0, (sheetXml.match(/<row[\s>]/gi) || []).length - 1);
+    // ── Resolve real sheet names (e.g. "Без подтверждающих документов") ──────
+    // workbook.xml lists <sheet name="..." r:id="rIdN"/> in display order.
+    // workbook.xml.rels maps r:id -> worksheets/sheetK.xml.
+    // Both are needed because sheet *display order* can differ from sheetK.xml
+    // file numbering, and the real name is never in the worksheet file itself.
+    const sheetNameByKey: Record<string, string> = {};
+    try {
+      if (unzipped["xl/workbook.xml"] && unzipped["xl/_rels/workbook.xml.rels"]) {
+        const workbookXml = new TextDecoder("utf-8").decode(unzipped["xl/workbook.xml"]);
+        const relsXml     = new TextDecoder("utf-8").decode(unzipped["xl/_rels/workbook.xml.rels"]);
+
+        const relIdToTarget: Record<string, string> = {};
+        const relMatches = relsXml.match(/<Relationship[^>]*\/>/g) || [];
+        for (const rel of relMatches) {
+          const id     = rel.match(/Id="([^"]+)"/)?.[1];
+          const target = rel.match(/Target="([^"]+)"/)?.[1];
+          if (id && target && target.includes("worksheets/")) {
+            relIdToTarget[id] = `xl/${target.replace(/^\.?\/?/, "")}`;
+          }
+        }
+
+        const sheetTags = workbookXml.match(/<sheet[^>]*\/>/g) || [];
+        for (const tag of sheetTags) {
+          const name = tag.match(/name="([^"]+)"/)?.[1];
+          const rId  = tag.match(/r:id="([^"]+)"/)?.[1];
+          if (name && rId && relIdToTarget[rId]) {
+            sheetNameByKey[relIdToTarget[rId]] = name
+              .replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">")
+              .replace(/&quot;/g, '"').replace(/&apos;/g, "'");
+          }
+        }
+      }
+    } catch (nameErr) {
+      console.warn("[file-parser] Could not resolve real sheet names, falling back to sheetN:", nameErr);
+    }
 
     const sharedStrings: string[] = [];
     if (unzipped["xl/sharedStrings.xml"]) {
@@ -223,26 +278,60 @@ export async function parseXLSX(buffer: ArrayBuffer): Promise<ParseResult> {
       }
     }
 
-    const rowMatches = sheetXml.match(/<row[\s\S]*?<\/row>/gi) || [];
-    const maxRows    = Math.min(rowMatches.length, 501);
-    const csvLines: string[] = [];
+    // ── Parse every sheet, not just the first ─────────────────────────────────
+    const ROWS_PER_SHEET_CAP = 500;
+    let totalRowCount = 0;
+    const sheetBlocks: string[] = [];
+    const sheetNamesUsed: string[] = [];
 
-    for (let i = 0; i < maxRows; i++) {
-      const cells  = rowMatches[i].match(/<c[\s\S]*?<\/c>/gi) || [];
-      const values: string[] = [];
-      for (const cell of cells) {
-        const typeMatch = cell.match(/\bt="([^"]+)"/);
-        const valMatch  = cell.match(/<v>([^<]*)<\/v>/);
-        const val       = valMatch ? valMatch[1] : "";
-        values.push(typeMatch?.[1] === "s" ? (sharedStrings[parseInt(val, 10)] ?? "") : val);
+    for (const sheetKey of sheetKeys) {
+      const sheetName = sheetNameByKey[sheetKey]
+        || sheetKey.replace("xl/worksheets/", "").replace(".xml", "");
+      sheetNamesUsed.push(sheetName);
+
+      const sheetXml = new TextDecoder("utf-8").decode(unzipped[sheetKey]);
+      const rowMatches = sheetXml.match(/<row[\s\S]*?<\/row>/gi) || [];
+      const sheetRowCount = Math.max(0, rowMatches.length - 1); // minus header row
+      totalRowCount += sheetRowCount;
+
+      const maxRows = Math.min(rowMatches.length, ROWS_PER_SHEET_CAP + 1);
+      const csvLines: string[] = [];
+
+      for (let i = 0; i < maxRows; i++) {
+        const cells  = rowMatches[i].match(/<c[\s\S]*?<\/c>/gi) || [];
+        const values: string[] = [];
+        for (const cell of cells) {
+          const typeMatch = cell.match(/\bt="([^"]+)"/);
+          const valMatch  = cell.match(/<v>([^<]*)<\/v>/);
+          const val       = valMatch ? valMatch[1] : "";
+          values.push(typeMatch?.[1] === "s" ? (sharedStrings[parseInt(val, 10)] ?? "") : val);
+        }
+        csvLines.push(values.join(";"));
       }
-      csvLines.push(values.join(";"));
+
+      const sheetTruncationNote = sheetRowCount > ROWS_PER_SHEET_CAP
+        ? `\n[Лист "${sheetName}": показаны первые ${ROWS_PER_SHEET_CAP} из ${sheetRowCount} строк]`
+        : "";
+
+      sheetBlocks.push(
+        `--- ЛИСТ: ${sheetName} (${sheetRowCount} строк) ---\n${csvLines.join("\n")}${sheetTruncationNote}`
+      );
     }
 
-    const truncationNote = rowCount > 500 ? `\n[Показаны первые 500 из ${rowCount} строк]` : "";
-    const textContent    = csvLines.join("\n").slice(0, MAX_CONTENT_CHARS) + truncationNote;
+    const multiSheetHeader = sheetKeys.length > 1
+      ? `[Файл содержит ${sheetKeys.length} листов: ${sheetNamesUsed.join(", ")}]\n\n`
+      : "";
 
-    return { rowCount, parseMethod: "xlsx", sheetName, detectedColumns: sharedStrings.slice(0, 10), textContent, parsedAt: now() };
+    const textContent = (multiSheetHeader + sheetBlocks.join("\n\n")).slice(0, MAX_CONTENT_CHARS);
+
+    return {
+      rowCount:        totalRowCount,
+      parseMethod:     "xlsx",
+      sheetName:       sheetNamesUsed.join(", "), // all sheet names, comma-separated
+      detectedColumns: sharedStrings.slice(0, 10),
+      textContent,
+      parsedAt:        now(),
+    };
 
   } catch (err) {
     console.warn("[file-parser] XLSX parse failed:", err);
@@ -272,6 +361,53 @@ export async function parseDOC(buffer: ArrayBuffer): Promise<ParseResult> {
   } catch (err) {
     console.warn("[file-parser] DOC parse failed:", err);
     return { rowCount: 0, parseMethod: "fallback", textContent: "[Не удалось прочитать содержимое файла DOC]", parsedAt: now() };
+  }
+}
+
+// ─── PDF ──────────────────────────────────────────────────────────────────────
+// Extracts text from text-based PDFs (invoices, contracts, statements, etc.)
+// using pdf-parse. This does NOT work for scanned/image-only PDFs — those
+// have no embedded text layer and need OCR, which this function does not do.
+// Such PDFs will return an empty or near-empty textContent; callers should
+// treat a very low rowCount as a signal the PDF may be scanned, not text.
+export async function parsePDF(buffer: ArrayBuffer): Promise<ParseResult> {
+  try {
+    const pdfParse = (await import("pdf-parse")).default;
+    const result   = await pdfParse(Buffer.from(buffer));
+    const rawText  = (result.text || "").trim();
+
+    if (rawText.length === 0) {
+      return {
+        rowCount:    0,
+        parseMethod: "pdf",
+        textContent: "[PDF не содержит извлекаемого текста — возможно, это скан. Текстовый слой отсутствует.]",
+        parsedAt:    now(),
+      };
+    }
+
+    // Count non-empty lines as a rough "row" proxy, consistent with parseDOC
+    const lines    = rawText.split(/\n/).filter(l => l.trim().length > 0);
+    const rowCount = lines.length;
+
+    const truncated    = rawText.length > MAX_CONTENT_CHARS;
+    const textContent  = rawText.slice(0, MAX_CONTENT_CHARS) +
+      (truncated ? "\n\n[Текст обрезан]" : "");
+
+    return {
+      rowCount,
+      parseMethod: "pdf",
+      detectedColumns: result.numpages ? [`Страниц: ${result.numpages}`] : undefined,
+      textContent,
+      parsedAt: now(),
+    };
+  } catch (err) {
+    console.warn("[file-parser] PDF parse failed:", err);
+    return {
+      rowCount:    0,
+      parseMethod: "fallback",
+      textContent: "[Не удалось прочитать содержимое файла PDF]",
+      parsedAt:    now(),
+    };
   }
 }
 
@@ -465,7 +601,7 @@ export function parse1CTxt(buffer: ArrayBuffer): ParseResult {
 
 export async function parseFile(
   buffer: ArrayBuffer,
-  fileType: "xlsx" | "xls" | "csv" | "xml" | "docx" | "doc" | "1c_txt"
+  fileType: "xlsx" | "xls" | "csv" | "xml" | "docx" | "doc" | "1c_txt" | "pdf"
 ): Promise<ParseResult> {
   if (fileType === "csv")    return parseCSV(buffer);
   if (fileType === "xml")    return parseXML(buffer);
@@ -473,6 +609,7 @@ export async function parseFile(
   if (fileType === "xls")    return parseXLS(buffer);
   if (fileType === "doc")    return parseDOC(buffer);
   if (fileType === "1c_txt") return parse1CTxt(buffer);
+  if (fileType === "pdf")    return parsePDF(buffer);
   return parseXLSX(buffer);
 }
 

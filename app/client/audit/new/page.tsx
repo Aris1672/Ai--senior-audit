@@ -311,10 +311,10 @@ export default function NewAuditPage() {
                   {uploadedFile ? uploadedFile.name : "Нажмите для выбора файла"}
                 </div>
                 <div style={{ color: "#7a90c0", fontSize: "12px" }}>
-                  Excel (.xlsx), CSV, XML, xls, docx, doc из 1С · Максимум 50MB
+                  Excel (.xlsx, .xls), CSV, XML, DOCX, DOC, TXT (1C-Клиент банк) · Максимум 50MB
                 </div>
                 <input ref={fileRef} type="file" style={{ display: "none" }}
-                  accept=".xlsx,.csv,.xml,.xls,.docx,.doc"
+                  accept=".xlsx,.csv,.xml,.xls,.docx,.doc,.txt"
                   onChange={e => setUploadedFile(e.target.files?.[0] || null)} />
               </div>
               <div style={{ display: "flex", gap: "10px", marginTop: "20px" }}>

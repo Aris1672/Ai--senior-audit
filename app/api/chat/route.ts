@@ -4,10 +4,19 @@ import { parseFile } from "@/lib/file-parser";
 import { NextRequest, NextResponse } from "next/server";
 
 // ─── Fetch + parse ALL documents linked to this session ───────────────────────
+// Returns text content for the system prompt PLUS a separate list of images
+// (for native vision, not text extraction — Claude reads images directly).
+interface DocumentsResult {
+  textContent: string | null;
+  images: { fileName: string; mediaType: string; base64: string }[];
+}
+
 async function getAllDocumentsContent(
   supabase: ReturnType<typeof createAdminClient>,
   sessionId: string
-): Promise<string | null> {
+): Promise<DocumentsResult> {
+  const images: DocumentsResult["images"] = [];
+
   try {
     console.log("[chat] Looking up all documents for sessionId:", sessionId);
 
@@ -19,11 +28,11 @@ async function getAllDocumentsContent(
 
     if (docErr) {
       console.error("[chat] Document lookup error:", docErr.message);
-      return null;
+      return { textContent: null, images };
     }
     if (!docs || docs.length === 0) {
       console.warn("[chat] No documents found for session:", sessionId);
-      return null;
+      return { textContent: null, images };
     }
 
     console.log(`[chat] Found ${docs.length} document(s) for session`);
@@ -33,7 +42,7 @@ async function getAllDocumentsContent(
     for (const doc of docs) {
       if (!doc.storage_path) continue;
 
-      console.log("[chat] Downloading:", doc.file_name);
+      console.log("[chat] Downloading:", doc.file_name, "— file_type:", doc.file_type);
 
       const { data: blob, error: dlErr } = await supabase
         .storage
@@ -49,15 +58,36 @@ async function getAllDocumentsContent(
       console.log("[chat] Downloaded", doc.file_name, "—", blob.size, "bytes");
 
       const arrayBuffer = await blob.arrayBuffer();
-      const ext = doc.file_name?.split(".").pop()?.toLowerCase();
-      const fileType =
-        ext === "csv"  ? "csv"
-        : ext === "xml"  ? "xml"
-        : ext === "docx" ? "docx"
-        : ext === "xls"  ? "xls"
-        : "xlsx";
 
-      const parsed = await parseFile(arrayBuffer, fileType as "xlsx" | "csv" | "xml" | "docx");
+      // ── Images go to Claude's native vision, not text extraction ─────────
+      // doc.file_type === "image" covers both JPG and PNG (see upload route's
+      // ALLOWED_TYPES mapping). Claude Sonnet 4.6 reads images directly —
+      // there is no OCR step here, the model itself does the reading.
+      if (doc.file_type === "image") {
+        const ext       = doc.file_name?.split(".").pop()?.toLowerCase();
+        const mediaType = ext === "png" ? "image/png" : "image/jpeg";
+        const base64    = Buffer.from(arrayBuffer).toString("base64");
+        images.push({ fileName: doc.file_name, mediaType, base64 });
+        sections.push(`[Документ: ${doc.file_name} — изображение, передано модели напрямую для визуального анализа]`);
+        continue;
+      }
+
+      // ── Everything else: trust doc.file_type from the DB ─────────────────
+      // This was already correctly classified at upload time in /api/upload
+      // (including 1C-format sniffing via is1CClientBankExchange), so we use
+      // it directly instead of re-deriving from the filename extension here,
+      // which previously caused .doc/.txt(1C)/.pdf to silently misparse as xlsx.
+      const PARSEABLE_TYPES = new Set(["xlsx", "xls", "csv", "xml", "docx", "doc", "1c_txt", "pdf"]);
+
+      if (!PARSEABLE_TYPES.has(doc.file_type)) {
+        sections.push(`[Документ: ${doc.file_name} — тип "${doc.file_type}" не поддерживается для текстового анализа]`);
+        continue;
+      }
+
+      const parsed = await parseFile(
+        arrayBuffer,
+        doc.file_type as "xlsx" | "xls" | "csv" | "xml" | "docx" | "doc" | "1c_txt" | "pdf"
+      );
 
       console.log("[chat]", doc.file_name, "— rowCount:", parsed.rowCount,
         "textContent length:", parsed.textContent?.length ?? 0);
@@ -82,14 +112,14 @@ async function getAllDocumentsContent(
       );
     }
 
-    if (sections.length === 0) return null;
+    if (sections.length === 0) return { textContent: null, images };
 
     const intro = docs.length > 1 ? `Загружено документов: ${docs.length}\n\n` : "";
-    return intro + sections.join("\n\n");
+    return { textContent: intro + sections.join("\n\n"), images };
 
   } catch (err) {
     console.error("[chat] getAllDocumentsContent exception:", err);
-    return null;
+    return { textContent: null, images };
   }
 }
 
@@ -229,15 +259,22 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // Fetch and parse ALL uploaded documents for this session
+    // Fetch and parse ALL uploaded documents for this session.
+    // Images are handled separately — they go to Claude's native vision as
+    // image content blocks on the user message, not as text in the prompt.
     let fileSection = "";
+    let images: { fileName: string; mediaType: string; base64: string }[] = [];
     if (sessionId) {
-      const fileContent = await getAllDocumentsContent(supabase, sessionId);
-      if (fileContent) {
-        fileSection = `\n\n=== ЗАГРУЖЕННЫЕ ФИНАНСОВЫЕ ДОКУМЕНТЫ ===\n${fileContent}\n=== КОНЕЦ ДОКУМЕНТОВ ===`;
+      const docsResult = await getAllDocumentsContent(supabase, sessionId);
+      images = docsResult.images;
+      if (docsResult.textContent) {
+        fileSection = `\n\n=== ЗАГРУЖЕННЫЕ ФИНАНСОВЫЕ ДОКУМЕНТЫ ===\n${docsResult.textContent}\n=== КОНЕЦ ДОКУМЕНТОВ ===`;
         console.log("[chat] File section length:", fileSection.length);
       } else {
         console.warn("[chat] No file content for session:", sessionId);
+      }
+      if (images.length > 0) {
+        console.log("[chat] Attaching", images.length, "image(s) for vision analysis");
       }
     }
 
@@ -260,6 +297,29 @@ export async function POST(req: NextRequest) {
 
     let fullText = "";
     let workingMessages = [...messages];
+
+    // Attach any images to the last user message as vision content blocks.
+    // Images are only attached on this first call, not on continuation calls,
+    // since Claude already has them in context once seen.
+    if (images.length > 0) {
+      const lastIdx = workingMessages.length - 1;
+      if (lastIdx >= 0 && workingMessages[lastIdx].role === "user") {
+        const existingText = typeof workingMessages[lastIdx].content === "string"
+          ? workingMessages[lastIdx].content
+          : "";
+        workingMessages[lastIdx] = {
+          role: "user",
+          content: [
+            ...images.map(img => ({
+              type:   "image" as const,
+              source: { type: "base64" as const, media_type: img.mediaType as "image/jpeg" | "image/png", data: img.base64 },
+            })),
+            { type: "text" as const, text: existingText || "Проанализируй приложенные изображения документов." },
+          ],
+        };
+      }
+    }
+
     let continuations = 0;
     let stopReason: string | null = null;
 

@@ -17,16 +17,17 @@ function TypewriterMessage({ text, onDone, onScroll }: {
     indexRef.current = 0;
     setDisplayed("");
 
-    const INTERVAL = 18;
+    const INTERVAL    = 18; // ms per tick (unchanged — this is the frame-safe interval)
+    const CHARS_PER_TICK = 2; // 2x speed: advance 2 characters per tick instead of 1
     let last = 0;
 
     function tick(ts: number) {
       if (ts - last >= INTERVAL) {
         last = ts;
         if (indexRef.current < text.length) {
-          indexRef.current++;
+          indexRef.current = Math.min(indexRef.current + CHARS_PER_TICK, text.length);
           setDisplayed(text.slice(0, indexRef.current));
-          onScroll(); // ← scroll on every character
+          onScroll(); // ← scroll on every tick
         } else {
           onDone();
           return;

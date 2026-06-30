@@ -20,8 +20,8 @@ const STATUS_STYLE: Record<string, { label: string; color: string }> = {
 };
 
 const TYPE_ICON: Record<string, string> = {
-  pdf: "📄", xlsx: "📊", docx: "📝",
-  csv: "📋", xml: "🔧", image: "🖼️",
+  pdf: "📄", xlsx: "📊", xls: "📊", docx: "📝", doc: "📝",
+  csv: "📋", xml: "🔧", image: "🖼️", "1c_txt": "🏦",
 };
 
 function formatBytes(bytes: number): string {
@@ -99,7 +99,7 @@ useEffect(() => {
           Документы
         </h1>
         <p style={{ color: "#7a90c0", fontSize: "14px", marginTop: "6px" }}>
-          Загрузите документы для анализа: PDF, XLSX, DOCX, CSV, XML, JPG, PNG
+          Загрузите документы для анализа: PDF, XLSX, XLS, DOCX, DOC, CSV, XML, TXT (1C), JPG, PNG
         </p>
       </div>
 
@@ -125,11 +125,11 @@ useEffect(() => {
           {uploading ? "Загрузка..." : "Перетащите файл или нажмите для выбора"}
         </div>
         <div style={{ color: "#7a90c0", fontSize: "13px" }}>
-          PDF, XLSX, DOCX, CSV, XML, JPG, PNG · Максимум 50MB
+          PDF, XLSX, XLS, DOCX, DOC, CSV, XML, TXT (1C), JPG, PNG · Максимум 50MB
         </div>
         <input
           ref={fileRef} type="file" style={{ display: "none" }}
-          accept=".pdf,.xlsx,.docx,.csv,.xml,.jpg,.jpeg,.png"
+          accept=".pdf,.xlsx,.xls,.docx,.doc,.csv,.xml,.txt,.jpg,.jpeg,.png"
           onChange={e => { const f = e.target.files?.[0]; if (f) uploadFile(f); }}
         />
       </div>
