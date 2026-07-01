@@ -1,9 +1,10 @@
 # AI Senior Auditor — Project Status
 
-> Last updated: June 30, 2026. Updated after file-parser/chat-route session (see Session Log at bottom for what changed and why).
+> Last updated: July 1, 2026. Updated after Russia-login-bypass fix + evidence-confidence status session (see Session Log at bottom for what changed and why).
 > GitHub: https://github.com/Aris1672/Ai--senior-audit
 > Live demo: https://ai-senior-audit.vercel.app
 > Admin login: support@assistant24.tech (role set manually in Supabase)
+> **Local repo path:** `.git` lives at `H:\AI Work\audit-agent\ai-senior-auditor` — NOT at `H:\AI Work\audit-agent`. `cd` into the `ai-senior-auditor` subfolder before any git command.
 
 ---
 
@@ -44,6 +45,10 @@ The browser **never** connects directly to Supabase or Anthropic. Every fetch in
 
 `proxy.ts` at the project root is a Next.js middleware file but is currently a **no-op passthrough** (`return NextResponse.next()`). The Russia-proxy protection is purely architectural — it comes from how API routes are structured — not from this middleware. The middleware matcher excludes `/api/report`, which means the report download route doesn't go through even this no-op.
 
+**✅ FIXED July 1, 2026 — direct-browser-to-Supabase bypass in `admin/layout.tsx` and `client/layout.tsx`.** Root cause of intermittent login failures without VPN from Russia. Both layouts called `createClient()` from `lib/supabase-client.ts` (a legitimate `@supabase/ssr` browser client) solely to run `supabase.auth.signOut()` on logout. Constructing that client is not inert: `@supabase/ssr`'s browser client auto-initializes a `GoTrueClient` that reads the session cookie set by `/api/auth/login` and can issue a direct browser → `*.supabase.co` call (session validation/refresh), bypassing Vercel entirely — even though the login POST itself was already correctly proxied. Fix: removed `createClient()` from both layouts; logout now calls a new `POST /api/auth/logout` route that runs `signOut()` server-side, matching the same pattern as `/api/auth/login`. Every remaining page in the app tree was individually swept for `createClient`/`@supabase/ssr` imports — none found. See Session Log for the full audit trail.
+
+**Residual risk, not fully closed:** `*.vercel.app` is shared infrastructure; Roskomnadzor blocking is sometimes done by IP range/SNI rather than per-site, so the app can still inherit collateral blocking unrelated to its own code. Not yet moved to a custom domain (`assistant24tech.ru` subdomain via CNAME) — recommended before relying on the `.vercel.app` URL for future demos in Russia.
+
 ---
 
 ## AI Agent: Hybrid LLM Architecture
@@ -73,8 +78,8 @@ User message arrives at POST /api/chat
     │
     └─ Response text contains violation keywords?
         ├─ NO  → save message to DB, return
-        └─ YES → Claude Haiku 4.5 → extract structured JSON findings (1500 tokens)
-                  └─ Parse findings JSON → validate risk levels → insert into findings table
+        └─ YES → Claude Haiku 4.5 → extract structured JSON findings (4096 tokens, raised from 1500)
+                  └─ Parse findings JSON → validate risk levels + evidence_status → insert into findings table
                   └─ Increment findings_ct on audit_sessions
                   (Both DB writes run in parallel via Promise.all)
 ```
@@ -97,6 +102,8 @@ The system prompt is written entirely in Russian and instructs the AI to operate
 - `ПОДТВЕРЖДЁННОЕ НАРУШЕНИЕ` — only when data directly and unambiguously proves the violation
 - `ПРИЗНАК РИСКА` — possible problem requiring additional documents; must name the specific docs needed
 - `КОСВЕННЫЙ ПРИЗНАК` — weak signal requiring monitoring only
+
+**✅ FIXED July 1, 2026 — this tier was previously computed by Sonnet but discarded before storage.** The prompt has always required a `**Статус:**` field per finding, but Haiku's extraction schema never asked for it, so every finding's DB row was indistinguishable regardless of confidence — a proven violation and a weak indirect signal looked identical in the dashboard and PDF. Fixed by adding an `evidence_status` enum column (`confirmed` / `risk_flag` / `indirect`, migration `005_finding_evidence_status.sql`) and extending the Haiku extraction prompt in `lib/anthropic.ts`/`app/api/chat/route.ts` to map the Russian status text to it. Defaults to `risk_flag` (never `confirmed`) whenever the mapping is ambiguous or absent — the extraction step never overstates certainty. Rendered as a badge alongside the risk-level badge in `app/client/audit/[id]/page.tsx` (list + PDF) and `app/client/dashboard/page.tsx` (open findings panel). See Session Log.
 
 **Three-tier risk classification (used throughout DB and UI):**
 - `КРИТИЧНО` — direct tax sanctions, fraud indicators, balance sheet distortion >5%, cash-out patterns, missing primary documents on material transactions
@@ -287,7 +294,7 @@ Any company name containing a `(` character silently breaks the parse. `audit_se
 
 ## Database Schema
 
-Migrations: `supabase/migrations/001–004.sql`
+Migrations: `supabase/migrations/001–005.sql` (005 adds `findings.evidence_status` — see below)
 
 ### `profiles`
 Extends Supabase `auth.users`. Auto-created by `on_auth_user_created` trigger (reliability issues: client creation route bypasses the trigger and does explicit `upsert` + `update`).
@@ -363,13 +370,14 @@ Fully designed for structured 1C transaction storage (counterparty, INN, debit/c
 | session_id | UUID → audit_sessions | |
 | client_id | UUID → profiles | |
 | transaction_id | UUID → transactions | Nullable; no transactions are inserted |
-| risk_level | `risk_level` ENUM | `'КРИТИЧНО'`, `'СУЩЕСТВЕННО'`, `'НЕСУЩЕСТВЕННО'` |
+| risk_level | `risk_level` ENUM | `'КРИТИЧНО'`, `'СУЩЕСТВЕННО'`, `'НЕСУЩЕСТВЕННО'` — severity |
+| evidence_status | `finding_evidence_status` ENUM | **Added July 1, 2026 (migration 005).** `'confirmed'`, `'risk_flag'`, `'indirect'` — confidence tier, distinct from both `risk_level` (severity) and `status` (workflow). Defaults to `'risk_flag'`; existing pre-migration rows were backfilled to this default rather than assumed confirmed. |
 | risk_score | INTEGER | Not populated by current extraction |
 | title | TEXT | Max 100 chars (enforced in app) |
 | description | TEXT | Max 500 chars |
 | legal_basis | TEXT | Max 200 chars |
 | recommendation | TEXT | Max 300 chars |
-| status | `finding_status` ENUM | `'open'`, `'resolved'`, `'disputed'` |
+| status | `finding_status` ENUM | `'open'`, `'resolved'`, `'disputed'` — workflow state, not evidence confidence |
 
 ### `audit_messages`
 
@@ -409,6 +417,7 @@ Logs `document_upload` events (written by upload route). Schema supports `tokens
 | Route | Method | Description |
 |---|---|---|
 | `/api/auth/login` | POST | `signInWithPassword` via Vercel, sets session cookies, returns role |
+| `/api/auth/logout` | POST | **Added July 1, 2026.** `signOut` via Vercel — server-side, mirrors `/api/auth/login`. Added specifically to remove the last direct-browser-to-Supabase call from the two portal layouts (see Session Log). |
 | `/api/auth/me` | GET | Returns current Supabase user from cookies |
 | `/api/auth/profile` | POST | Returns `role`, `status`, `company_name` for a userId |
 
@@ -450,7 +459,7 @@ Logs `document_upload` events (written by upload route). Schema supports `tokens
 
 ## Admin Portal
 
-**Authentication:** Client-side guard in `admin/layout.tsx` — calls `/api/auth/me` → `/api/auth/profile` and redirects to `/login` if not admin. No server-side middleware enforcement.
+**Authentication:** Client-side guard in `admin/layout.tsx` — calls `/api/auth/me` → `/api/auth/profile` and redirects to `/login` if not admin. No server-side middleware enforcement. Logout now calls `POST /api/auth/logout` (server-side) rather than a client-side Supabase client — see Session Log, July 1.
 
 **Navigation:** Overview · Clients · Pricing
 
@@ -481,7 +490,7 @@ Logs `document_upload` events (written by upload route). Schema supports `tokens
 
 ## Client Portal
 
-**Authentication:** Client-side guard in `client/layout.tsx` — same pattern as admin. Redirects non-clients and paused accounts to `/login`.
+**Authentication:** Client-side guard in `client/layout.tsx` — same pattern as admin. Redirects non-clients and paused accounts to `/login`. Logout now calls `POST /api/auth/logout` (server-side) rather than a client-side Supabase client — see Session Log, July 1.
 
 **Chat navigation lock:** "ИИ Аудитор" nav item is greyed out with 🔒 icon until the client has at least one audit session (`get_client_sessions` action, limit 1). First visit forces client to create an audit before they can chat.
 
@@ -767,22 +776,81 @@ PM2 keeps Next.js running as background process, auto-restarts on crash. Cost: f
 - Client portal: usage history (event log — minimal data currently)
 - File parser: XLSX (multi-sheet), XLS (multi-sheet), CSV, XML, DOCX, DOC, 1C bank export (Windows-1251), PDF text-layer extraction, scanned-PDF → vision rendering, images → native vision
 - Chat route now trusts `documents.file_type` (DB-classified) instead of re-deriving type from filename extension — root-cause fix that unlocked `.doc`/`.txt`/`.pdf` routing
-- PDF report generation (client-side, pdfmake, full Russian audit report with branding)
-- Hybrid AI: Sonnet 4.6 reasoning + Haiku 4.5 findings extraction
+- PDF report generation (client-side, pdfmake, full Russian audit report with branding, now includes evidence-confidence label per finding)
+- Hybrid AI: Sonnet 4.6 reasoning + Haiku 4.5 findings extraction (now also extracts evidence_status)
 - Pay-per-audit pricing with tier lookup and per-client overrides
 - Supabase Storage upload with background parse and result caching
+- Server-side-only Supabase auth: login AND logout both proxied through Vercel API routes; no page in the app makes a direct browser-to-Supabase call (full tree audited July 1, 2026)
+- Evidence-confidence tier (`ПОДТВЕРЖДЁННОЕ НАРУШЕНИЕ` / `ПРИЗНАК РИСКА` / `КОСВЕННЫЙ ПРИЗНАК`) now persisted end-to-end: system prompt → Haiku extraction → DB column → UI badge → PDF
 
-### Not yet built
-- [ ] Subscription creation when creating a new client
-- [ ] Server-side authentication on API routes
+### Not yet built — Next To-Do (prioritized)
+
+> Priority tiers: **P0** = active security/data-leak risk, fix before any real client data touches production. **P1** = blocks a working demo or core business flow. **P2** = important, not urgent. **P3** = cleanup / low-risk deferred.
+
+**P0 — Security (active risk)**
+- [ ] Server-side authentication on API routes — `/api/data`, `/api/admin/*`, `/api/chat`, `/api/upload` currently accept any caller who knows the endpoint/IDs (see Security Gaps section — this is the single biggest open risk in the project)
+- [ ] Fix or delete `/api/report/[id]` — currently returns full audit session, findings, and message history as an unauthenticated downloadable PDF to anyone with a valid session UUID
+
+**P1 — Blocks demo / core flow**
+- [ ] Subscription creation when creating a new client — new clients currently can't start an audit until someone fixes it manually in Supabase
+- [ ] Real-deploy verification of the June 30 PDF/vision + multi-sheet parsing fixes — confirmed to *build*, not yet confirmed working on the live Vercel deploy
+- [ ] Run one full end-to-end audit post-deploy and confirm `findings.evidence_status` produces a non-default value (`confirmed`/`indirect`), not just the `risk_flag` default (see July 1 Session Log, Part 2)
+- [ ] 1C live connection — UI is built and the OData call is wired, but has never been tested against a real 1C server
+
+**P2 — Important, not urgent**
+- [ ] **Privacy-preserving pre-processing pipeline for LLM calls** (new, July 1 2026): before documents reach Claude Sonnet, run an NER pass (e.g. Natasha/DeepPavlov) to detect personal-data spans (names, phone numbers, addresses, individual INNs), escalate low-confidence spans to a Russian LLM as a second pass, then use a **deterministic script** (not an LLM) to tokenize spans into codes, send the tokenized document to Sonnet, and reverse the substitution on the response using the same script. Code↔value lookup table stored Russia-side. Directly relevant to 242-FZ scope and to what's promised to clients about data handling — worth scoping against the Phase 2 migration rather than building twice.
+- [ ] Move off `*.vercel.app` to a custom domain — recommended to reduce risk of collateral IP/SNI-range blocking in Russia (see July 1 Session Log, Part 1)
 - [ ] Email notifications (SMTP configured in plan, not in code)
-- [ ] 1C live connection — UI is built and the OData call is wired, but needs real 1C server testing
-- [ ] Report sharing via URL (server-side PDF route existed but was orphaned)
 - [ ] `transactions` table population (designed, never written to)
 - [ ] AI token usage logging (schema supports it, chat route doesn't write it)
 - [ ] `audit_sessions.paid` migration file
+
+**P3 — Cleanup / deferred**
 - [ ] Chat page's own attachment-button accept attribute still missing `.txt`/`.doc` (only `.xls,.pdf` currently) — left unpatched on purpose, decide if it should match the other two upload surfaces
-- [ ] Real-deploy verification of the PDF/vision fixes below (see Session Log — not yet confirmed working on live Vercel, only confirmed to build)
+
+---
+
+## Session Log — Russia Login Bypass Fix & Evidence-Confidence Status (July 1, 2026)
+
+**Goal:** fix intermittent login failures without VPN reported ahead of a Moscow demo, then close the evidence-confidence-tier gap identified in a system-prompt review.
+
+### Part 1 — Russia login bypass
+
+**Symptom:** login worked reliably with VPN, but was flaky without it from a Russian connection.
+
+**Investigation path:** `lib/supabase-client.ts`, `lib/supabase-server.ts`, `app/(auth)/login/page.tsx`, and `app/api/auth/login/route.ts` were all confirmed clean — the login POST itself was correctly proxied server-side through Vercel with no direct browser-to-Supabase call. The bug was found one layer downstream, in the two portal layouts that run immediately after a successful login.
+
+**Root cause:** `app/admin/layout.tsx` and `app/client/layout.tsx` both called `createClient()` from `lib/supabase-client.ts` — a legitimate `@supabase/ssr` browser client — solely to have a reference for the logout button's `supabase.auth.signOut()`. Constructing that client is not inert: `@supabase/ssr`'s browser client auto-initializes and, sharing cookies with the server-side session set by `/api/auth/login`, can issue its own direct browser → `*.supabase.co` calls for session validation/refresh. That request bypasses Vercel entirely, silently, with `autoRefreshToken` defaulting to true. This produced exactly the reported symptom: works with VPN, flaky without it, even though the architecture diagram and the login route itself were correct.
+
+**Fix:**
+1. Removed `createClient()`/`@supabase/ssr` import from both layouts entirely.
+2. Added `POST /api/auth/logout` (`app/api/auth/logout/route.ts`) — runs `signOut()` server-side, cookie-clearing pattern mirrors `/api/auth/login`.
+3. Both layouts' `handleLogout()` now call `fetch("/api/auth/logout", { method: "POST" })` instead.
+
+**Full-tree audit performed to rule out the same pattern elsewhere:** every page under `app/` was checked individually for `createClient`/`@supabase/ssr` imports — `documents/page.tsx`, `admin/clients/page.tsx`, `admin/clients/new/page.tsx`, `admin/pricing/page.tsx`, `client/chat/page.tsx`, `client/audit/new/page.tsx`, `client/audit/[id]/page.tsx`, `client/dashboard/page.tsx`, `admin/page.tsx` — all clean, all already routed through `/api/*`. The two layouts were the only offenders.
+
+**Not fully closed:** `*.vercel.app` is shared hosting infrastructure; Roskomnadzor blocking sometimes targets IP ranges/SNI rather than specific sites, so collateral blocking unrelated to this app's own code is still possible. Recommended follow-up: move off the `.vercel.app` URL to a custom domain (`assistant24tech.ru` subdomain, CNAME'd to Vercel) before the next Russia-based demo.
+
+**Verified:** login tested from a real Russian connection with VPN off after deploy — confirmed working.
+
+### Part 2 — Evidence-confidence status gap
+
+**Found during:** a review of `AUDIT_SYSTEM_PROMPT` for professional/senior-auditor tone and rigor.
+
+**Root cause:** the prompt has always mandated a `**Статус:**` field per finding (`Подтверждённое нарушение` / `Признак риска` / `Косвенный признак`) as a confidence tier distinct from risk-level severity — but the Haiku extraction step's JSON schema in `app/api/chat/route.ts` never asked for it. Sonnet computed the distinction; Haiku discarded it before the DB write. A proven violation and a weak indirect signal were indistinguishable in the dashboard and downloadable PDF.
+
+**Fix:**
+1. **Migration `005_finding_evidence_status.sql`** — adds `finding_evidence_status` ENUM (`confirmed`/`risk_flag`/`indirect`) and `findings.evidence_status` column, default `'risk_flag'`. Verified against live schema before writing (confirmed no drift on `findings`; separately reconfirmed `audit_sessions.paid` is live and still absent from migration files — pre-existing gap, unchanged).
+2. **`lib/billing.ts`** — added `EvidenceStatus` type + `getEvidenceStatusLabel/Color/BgColor()` helpers, deliberately a different color palette from risk-level badges so the two axes never visually blur.
+3. **`app/api/chat/route.ts`** — Haiku extraction prompt now requests `evidence_status`, with explicit Russian-text-to-enum mapping rules. Defaults to `risk_flag` — never `confirmed` — whenever the source text is ambiguous or the field is missing, so extraction can never overstate certainty. `max_tokens` for the Haiku call raised 1500 → 4096 (longer reports can produce more findings to extract as JSON than the old cap allowed).
+4. **`app/client/audit/[id]/page.tsx`** — confidence badge added next to the risk-level badge in the on-screen findings list; also added to the client-side PDF generator's per-finding block (italic label under the title).
+5. **`app/client/dashboard/page.tsx`** — same badge added to the "Открытые нарушения" panel for consistency.
+
+**Verified:** migration applied cleanly on live Supabase (`information_schema.columns` confirms `evidence_status`/`USER-DEFINED`). **Not yet independently confirmed post-deploy that a real Sonnet→Haiku round trip produces a non-default value (`confirmed`/`indirect`)** — only backfilled/pre-migration rows and a preliminary (non-full) test were checked, all showing the `risk_flag` default as expected. Run one full audit end-to-end and check `findings.evidence_status` on a fresh row before treating this as fully verified.
+
+### Part 3 — Local git repo location
+
+Confirmed via file explorer: `.git` is at `H:\AI Work\audit-agent\ai-senior-auditor`, one level deeper than `H:\AI Work\audit-agent` (where git commands were initially — incorrectly — being run, producing `fatal: not a git repository`). No repo content was lost; this was purely a wrong-working-directory issue. Noted at the top of this doc to prevent recurrence.
 
 ---
 
