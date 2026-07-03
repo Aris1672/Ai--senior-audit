@@ -6,18 +6,14 @@ export const anthropic = new Anthropic({
 });
 
 // ─── Model identifiers ────────────────────────────────────────────────────────
-export const SONNET_MODEL = "claude-sonnet-4-6";        // main audit reasoning
-export const HAIKU_MODEL  = "claude-haiku-4-5-20251001"; // findings extraction (cost-efficient)
+// Haiku removed (July 2026) — findings are now extracted via tool_use on the
+// same Sonnet call instead of a second model pass. See FINDINGS_TOOL below.
+export const SONNET_MODEL = "claude-sonnet-5";           // main audit reasoning + findings extraction
 
 // ─── Token cost constants (per 1K tokens, USD) ───────────────────────────────
 export const SONNET_PRICING = {
   inputPer1K:  0.003,   // $3.00 / 1M
   outputPer1K: 0.015,   // $15.00 / 1M
-};
-
-export const HAIKU_PRICING = {
-  inputPer1K:  0.001,   // $1.00 / 1M
-  outputPer1K: 0.005,   // $5.00 / 1M
 };
 
 // ─── System prompt ────────────────────────────────────────────────────────────
@@ -155,7 +151,75 @@ export const AUDIT_SYSTEM_PROMPT = `
 4. **Косвенные признаки** — для мониторинга
 5. **Общая оценка качества учёта** (1–2 предложения)
 6. **Приоритетные рекомендации** (не более 5, пронумерованные по приоритету)
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ФИКСАЦИЯ НАРУШЕНИЙ ЧЕРЕЗ ИНСТРУМЕНТ
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+После того как ты полностью написал текстовый отчёт на русском языке
+(резюме, все нарушения, признаки риска, косвенные признаки, рекомендации),
+если в ходе анализа было выявлено хотя бы одно нарушение любого уровня —
+вызови инструмент record_findings РОВНО ОДИН РАЗ, передав ВСЕ выявленные
+нарушения одним списком.
+
+Каждая запись в списке должна точно соответствовать тому, что ты уже
+написал в тексте отчёта — не придумывай новых нарушений и не меняй
+уровень риска или статус между текстом и вызовом инструмента.
+
+Если нарушений, признаков риска или косвенных признаков не найдено —
+НЕ вызывай инструмент, просто заверши текстовый ответ.
 `.trim();
+
+// ─── Findings extraction tool ─────────────────────────────────────────────────
+// Replaces the old Haiku extraction pass (removed July 2026). Sonnet calls
+// this once, at the end of its own response, instead of a second model
+// re-interpreting the first model's prose — see AUDIT_SYSTEM_PROMPT above.
+export const FINDINGS_TOOL = {
+  name: "record_findings",
+  description:
+    "Записывает структурированный список нарушений/рисков, выявленных в аудиторском отчёте. Вызывается ровно один раз в конце ответа, только если хотя бы одно нарушение было найдено.",
+  input_schema: {
+    type: "object" as const,
+    properties: {
+      findings: {
+        type: "array" as const,
+        description: "Список всех нарушений, признаков риска и косвенных признаков из отчёта.",
+        items: {
+          type: "object" as const,
+          properties: {
+            title: {
+              type: "string" as const,
+              description: "Краткое название нарушения (до 100 символов)",
+            },
+            risk_level: {
+              type: "string" as const,
+              enum: ["КРИТИЧНО", "СУЩЕСТВЕННО", "НЕСУЩЕСТВЕННО"],
+            },
+            evidence_status: {
+              type: "string" as const,
+              enum: ["confirmed", "risk_flag", "indirect"],
+              description:
+                "Соответствует полю 'Статус:' в тексте: confirmed = Подтверждённое нарушение, risk_flag = Признак риска, indirect = Косвенный признак. При сомнении — risk_flag, никогда не confirmed.",
+            },
+            description: {
+              type: "string" as const,
+              description: "Подробное описание проблемы (до 500 символов)",
+            },
+            legal_basis: {
+              type: "string" as const,
+              description: "Применимая норма закона (до 200 символов)",
+            },
+            recommendation: {
+              type: "string" as const,
+              description: "Рекомендация по устранению (до 300 символов)",
+            },
+          },
+          required: ["title", "risk_level", "evidence_status", "description"],
+        },
+      },
+    },
+    required: ["findings"],
+  },
+};
 
 // ─── Build context string from audit session data ────────────────────────────
 export function buildAuditContext(data: {

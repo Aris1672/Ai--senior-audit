@@ -1,4 +1,4 @@
-import { anthropic, AUDIT_SYSTEM_PROMPT, buildAuditContext, SONNET_MODEL, HAIKU_MODEL } from "@/lib/anthropic";
+import { anthropic, AUDIT_SYSTEM_PROMPT, buildAuditContext, SONNET_MODEL, FINDINGS_TOOL } from "@/lib/anthropic";
 import { createAdminClient } from "@/lib/supabase-server";
 import { parseFile, renderPDFPagesAsImages } from "@/lib/file-parser";
 import { NextRequest, NextResponse } from "next/server";
@@ -61,7 +61,7 @@ async function getAllDocumentsContent(
 
       // ── Images go to Claude's native vision, not text extraction ─────────
       // doc.file_type === "image" covers both JPG and PNG (see upload route's
-      // ALLOWED_TYPES mapping). Claude Sonnet 4.6 reads images directly —
+      // ALLOWED_TYPES mapping). Claude Sonnet 5 reads images directly —
       // there is no OCR step here, the model itself does the reading.
       if (doc.file_type === "image") {
         const ext       = doc.file_name?.split(".").pop()?.toLowerCase();
@@ -152,83 +152,22 @@ async function getAllDocumentsContent(
   }
 }
 
-// ─── Extract and save findings from Claude's response ─────────────────────────
-// Uses Haiku for cost-efficient JSON extraction — no deep reasoning needed here.
-async function extractAndSaveFindings(
+// ─── Save findings extracted via record_findings tool_use ─────────────────────
+// Haiku removed (July 2026) — Sonnet now emits structured findings directly via
+// tool_use on the same call that writes the report text, instead of a second
+// model re-interpreting the first model's prose. This function only validates
+// and persists what the tool call already produced; it makes no LLM call itself.
+// Still defensively validated below: tool_use input is schema-guided, not
+// schema-enforced, so a malformed/out-of-enum value from the model is still
+// possible and must not corrupt the DB or silently overstate certainty.
+async function saveFindings(
   supabase: ReturnType<typeof createAdminClient>,
   sessionId: string,
   clientId: string,
-  assistantText: string
+  findings: any[]
 ): Promise<void> {
   try {
-    // Only run if response contains violation keywords
-    const hasViolations = /нарушени|критич|риск|штраф|КРИТИЧНО|СУЩЕСТВЕННО|НЕСУЩЕСТВЕННО/i.test(assistantText);
-    if (!hasViolations) return;
-
-    // Ask Claude Haiku to extract structured findings (pure JSON parsing, no reasoning needed)
-    const extractRes = await anthropic.messages.create({
-      model:      HAIKU_MODEL,
-      max_tokens: 4096, // raised from 1500 — longer reports can have many more findings to extract as JSON
-      system: `Ты — парсер аудиторских отчётов. Извлеки все нарушения из текста аудитора.
-Верни ТОЛЬКО валидный JSON массив, без пояснений, без markdown, без backticks.
-Каждый объект должен содержать:
-{
-  "title": "краткое название нарушения (до 100 символов)",
-  "risk_level": "КРИТИЧНО" | "СУЩЕСТВЕННО" | "НЕСУЩЕСТВЕННО",
-  "evidence_status": "confirmed" | "risk_flag" | "indirect",
-  "description": "подробное описание (до 500 символов)",
-  "legal_basis": "применимые нормы закона (до 200 символов)",
-  "recommendation": "рекомендация по устранению (до 300 символов)"
-}
-
-Поле evidence_status — это уровень уверенности, который аудитор указал в поле
-"Статус:" исходного текста. Сопоставляй так:
-- "Подтверждённое нарушение" → "confirmed"
-- "Признак риска"            → "risk_flag"
-- "Косвенный признак"        → "indirect"
-Если статус явно не указан в тексте — определи наиболее вероятный по формулировкам
-(например "возможный риск", "требует проверки", "не исключено что" указывают на
-"risk_flag" или "indirect"). При сомнении используй "risk_flag" — никогда не
-выбирай "confirmed", если нет явной формулировки об однозначном подтверждении.
-
-Если нарушений нет — верни пустой массив: []`,
-      messages: [{
-        role:    "user",
-        content: `Извлеки все нарушения из этого аудиторского текста:\n\n${assistantText.slice(0, 12000)}`,
-      }],
-    });
-
-    const rawJson = extractRes.content[0].type === "text"
-      ? extractRes.content[0].text.trim()
-      : "[]";
-
-    let findings: any[] = [];
-    try {
-      // Strip ALL markdown fences — Claude sometimes ignores instructions
-      const clean = rawJson
-        .replace(/^```(?:json)?\s*/im, "")  // opening fence
-        .replace(/```\s*$/im, "")            // closing fence
-        .trim();
-      findings = JSON.parse(clean);
-      if (!Array.isArray(findings)) findings = [];
-    } catch (parseErr) {
-      // Try to extract JSON array from anywhere in the response
-      const match = rawJson.match(/\[\s*\{[\s\S]*\}\s*\]/);
-      if (match) {
-        try {
-          findings = JSON.parse(match[0]);
-          if (!Array.isArray(findings)) findings = [];
-        } catch {
-          console.warn("[chat] Failed to parse findings JSON:", rawJson.slice(0, 200));
-          return;
-        }
-      } else {
-        console.warn("[chat] Failed to parse findings JSON:", rawJson.slice(0, 200));
-        return;
-      }
-    }
-
-    if (findings.length === 0) return;
+    if (!Array.isArray(findings) || findings.length === 0) return;
 
     const validRiskLevels      = new Set(["КРИТИЧНО", "СУЩЕСТВЕННО", "НЕСУЩЕСТВЕННО"]);
     const validEvidenceStatuses = new Set(["confirmed", "risk_flag", "indirect"]);
@@ -241,8 +180,8 @@ async function extractAndSaveFindings(
         title:           String(f.title).slice(0, 100),
         risk_level:      f.risk_level,
         // Default to the middle tier ("risk_flag") rather than "confirmed" if
-        // Haiku omits or mis-formats this field — never let a missing value
-        // silently overstate certainty.
+        // the tool call omits or mis-formats this field — never let a missing
+        // value silently overstate certainty.
         evidence_status: validEvidenceStatuses.has(f.evidence_status) ? f.evidence_status : "risk_flag",
         description:     String(f.description    || "").slice(0, 500),
         legal_basis:     String(f.legal_basis    || "").slice(0, 200),
@@ -271,8 +210,8 @@ async function extractAndSaveFindings(
         .eq("id", sessionId);
     }
   } catch (err) {
-    console.error("[chat] extractAndSaveFindings error:", err);
-    // Never throw — findings extraction is non-critical
+    console.error("[chat] saveFindings error:", err);
+    // Never throw — findings persistence is non-critical to the chat response
   }
 }
 
@@ -339,7 +278,7 @@ export async function POST(req: NextRequest) {
     // so we raise max_tokens and auto-continue server-side if the model is
     // cut off mid-response (stop_reason === "max_tokens"), instead of making
     // the user notice the truncation and type "continue" themselves.
-    const MAX_OUTPUT_TOKENS = 16000; // per-call cap (Sonnet 4.6 ceiling)
+    const MAX_OUTPUT_TOKENS = 16000; // per-call cap (well under Sonnet 5's 128K ceiling — raise if reports need more headroom)
     const MAX_CONTINUATIONS = 5;     // hard safety limit on auto-continue loops
 
     let fullText = "";
@@ -369,21 +308,40 @@ export async function POST(req: NextRequest) {
 
     let continuations = 0;
     let stopReason: string | null = null;
+    let toolFindings: any[] = [];
 
     do {
       const response = await anthropic.messages.create({
-        model:      SONNET_MODEL,
-        max_tokens: MAX_OUTPUT_TOKENS,
-        system:     systemPrompt,
-        messages:   workingMessages,
+        model:       SONNET_MODEL,
+        max_tokens:  MAX_OUTPUT_TOKENS,
+        system:      systemPrompt,
+        messages:    workingMessages,
+        tools:       [FINDINGS_TOOL],
+        tool_choice: { type: "auto" },
       });
 
-      const chunk = response.content[0].type === "text" ? response.content[0].text : "";
+      // A single response can contain a text block AND a tool_use block
+      // (model writes the full report, then calls record_findings once at
+      // the end) — content[0] is no longer a safe assumption now that a
+      // tool is attached, so all blocks are walked explicitly.
+      let chunk = "";
+      for (const block of response.content) {
+        if (block.type === "text") {
+          chunk += block.text;
+        } else if (block.type === "tool_use" && block.name === "record_findings") {
+          const input = block.input as { findings?: any[] };
+          if (Array.isArray(input?.findings)) {
+            toolFindings = toolFindings.concat(input.findings);
+          }
+        }
+      }
+
       fullText += chunk;
       stopReason = response.stop_reason;
 
       console.log("[chat] Sonnet call — stop_reason:", stopReason,
-        "| chunk length:", chunk.length, "| total so far:", fullText.length);
+        "| chunk length:", chunk.length, "| total so far:", fullText.length,
+        "| findings captured:", toolFindings.length);
 
       if (stopReason === "max_tokens" && continuations < MAX_CONTINUATIONS) {
         // Feed the partial response back as assistant history and ask the
@@ -396,6 +354,10 @@ export async function POST(req: NextRequest) {
         ];
         continuations++;
       }
+      // stop_reason === "tool_use" means the model finished its report text
+      // and made its one record_findings call per AUDIT_SYSTEM_PROMPT's
+      // instructions — that's a normal, complete turn, not truncation, so
+      // the loop ends here rather than trying to "continue" generation.
     } while (stopReason === "max_tokens" && continuations <= MAX_CONTINUATIONS);
 
     if (stopReason === "max_tokens") {
@@ -404,7 +366,9 @@ export async function POST(req: NextRequest) {
 
     const text = fullText;
 
-    // Save message and extract findings in parallel
+    // Save message and persist any findings captured via tool_use, in parallel.
+    // No second model call here anymore — saveFindings only validates and
+    // inserts what Sonnet already produced in the same request above.
     await Promise.all([
       supabase.from("audit_messages").insert({
         session_id: sessionId,
@@ -413,7 +377,7 @@ export async function POST(req: NextRequest) {
         content:    text,
       }),
 
-      extractAndSaveFindings(supabase, sessionId, clientId, text),
+      saveFindings(supabase, sessionId, clientId, toolFindings),
     ]);
 
     return NextResponse.json({ message: text });
