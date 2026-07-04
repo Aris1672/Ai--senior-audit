@@ -409,7 +409,13 @@ export async function parsePDF(buffer: ArrayBuffer): Promise<ParseResult> {
     ).toString();
 
     const loadingTask = pdfjsLib.getDocument({
-      data: new Uint8Array(buffer),
+      // .slice(0) copies the bytes into a fresh ArrayBuffer. pdfjs-dist's
+      // getDocument takes ownership of (transfers/detaches) whatever buffer
+      // it's given — without this copy, the caller's original ArrayBuffer
+      // (still needed by renderPDFPagesAsImages() for the scanned-PDF path
+      // right after this call) came back detached, throwing "Cannot perform
+      // Construct on a detached ArrayBuffer" on the very next access.
+      data: new Uint8Array(buffer.slice(0)),
       useWorkerFetch: false,
       isEvalSupported: false,
     });
@@ -492,10 +498,18 @@ export async function renderPDFPagesAsImages(
     const pdfjsLib = await import("pdfjs-dist/legacy/build/pdf.mjs");
     const { createCanvas } = await import("@napi-rs/canvas");
 
-    // No web worker available server-side — run rendering on the main thread.
-    pdfjsLib.GlobalWorkerOptions.workerSrc = "";
+    // Same workerSrc fix as parsePDF() — "" is falsy and pdfjs-dist treats
+    // it as unset, throwing "No workerSrc specified". Not yet hit here only
+    // because the detached-buffer error below fired first.
+    pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
+      "pdfjs-dist/legacy/build/pdf.worker.mjs",
+      import.meta.url
+    ).toString();
 
-    const loadingTask = pdfjsLib.getDocument({ data: new Uint8Array(buffer) });
+    // .slice(0) — same reason as parsePDF(): getDocument transfers/detaches
+    // whatever buffer it's given, so a copy is required if the caller's
+    // original buffer needs to stay usable afterward.
+    const loadingTask = pdfjsLib.getDocument({ data: new Uint8Array(buffer.slice(0)) });
     const pdf = await loadingTask.promise;
 
     const pageCount = Math.min(pdf.numPages, maxPages);
