@@ -416,8 +416,8 @@ export default function ChatPage() {
                   <div style={{
                     display: "flex", alignItems: "center", gap: "6px",
                     marginBottom: "8px", padding: "6px 10px",
-                    background: "rgba(255,255,255,0.12)", borderRadius: "8px",
-                    fontSize: "13px", color: "#e8edf8", width: "fit-content",
+                    background: "#e8edf8", borderRadius: "8px",
+                    fontSize: "13px", color: "#0c1220", width: "fit-content",
                   }}>
                     <span>📎</span>
                     <span style={{ wordBreak: "break-all" }}>{msg.fileName}</span>
