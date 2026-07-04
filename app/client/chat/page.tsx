@@ -32,9 +32,8 @@ const markdownComponents = {
   ),
   h3: (props: any) => (
     <h3 style={{
-      fontSize: "15px", fontWeight: 800, color: "#f4f7ff",
+      fontSize: "15px", fontWeight: 600, color: "#f4f7ff",
       margin: "20px 0 12px 0", padding: "9px 14px",
-      background: "#152449", borderRadius: "6px",
       borderLeft: "4px solid #4d91ff",
     }} {...props} />
   ),
