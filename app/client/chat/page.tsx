@@ -42,7 +42,7 @@ const markdownComponents = {
     <p style={{ margin: "0 0 10px 0", lineHeight: "1.6" }} {...props} />
   ),
   strong: (props: any) => (
-    <strong style={{ color: "#a9c1f0", fontWeight: 700 }} {...props} />
+    <strong style={{ color: "#4d91ff", fontWeight: 700 }} {...props} />
   ),
   ul: (props: any) => (
     <ul style={{ margin: "0 0 10px 0", paddingLeft: "20px" }} {...props} />
