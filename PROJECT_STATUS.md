@@ -1,6 +1,6 @@
 # AI Senior Auditor — Project Status
 
-> Last updated: July 3, 2026. Updated after Haiku removal + Sonnet 5 upgrade session (see Session Log at bottom for what changed and why).
+> Last updated: July 4, 2026. Updated after the tax-profile gate + audit-purpose gate + chat UX/markdown rendering session (see Session Log at bottom for what changed and why).
 > GitHub: https://github.com/Aris1672/Ai--senior-audit
 > Live demo: https://ai-senior-audit.vercel.app
 > Admin login: support@assistant24.tech (role set manually in Supabase)
@@ -121,7 +121,11 @@ The system prompt is written entirely in Russian and instructs the AI to operate
 
 **Mandatory output format:** Each finding must include: risk level, status, description with supporting data, legal basis, confirming data points from the document, recommendation with timeframe.
 
-**Report structure:** Auditor summary (3–5 sentences) → confirmed violations (by descending risk) → risk indicators → indirect indicators → quality assessment → priority recommendations (max 5, numbered).
+**Report structure:** Auditor summary (**changed July 4, 2026 — now a required bullet list, 4–6 points, not prose**: what was checked, legal form + tax regime from session context, main income/expense sources, key issues, overall risk rating) → confirmed violations (by descending risk) → risk indicators → indirect indicators → quality assessment → priority recommendations (max 5, numbered).
+
+**Tone rules (added July 4, 2026):** explicit instruction against self-introduction/greeting phrasing ("Здравствуйте! Меня зовут...") at the start of any response — the model is told it's a corporate audit tool, not a conversational partner, and should start directly with either formal address or substance.
+
+**Mandatory audit-purpose question (added July 4, 2026):** legal form/tax regime/VAT status are now app-level facts (see "Tax-Profile Gate" above) and the prompt tells the model not to re-ask for them. The one remaining clarifying question — audit purpose (tax risk / bank-check prep / internal control / other) — is now a hard instruction: if not yet stated in the conversation, the model's first response in the session must be *only* that question, no report, no preliminary findings. Full analysis is explicitly gated on it being answered. **This is prompt-only, not app-enforced** — same non-determinism ceiling as everything else asked of the model rather than validated in code; not yet confirmed to fire reliably across repeated real runs (see punch list).
 
 ---
 
@@ -270,12 +274,12 @@ All frontend data reads and writes route through a single `POST /api/data` endpo
 | `client_usage` | Client usage page | usage_events (last 100) |
 | `client_documents` | Documents page | documents for client |
 | `client_messages` | Chat page | audit_messages for session |
-| `get_or_create_session` | Chat page (no session param) | Latest active session or new one |
+| `get_or_create_session` | **No longer called by any client code (July 4, 2026).** | See "Tax-Profile Gate" section — still creates a tax-profile-less session if invoked directly against the API, but the chat page now redirects to the wizard instead of calling it. |
 | `save_message` | Chat page | Insert to audit_messages |
 | `update_client_status` | Admin clients page | profiles.status |
-| `create_audit_session` | New audit wizard | Insert audit_sessions |
-| `confirm_audit` | New audit wizard | Write cost_rub + transactions_ct to session |
-| `get_session_context` | Chat page (with session param) | Session data + company/period parsed from title |
+| `create_audit_session` | New audit wizard | **Now validates legal_form/tax_regime/vat_status server-side (July 4, 2026)** — rejects with 400 if missing or not in the shared enum set from `lib/audit-constants.ts`; see below. Insert audit_sessions. |
+| `confirm_audit` | New audit wizard | **Now re-checks legal_form/tax_regime/vat_status exist on the session row before writing (July 4, 2026)** — defense-in-depth catching any session that reached this point without going through `create_audit_session`'s validation. Write cost_rub + transactions_ct to session. |
+| `get_session_context` | Chat page (with session param) | Session data + company/period parsed from title + tax-profile fields (with `_display` resolving "Другое" to free text) |
 | `delete_client` | Admin clients page | Soft-delete (status → "deleted") |
 | `get_client_sessions` | Client layout auth check | Check if client has any sessions (lock/unlock chat nav) |
 | `update_session_status` | Chat page | Set session status (active/completed) |
@@ -294,6 +298,22 @@ const periodMatch  = title.match(/\((.+?)\)/);
 ```
 
 Any company name containing a `(` character silently breaks the parse. `audit_sessions` has `period_from DATE` and `period_to DATE` columns in the schema (selected in `get_session_context`) but these are never written to — the title-embedded period string is used instead.
+
+### Tax-Profile Gate (added July 4, 2026)
+
+**Why:** identical input data (same 71-transaction bank statement) was producing different risk-tier conclusions across separate AI runs, and one run skipped straight to full analysis while another stopped to ask about tax regime first — an emergent, not scripted, behavior, since nothing in the prompt governed this decision either way. Root cause: the model was left to guess at or inconsistently ask about facts (legal form, tax regime, VAT status) that change what a *correct* analysis even looks like.
+
+**Fix — moved to a hard application-level gate, not a prompt instruction:**
+- Three new columns on `audit_sessions`: `legal_form`/`legal_form_other`, `tax_regime`/`tax_regime_other`, `vat_status` (migration `006_session_tax_profile.sql`)
+- `lib/audit-constants.ts` — single source of truth for the three dropdown option sets (`LEGAL_FORMS`, `TAX_REGIMES`, `VAT_STATUSES`), imported by both the wizard (rendering) and `/api/data` (validation), so they can't drift apart
+- New-audit wizard (`app/client/audit/new/page.tsx`) — Step 1 now has three required fields: legal form (select + conditional "Другое" free text), tax regime (same pattern), VAT status (radio group — single-select, since the three options are mutually exclusive; deliberately not checkboxes)
+- `create_audit_session` (`/api/data`) validates all three server-side against the shared enum sets and rejects with 400 if missing/invalid — **this is the real gate; the wizard's client-side check is UX only, not enforcement**
+- `confirm_audit` re-checks the fields exist on the DB row itself before allowing confirmation — defense-in-depth against any code path that could create a session without going through `create_audit_session`
+- **The `get_or_create_session` bypass is closed at its only call site:** this action still exists and would still create a tax-profile-less session if called directly, but `app/client/chat/page.tsx` no longer calls it — landing on `/client/chat` with no `?session=` param now redirects to the wizard instead. Since the wizard's `confirm_audit` redirect is the only way to reach the chat page with a session ID, every session reaching chat has necessarily passed the gate.
+- `buildAuditContext()` (`lib/anthropic.ts`) takes `legalForm`/`taxRegime`/`vatStatus` and renders them as **stated facts** in the system prompt context block, with an explicit instruction not to re-ask for them in chat
+- Per product decision, these fields are captured **fresh on every new audit session**, not inherited from a client profile — a repeat client re-enters them each time. Deliberate tradeoff, not an oversight.
+
+**Scoped out by product decision:** `audit_purpose` stays prompt-only (see AI Agent section / System Prompt below) rather than becoming a 4th app-level gate — reasoning was that legal form/tax regime/VAT status are objective facts that change correctness of findings, while audit purpose is framing/prioritization on top of an already-correct analysis, so some variance there was judged lower-stakes. Not yet validated against repeated real runs whether that assumption holds — see punch list.
 
 ---
 
@@ -359,6 +379,9 @@ PostgreSQL function `get_client_limit(p_client_id)` returns effective `(max_tx, 
 | findings_ct | INTEGER | Incremented by chat route after saving findings from the record_findings tool call |
 | cost_rub | NUMERIC(10,2) | Set by `confirm_audit` action |
 | paid | BOOLEAN | **Not in migration file** — added outside version control |
+| legal_form / legal_form_other | TEXT | **Added July 4, 2026 (migration 006).** Company legal form declared at session creation via required dropdown; `_other` holds free text when "Другое" is selected. |
+| tax_regime / tax_regime_other | TEXT | **Added July 4, 2026 (migration 006).** Same pattern as legal_form. Feeds directly into `buildAuditContext()` as a stated fact — see "Tax-Profile Gate" section below. |
+| vat_status | TEXT | **Added July 4, 2026 (migration 006).** `'payer'` \| `'exempt'` \| `'not_taxed'`, DB-level `CHECK` constraint. |
 | created_at / completed_at | TIMESTAMPTZ | |
 
 PostgreSQL function `increment_session_cost(p_session_id, p_amount)` — defined but not called by any app code.
@@ -603,6 +626,7 @@ These could be consolidated into one shared component.
 | `mammoth ^1.12.0` | Legacy .doc binary text extraction |
 | `xlsx ^0.18.5` | Legacy .xls binary parsing only (not used for .xlsx) |
 | `pdfmake ^0.3.8` | Client-side PDF report generation |
+| `react-markdown` | **Added July 4, 2026.** Renders assistant chat messages as real markdown (headers, bold, lists) instead of literal `##`/`**` syntax — see "Chat UX" section below. No `remark-gfm` needed; headers/bold/lists/`---` dividers are all core commonmark. |
 | `next 16.2.6` | Framework |
 | `react 19.2.4` | UI |
 
@@ -774,8 +798,8 @@ PM2 keeps Next.js running as background process, auto-restarts on crash. Cost: f
 - Admin portal: new client creation form
 - Admin portal: pricing tiers full CRUD
 - Client portal: dashboard with animated canvas donuts, recent audits, open findings
-- Client portal: new audit wizard (file upload + live 1C, 4-step flow with price confirmation)
-- Client portal: AI chat with typewriter animation (now 2x speed — CHARS_PER_TICK=2, not interval-shrinking, since requestAnimationFrame clamps below ~16.6ms anyway), file attachment, complete-audit flow
+- Client portal: new audit wizard (file upload + live 1C, 4-step flow with price confirmation, now also gates on legal form / tax regime / VAT status — see "Tax-Profile Gate" below)
+- Client portal: AI chat with typewriter animation (now 2x speed — CHARS_PER_TICK=2, not interval-shrinking, since requestAnimationFrame clamps below ~16.6ms anyway), file attachment, complete-audit flow, **markdown rendering for finished assistant messages (July 4, 2026)** — real headers/subheaders/bold/lists instead of literal `##`/`**` syntax; typing message still renders plain text to avoid unclosed-markdown glitches mid-animation
 - Client portal: audit detail page with findings, chat history, canvas donuts, PDF download
 - Client portal: documents page (built, but hidden from navigation)
 - Client portal: usage history (event log — minimal data currently)
@@ -783,6 +807,9 @@ PM2 keeps Next.js running as background process, auto-restarts on crash. Cost: f
 - Chat route now trusts `documents.file_type` (DB-classified) instead of re-deriving type from filename extension — root-cause fix that unlocked `.doc`/`.txt`/`.pdf` routing
 - PDF report generation (client-side, pdfmake, full Russian audit report with branding, now includes evidence-confidence label per finding)
 - Single-model AI: Sonnet 5 reasoning + tool_use findings extraction in one call (Haiku removed July 3, 2026 — see Session Log)
+- **Tax-profile app-level gate (July 4, 2026):** legal form, tax regime, and VAT status are now required dropdowns in the wizard, validated server-side, persisted per-session, and fed to the AI as stated facts instead of being guessed or emergently asked about — see "Tax-Profile Gate" section and Session Log
+- **Audit-purpose prompt gate (July 4, 2026):** `AUDIT_SYSTEM_PROMPT` now requires the model's first response in a session to be only a clarifying question about audit purpose (tax risk / bank-check prep / internal control / other) before any full analysis — prompt-only per product decision, not yet stress-tested against repeated runs (see punch list)
+- **Communication-style fixes (July 4, 2026):** no more self-introduction/greeting ("Здравствуйте! Меня зовут...") at the start of responses; "Резюме аудитора" is now a required bullet list instead of a prose paragraph
 - Pay-per-audit pricing with tier lookup and per-client overrides
 - Supabase Storage upload with background parse and result caching
 - Server-side-only Supabase auth: login AND logout both proxied through Vercel API routes; no page in the app makes a direct browser-to-Supabase call (full tree audited July 1, 2026)
@@ -812,6 +839,43 @@ PM2 keeps Next.js running as background process, auto-restarts on crash. Cost: f
 
 **P3 — Cleanup / deferred**
 - [ ] Chat page's own attachment-button accept attribute still missing `.txt`/`.doc` (only `.xls,.pdf` currently) — left unpatched on purpose, decide if it should match the other two upload surfaces
+
+---
+
+## Session Log — Tax-Profile Gate, Audit-Purpose Gate & Chat UX (July 4, 2026)
+
+**Trigger:** running the same 71-transaction bank statement through three separate AI runs produced three different behaviors — two full analyses with different risk-tier conclusions on the same facts (concentration risk flipped between СУЩЕСТВЕННО and НЕСУЩЕСТВЕННО; personal-expense mixing flipped the other way), and a third run that stopped to ask clarifying questions (tax regime, audit purpose) before analyzing at all. All three are consistent with the same prompt, because nothing in the prompt governed whether to ask or what to assume.
+
+### Part 1 — Tax-Profile Gate (legal form, tax regime, VAT status)
+
+Moved to a hard application-level gate rather than a prompt instruction, since the whole premise of this session was that non-deterministic sampling can't be trusted to reliably ask (or not ask) about facts that change correctness. Full details in the new "Tax-Profile Gate" section above. Summary: new `audit_sessions` columns (migration `006`), new `lib/audit-constants.ts` as shared source of truth, wizard UI gets three new required fields, `create_audit_session` validates server-side, `confirm_audit` re-validates as defense-in-depth, and the `get_or_create_session` bypass is closed by redirecting the chat page to the wizard instead of calling it when no session ID is present. `buildAuditContext()` now renders these as stated facts.
+
+Product decisions made during this work: captured fresh per-session, not inherited from a client profile (client re-enters every audit); `audit_purpose` stays prompt-only rather than becoming a 4th gate (see Part 2).
+
+### Part 2 — Audit-Purpose Prompt Gate
+
+`AUDIT_SYSTEM_PROMPT` now instructs: if audit purpose hasn't been stated, the model's first response must be only that question, before any report. This directly codifies behavior that was previously emergent (present in one of the three test runs, absent in the other two). **Explicitly flagged as unverified** — this is a prompt instruction, not a code-enforced gate, so it carries the same reliability risk being fixed for the other three fields in Part 1. Added to punch list as an item to test against repeated real runs.
+
+A real contradiction was caught and fixed while writing this: the pre-existing "file is already loaded, start analysis immediately" instruction directly conflicted with "ask about purpose first." Reworded so the model won't claim the file is missing, but also won't skip the purpose question because of that instruction.
+
+### Part 3 — Communication style fixes
+
+Two issues found in real output, fixed via prompt edits only (no code changes):
+- Sonnet was self-introducing ("Здравствуйте! Меня зовут ИИ Старший Аудитор...") at the start of responses — emergent, not scripted. Added explicit instruction against this; model is told it's a corporate tool, not a conversational partner.
+- "Резюме аудитора" was prose (3–5 sentences) per the original spec, but real output was dense and hard to scan. Changed the spec to require a 4–6 point bullet list instead: what was checked, legal form + tax regime, income/expense sources, key issues, risk rating.
+
+Verified against a real deployed session (screenshot review) — both fixes confirmed working: no greeting, purpose question fired with the tax-profile facts already known and not re-asked, summary rendered as bullets.
+
+### Part 4 — Chat UX: real markdown rendering
+
+The screenshot review in Part 3 surfaced a separate, unrelated problem: the chat page renders message text as plain strings, so headers and bold markdown syntax (`## Резюме аудитора`, `**Уровень риска:**`) were showing up as literal `#` and `*` characters instead of rendering. Fixed in `app/client/chat/page.tsx`:
+- Added `react-markdown` dependency (`npm install react-markdown` required — no `remark-gfm` needed)
+- Custom themed component overrides for `h1`/`h2`/`h3`/`p`/`strong`/`ul`/`ol`/`li`/`hr`/`code` matching the existing dark palette
+- Only applied to **finished** assistant messages — the actively-typing message (via `TypewriterMessage`) still renders as plain text, since partial/unclosed markdown mid-animation (e.g. `**Провер`) would render incorrectly. User messages stay plain text always.
+- Iterated twice on the `h3` (finding subheader) style based on visual feedback: first added a background chip + heavy weight (800) to make findings stand out from body text, then reduced weight to 600 per feedback that it read as "too bold," then restored the background chip while keeping the lighter weight per further feedback — final state is background chip + `fontWeight: 600`.
+- Also changed the `strong` (bold label) color from `#a9c1f0` to `#4d91ff` — the original was too close in lightness to the body text color (`#e8edf8`) to read as distinct at a glance; reused the same saturated blue already used for `h2`/`h3` accents rather than introducing a third accent color.
+
+**Not yet done:** no `h4`+ style override exists. The prompt only asks for two heading levels (`##`/`###`), so risk is low, but if the model ever emits a deeper heading it will render unstyled against the dark theme.
 
 ---
 
