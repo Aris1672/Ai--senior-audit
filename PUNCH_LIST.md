@@ -2,6 +2,8 @@
 
 Prioritized by what it blocks. Derived from full source review (see PROJECT_STATUS.md for details on each item).
 
+> **Updated July 3, 2026** — Haiku 4.5 removed from the audit pipeline; `SONNET_MODEL` upgraded to `claude-sonnet-5`. Findings are now extracted via a `record_findings` tool_use call on the same Sonnet request that generates the report, instead of a second Haiku call parsing Sonnet's text. Rationale: real usage data (June 30, 2026) showed Haiku at ~2.6% of daily token cost (~$0.20 of $7.63) — not worth the quality risk the split already caused once (the evidence_status field being silently dropped between Sonnet's reasoning and Haiku's extraction schema, fixed July 1). See items below for what this closes and what it opens.
+
 ---
 
 ## P0 — Security (fix before any real client data touches this, demo included)
@@ -21,6 +23,7 @@ Prioritized by what it blocks. Derived from full source review (see PROJECT_STAT
 - [ ] **Fix multi-sheet XLSX/XLS parsing.** Both parsers read only the first sheet. Confirmed in real client testing: a 1C export with "Без подтверждающих документов" (135 rows, audit-relevant) + "Полный список" (178 rows) only ever surfaces sheet 1 to the AI. This directly affects audit accuracy/completeness on real client files.
 - [ ] **Add `.txt` to file input `accept` attributes.** The most fully-built parser (1C Client Bank Exchange, Windows-1251 decoding, transaction-level detail) is unreachable through any of the three upload UIs because the file picker filters it out. Either add `.txt` to the accept lists or relax/remove the filter.
 - [ ] **Add PDF text extraction.** `pdf-parse` is already installed but never wired into `file-parser.ts`. PDFs currently upload fine but contribute nothing to the AI's analysis — silent capability gap for a common document type in this domain (invoices, contracts, statements often arrive as PDF).
+- [ ] **Verify the Sonnet 5 tool_use findings extraction end-to-end.** (New, July 3 2026.) Haiku's separate extraction call is gone — `app/api/chat/route.ts` now attaches a `record_findings` tool to the main Sonnet call and expects the model to write its full report, then call the tool exactly once with all findings. This is a behavioral assumption, not yet confirmed: run one full real audit and check (a) `findings_ct`/the `findings` table actually populates, (b) the tool call happens *after* the report text rather than mid-report or not at all, (c) `evidence_status` values land correctly (this was the exact field that broke silently under the old Haiku split — confirm the fix holds under the new architecture too). Treat as unverified until a real Sonnet 5 round trip is checked against the DB, same standard applied to the July 1 evidence_status fix.
 
 ---
 
@@ -31,7 +34,7 @@ Prioritized by what it blocks. Derived from full source review (see PROJECT_STAT
 - [ ] **Fix the `paid` status check inconsistency in `/api/auth/login`.** Login blocks `status === 'paused'` but not `'deleted'`, while `check-limit` blocks both. A soft-deleted client could potentially still log in.
 - [ ] **Decide on one data-access convention.** Right now `/api/data`'s action dispatcher and dedicated REST routes (`/api/admin/clients`, `/api/admin/pricing`) coexist for overlapping concerns. Pick one pattern going forward to avoid the inconsistency compounding as features are added.
 - [ ] **Decide the fate of `/api/billing/check-limit` and `client_subscriptions`.** Confirmed unused — the new-audit wizard never calls it, so audits/pricing have no actual cap right now regardless of tier or subscription state. Either wire it into the wizard (if usage limits matter for the business model) or remove it/document it as aspirational, so it doesn't mislead anyone reading the code into thinking limits are enforced.
-- [ ] **Reconcile token pricing constants.** `lib/anthropic.ts` and `lib/billing.ts` have different, non-matching per-1K-token rates for the same models — whichever one is used for client-facing cost estimates is currently wrong relative to the other.
+- [ ] **Reconcile token pricing constants.** (Updated July 3 2026.) `lib/anthropic.ts` no longer defines Haiku pricing at all — `HAIKU_PRICING` was removed along with `HAIKU_MODEL` when Haiku was dropped from the audit pipeline. If `lib/billing.ts` or the client usage page (`UsageBreakdown` type) still reference Haiku rates or a per-model cost split, those are now dead/misleading and need to be updated to reflect a Sonnet-only pipeline. Also: `SONNET_PRICING` in `lib/anthropic.ts` is still the standard $3/$15-per-1M rate, but Sonnet 5 launched at **introductory pricing of $2/$10 per 1M through August 31, 2026** — so client-facing cost estimates are currently ~50% too high until either the constant is updated or the intro period ends. Fix both in the same pass.
 
 ---
 
@@ -40,7 +43,7 @@ Prioritized by what it blocks. Derived from full source review (see PROJECT_STAT
 - [ ] Remove unused dependencies: `pdf-parse` (until wired up per P1), `papaparse` (CSV is hand-rolled), `chart.js` (all charts are hand-rolled SVG/canvas).
 - [ ] Consolidate the three independent donut chart implementations (admin dashboard SVG, client dashboard canvas, audit detail canvas) into one shared component.
 - [ ] Remove or document `proxy.ts` — it's currently a no-op middleware; either give it a real purpose (e.g. server-side auth gating, which would also help with P0) or delete it so it doesn't imply protection that isn't happening.
-- [ ] Wire `audit_messages.tokens_in`/`tokens_out` and `usage_events` AI-message logging — schema supports per-message token/cost tracking but the chat route never writes it, so the `UsageBreakdown` type in `billing.ts` and the client usage page can't show real cost data.
+- [ ] Wire `audit_messages.tokens_in`/`tokens_out` and `usage_events` AI-message logging — schema supports per-message token/cost tracking but the chat route never writes it, so the `UsageBreakdown` type in `billing.ts` and the client usage page can't show real cost data. (Simpler to wire up now that each chat turn is a single Sonnet call rather than a Sonnet+Haiku pair — one `usage` object per turn instead of two to reconcile.)
 - [ ] Decide the fate of the `transactions` table — either start populating it for structured per-transaction analysis (likely needed eventually for risk_score work) or remove it from the schema if the flat-text-to-LLM approach is the permanent design.
 - [ ] Remove the unused `increment_session_cost()` Postgres function if nothing will call it.
 

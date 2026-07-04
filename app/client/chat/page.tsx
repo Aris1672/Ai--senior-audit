@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { useSearchParams } from "next/navigation";
+import { useSearchParams, useRouter } from "next/navigation";
 
 interface Message { role: "user" | "assistant"; content: string; costRub?: number; }
 
@@ -74,6 +74,7 @@ export default function ChatPage() {
   const bottomRef    = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const searchParams = useSearchParams();
+  const router = useRouter();
 
   // ── Init ──────────────────────────────────────────────────────────────────
   useEffect(() => {
@@ -113,27 +114,17 @@ export default function ChatPage() {
         initRef.current = { uid, sessionId: urlSessionId, ctx, msgs: msgs || [] };
 
       } else {
-        const sessionRes = await fetch("/api/data", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ action: "get_or_create_session", payload: { clientId: uid } }),
-        });
-        const { sessionId: sid, isNew } = await sessionRes.json();
-        setSessionId(sid);
-
-        let msgs: Message[] = [];
-        if (!isNew) {
-          const msgRes = await fetch("/api/data", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ action: "client_messages", payload: { sessionId: sid } }),
-          });
-          msgs = await msgRes.json() || [];
-          setMessages(msgs);
-        }
-
-        setInitDone(true);
-        initRef.current = { uid, sessionId: sid, ctx: null, msgs };
+        // No ?session= in the URL — previously fell back to
+        // get_or_create_session, which creates an audit_sessions row with
+        // NO tax-profile fields (legal_form/tax_regime/vat_status all
+        // null). That session could never reach full analysis anyway
+        // (confirm_audit's defense-in-depth check blocks it), so it just
+        // produced a dead end. Redirecting to the wizard instead means the
+        // ONLY way to reach this page is via the wizard's confirm_audit
+        // success redirect — i.e. every session on this page is guaranteed
+        // to have passed the tax-profile gate. See PROJECT_STATUS.md.
+        router.replace("/client/audit/new");
+        return;
       }
     }
     init();
@@ -158,7 +149,11 @@ export default function ChatPage() {
 
     sendAutoMessageDirect(
       systemMessage, init.uid, init.sessionId,
-      ctx ? { companyName: ctx.company_name, periodFrom: ctx.period, transactionCount: ctx.transactions_ct, openFindings: 0, criticalCount: 0 } : undefined
+      ctx ? {
+        companyName: ctx.company_name, periodFrom: ctx.period,
+        transactionCount: ctx.transactions_ct, openFindings: 0, criticalCount: 0,
+        legalForm: ctx.legal_form_display, taxRegime: ctx.tax_regime_display, vatStatus: ctx.vat_status,
+      } : undefined
     );
   }, [initDone]);
 
@@ -221,7 +216,11 @@ export default function ChatPage() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         clientId: uid, sessionId: sid,
-        context: context ? { companyName: context.company_name, periodFrom: context.period, transactionCount: context.transactions_ct, openFindings: 0, criticalCount: 0 } : undefined,
+        context: context ? {
+          companyName: context.company_name, periodFrom: context.period,
+          transactionCount: context.transactions_ct, openFindings: 0, criticalCount: 0,
+          legalForm: context.legal_form_display, taxRegime: context.tax_regime_display, vatStatus: context.vat_status,
+        } : undefined,
         messages: currentMessages.map(m => ({ role: m.role, content: m.content })),
       }),
     });
@@ -259,7 +258,11 @@ export default function ChatPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           clientId, sessionId,
-          context: context ? { companyName: context.company_name, periodFrom: context.period, transactionCount: context.transactions_ct, openFindings: 0, criticalCount: 0 } : undefined,
+          context: context ? {
+            companyName: context.company_name, periodFrom: context.period,
+            transactionCount: context.transactions_ct, openFindings: 0, criticalCount: 0,
+            legalForm: context.legal_form_display, taxRegime: context.tax_regime_display, vatStatus: context.vat_status,
+          } : undefined,
           messages: newMessages.map(m => ({ role: m.role, content: m.content })),
         }),
       });

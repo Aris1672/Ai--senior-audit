@@ -3,6 +3,7 @@
 import { useState, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { formatRubles } from "@/lib/billing";
+import { LEGAL_FORMS, TAX_REGIMES, VAT_STATUSES } from "@/lib/audit-constants";
 
 type Step = "client-info" | "data-source" | "processing" | "confirm";
 type SourceType = "file" | "live_1c";
@@ -24,9 +25,14 @@ export default function NewAuditPage() {
   const router  = useRouter();
 
   const [clientInfo, setClientInfo] = useState({
-    companyName: "",
-    inn:         "",
-    period:      "",
+    companyName:     "",
+    inn:              "",
+    period:           "",
+    legalForm:        "",
+    legalFormOther:   "",
+    taxRegime:        "",
+    taxRegimeOther:   "",
+    vatStatus:        "",
   });
 
   const [c1Config, setC1Config] = useState({
@@ -46,6 +52,26 @@ export default function NewAuditPage() {
   function handleClientInfoNext() {
     if (!clientInfo.companyName) {
       setError("Введите название компании клиента");
+      return;
+    }
+    if (!clientInfo.legalForm) {
+      setError("Выберите организационно-правовую форму");
+      return;
+    }
+    if (clientInfo.legalForm === "Другое" && !clientInfo.legalFormOther.trim()) {
+      setError('Укажите организационно-правовую форму в поле "Другое"');
+      return;
+    }
+    if (!clientInfo.taxRegime) {
+      setError("Выберите систему налогообложения");
+      return;
+    }
+    if (clientInfo.taxRegime === "Другое" && !clientInfo.taxRegimeOther.trim()) {
+      setError('Укажите систему налогообложения в поле "Другое"');
+      return;
+    }
+    if (!clientInfo.vatStatus) {
+      setError("Выберите статус НДС");
       return;
     }
     setError("");
@@ -73,11 +99,16 @@ export default function NewAuditPage() {
       body: JSON.stringify({
         action: "create_audit_session",
         payload: {
-          clientId:    user.id,
-          companyName: clientInfo.companyName,
-          inn:         clientInfo.inn,
-          period:      clientInfo.period,
-          sourceType:  "file",
+          clientId:        user.id,
+          companyName:     clientInfo.companyName,
+          inn:             clientInfo.inn,
+          period:          clientInfo.period,
+          sourceType:      "file",
+          legalForm:       clientInfo.legalForm,
+          legalFormOther:  clientInfo.legalFormOther,
+          taxRegime:       clientInfo.taxRegime,
+          taxRegimeOther:  clientInfo.taxRegimeOther,
+          vatStatus:       clientInfo.vatStatus,
         },
       }),
     });
@@ -131,11 +162,16 @@ export default function NewAuditPage() {
       body: JSON.stringify({
         action: "create_audit_session",
         payload: {
-          clientId:    user.id,
-          companyName: clientInfo.companyName,
-          inn:         clientInfo.inn,
-          period:      clientInfo.period,
-          sourceType:  "live_1c",
+          clientId:        user.id,
+          companyName:     clientInfo.companyName,
+          inn:             clientInfo.inn,
+          period:          clientInfo.period,
+          sourceType:      "live_1c",
+          legalForm:       clientInfo.legalForm,
+          legalFormOther:  clientInfo.legalFormOther,
+          taxRegime:       clientInfo.taxRegime,
+          taxRegimeOther:  clientInfo.taxRegimeOther,
+          vatStatus:       clientInfo.vatStatus,
         },
       }),
     });
@@ -259,6 +295,60 @@ export default function NewAuditPage() {
                 <input style={inputStyle} value={clientInfo.period}
                   onChange={e => updateClientInfo("period", e.target.value)}
                   placeholder="2024 / Q1 2024" />
+              </div>
+            </div>
+
+            {/* ── Tax profile gate — required before proceeding ── */}
+            <div>
+              <label style={labelStyle}>Организационно-правовая форма *</label>
+              <select style={inputStyle} value={clientInfo.legalForm}
+                onChange={e => updateClientInfo("legalForm", e.target.value)}>
+                <option value="">Выберите форму...</option>
+                {LEGAL_FORMS.map(o => (
+                  <option key={o.value} value={o.value}>{o.label}</option>
+                ))}
+              </select>
+              {clientInfo.legalForm === "Другое" && (
+                <input style={{ ...inputStyle, marginTop: "8px" }}
+                  value={clientInfo.legalFormOther}
+                  onChange={e => updateClientInfo("legalFormOther", e.target.value)}
+                  placeholder="Укажите организационно-правовую форму" />
+              )}
+            </div>
+
+            <div>
+              <label style={labelStyle}>Система налогообложения *</label>
+              <select style={inputStyle} value={clientInfo.taxRegime}
+                onChange={e => updateClientInfo("taxRegime", e.target.value)}>
+                <option value="">Выберите режим...</option>
+                {TAX_REGIMES.map(o => (
+                  <option key={o.value} value={o.value}>{o.label}</option>
+                ))}
+              </select>
+              {clientInfo.taxRegime === "Другое" && (
+                <input style={{ ...inputStyle, marginTop: "8px" }}
+                  value={clientInfo.taxRegimeOther}
+                  onChange={e => updateClientInfo("taxRegimeOther", e.target.value)}
+                  placeholder="Укажите систему налогообложения" />
+              )}
+            </div>
+
+            <div>
+              <label style={labelStyle}>Статус НДС *</label>
+              <div style={{ display: "grid", gap: "8px" }}>
+                {VAT_STATUSES.map(o => (
+                  <label key={o.value} style={{
+                    display: "flex", alignItems: "center", gap: "10px",
+                    padding: "11px 14px", borderRadius: "8px", cursor: "pointer",
+                    background: "#101828",
+                    border: `1px solid ${clientInfo.vatStatus === o.value ? "#1565e8" : "#1e2d55"}`,
+                  }}>
+                    <input type="radio" name="vatStatus" value={o.value}
+                      checked={clientInfo.vatStatus === o.value}
+                      onChange={e => updateClientInfo("vatStatus", e.target.value)} />
+                    <span style={{ color: "#e8edf8", fontSize: "14px" }}>{o.label}</span>
+                  </label>
+                ))}
               </div>
             </div>
           </div>
@@ -440,6 +530,13 @@ export default function NewAuditPage() {
                   ИНН: {clientInfo.inn}
                 </div>
               )}
+              <div style={{ fontSize: "12px", color: "#7a90c0", marginTop: "6px" }}>
+                {clientInfo.legalForm === "Другое" ? clientInfo.legalFormOther : clientInfo.legalForm}
+                {" · "}
+                {clientInfo.taxRegime === "Другое" ? clientInfo.taxRegimeOther : clientInfo.taxRegime}
+                {" · "}
+                {VAT_STATUSES.find(o => o.value === clientInfo.vatStatus)?.label}
+              </div>
             </div>
 
             {/* Price breakdown */}

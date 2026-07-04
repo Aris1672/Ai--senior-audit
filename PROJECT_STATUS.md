@@ -1,6 +1,6 @@
 # AI Senior Auditor — Project Status
 
-> Last updated: July 1, 2026. Updated after Russia-login-bypass fix + evidence-confidence status session (see Session Log at bottom for what changed and why).
+> Last updated: July 3, 2026. Updated after Haiku removal + Sonnet 5 upgrade session (see Session Log at bottom for what changed and why).
 > GitHub: https://github.com/Aris1672/Ai--senior-audit
 > Live demo: https://ai-senior-audit.vercel.app
 > Admin login: support@assistant24.tech (role set manually in Supabase)
@@ -16,8 +16,7 @@
 | Runtime | React | 19.2.4 |
 | Database + Auth | Supabase (PostgreSQL + Auth + Storage) | @supabase/supabase-js 2.105.4 |
 | Hosting / Proxy | Vercel | — |
-| AI — primary | Claude Sonnet 4.6 | @anthropic-ai/sdk 0.96.0 |
-| AI — extraction | Claude Haiku 4.5 | same SDK |
+| AI — audit reasoning + findings extraction | Claude Sonnet 5 | @anthropic-ai/sdk 0.96.0 |
 | XLSX parsing | fflate (hand-rolled) + xlsx (legacy .xls only) | 0.8.3 / 0.18.5 |
 | DOCX parsing | fflate (hand-rolled) | same |
 | DOC parsing | mammoth | 1.12.0 |
@@ -51,14 +50,15 @@ The browser **never** connects directly to Supabase or Anthropic. Every fetch in
 
 ---
 
-## AI Agent: Hybrid LLM Architecture
+## AI Agent: Single-Model Tool-Use Architecture
 
-### Models
+> **Changed July 3, 2026** — was a two-model "hybrid" design (Sonnet reasoning + separate Haiku extraction call). Haiku is now removed; see Session Log for rationale (real usage data showed Haiku at ~2.6% of daily token cost — not worth the quality risk the split had already caused once, see the evidence_status incident below).
+
+### Model
 
 | Model | Role | Max tokens |
 |---|---|---|
-| Claude Sonnet 4.6 (`claude-sonnet-4-6`) | Main audit reasoning — deep legal and financial analysis | 4096 |
-| Claude Haiku 4.5 (`claude-haiku-4-5-20251001`) | Findings extraction — cost-efficient JSON parsing only | 1500 |
+| Claude Sonnet 5 (`claude-sonnet-5`) | Audit reasoning + structured findings extraction (single call) | 16000 |
 
 ### Call Flow (`app/api/chat/route.ts`)
 
@@ -73,24 +73,27 @@ User message arrives at POST /api/chat
     ├─ Build system prompt:
     │   AUDIT_SYSTEM_PROMPT + buildAuditContext() + "=== ЗАГРУЖЕННЫЕ ФИНАНСОВЫЕ ДОКУМЕНТЫ ===" block
     │
-    ├─ Claude Sonnet 4.6 → full audit analysis (4096 tokens)
-    │   └─ Deep legal reasoning, Russian regulatory citations, risk classification
-    │
-    └─ Response text contains violation keywords?
-        ├─ NO  → save message to DB, return
-        └─ YES → Claude Haiku 4.5 → extract structured JSON findings (4096 tokens, raised from 1500)
-                  └─ Parse findings JSON → validate risk levels + evidence_status → insert into findings table
-                  └─ Increment findings_ct on audit_sessions
-                  (Both DB writes run in parallel via Promise.all)
+    └─ Claude Sonnet 5 → single call, `record_findings` tool attached (16000 tokens, auto-continues on max_tokens)
+          ├─ Writes full audit report as text (deep legal reasoning, Russian regulatory citations, risk classification)
+          ├─ If findings exist: calls record_findings ONCE at the end with all findings as structured input
+          │     (per AUDIT_SYSTEM_PROMPT instructions — model is told not to call it if there's nothing to report)
+          └─ Response content walked for both text blocks and the tool_use block in the same pass
+                ├─ Text blocks → concatenated → saved to audit_messages
+                └─ tool_use input.findings → validated (enum checks, length caps, risk_flag default) → insert into findings table
+                      └─ Increment findings_ct on audit_sessions
+                      (Both DB writes still run in parallel via Promise.all)
 ```
 
-**Cost rationale:** Haiku is ~5× cheaper than Sonnet. Findings extraction is pure JSON parsing with no reasoning required, so Haiku is used only for that step. Haiku is only called when the Sonnet response contains at least one of: `нарушени`, `критич`, `риск`, `штраф`, `КРИТИЧНО`, `СУЩЕСТВЕННО`, `НЕСУЩЕСТВЕННО` (regex gate).
+**Why the second model was removed:** the two-call split had already caused a real bug once — Sonnet computed the `evidence_status` confidence tier as part of its reasoning, but Haiku's separate extraction schema didn't ask for that field, so it was silently discarded before the DB write (fixed July 1, see Session Log). Any field Sonnet reasoned about that a second model's schema didn't mirror was structurally at risk of the same class of bug. A single call with a forced tool schema can't have that drift — there's one source of truth, not a translation step.
 
-**Haiku JSON extraction is hardened against model non-compliance:**
-1. Strip markdown fences (``` json ``` — Claude sometimes ignores system prompt instructions)
-2. `JSON.parse()` the cleaned string
-3. On failure: regex scan for `[{...}]` pattern anywhere in the response
-4. On second failure: log warning and silently skip (findings extraction is non-critical — never throws)
+**What this removed:**
+- The keyword-regex gate (`нарушени`, `критич`, `риск`, `штраф`, `КРИТИЧНО`, `СУЩЕСТВЕННО`, `НЕСУЩЕСТВЕННО`) that decided whether to even attempt extraction — findings phrased outside that keyword list could previously be silently skipped
+- Markdown-fence-stripping and regex-fallback JSON parsing, needed because Haiku sometimes ignored the "JSON only" instruction — tool_use input arrives as a typed object, not free text to re-parse
+- `HAIKU_MODEL` and `HAIKU_PRICING` constants in `lib/anthropic.ts`
+
+**What stayed:** DB-side validation in `saveFindings()` (enum checks against `validRiskLevels`/`validEvidenceStatuses`, field length caps, defaulting to `risk_flag` never `confirmed` on ambiguity) — tool_use input is schema-*guided* by the tool definition, not schema-*enforced*, so a malformed value from the model is still possible and must not corrupt the DB or overstate certainty.
+
+**Not yet verified:** this is a behavioral assumption (model writes full text, then calls the tool exactly once at the end) that hasn't been confirmed against a real Sonnet 5 round trip yet. See punch list P1.
 
 ### System Prompt (`lib/anthropic.ts` — `AUDIT_SYSTEM_PROMPT`)
 
@@ -104,6 +107,8 @@ The system prompt is written entirely in Russian and instructs the AI to operate
 - `КОСВЕННЫЙ ПРИЗНАК` — weak signal requiring monitoring only
 
 **✅ FIXED July 1, 2026 — this tier was previously computed by Sonnet but discarded before storage.** The prompt has always required a `**Статус:**` field per finding, but Haiku's extraction schema never asked for it, so every finding's DB row was indistinguishable regardless of confidence — a proven violation and a weak indirect signal looked identical in the dashboard and PDF. Fixed by adding an `evidence_status` enum column (`confirmed` / `risk_flag` / `indirect`, migration `005_finding_evidence_status.sql`) and extending the Haiku extraction prompt in `lib/anthropic.ts`/`app/api/chat/route.ts` to map the Russian status text to it. Defaults to `risk_flag` (never `confirmed`) whenever the mapping is ambiguous or absent — the extraction step never overstates certainty. Rendered as a badge alongside the risk-level badge in `app/client/audit/[id]/page.tsx` (list + PDF) and `app/client/dashboard/page.tsx` (open findings panel). See Session Log.
+
+**Superseded July 3, 2026 — Haiku extraction step removed.** The mechanism described above (Haiku's separate JSON schema) no longer exists. `evidence_status` is now requested directly on the `record_findings` tool schema that Sonnet calls itself — see "AI Agent: Single-Model Tool-Use Architecture" above. The same default-to-`risk_flag`-never-`confirmed` rule was carried over into the new tool schema and `saveFindings()`'s DB-side validation.
 
 **Three-tier risk classification (used throughout DB and UI):**
 - `КРИТИЧНО` — direct tax sanctions, fraud indicators, balance sheet distortion >5%, cash-out patterns, missing primary documents on material transactions
@@ -351,7 +356,7 @@ PostgreSQL function `get_client_limit(p_client_id)` returns effective `(max_tx, 
 | period_from / period_to | DATE | Written at session create (currently unused by app code) |
 | status | `session_status` ENUM | `'active'`, `'completed'`, `'archived'` |
 | transactions_ct | INTEGER | Set by `confirm_audit` action |
-| findings_ct | INTEGER | Incremented by chat route after Haiku extraction |
+| findings_ct | INTEGER | Incremented by chat route after saving findings from the record_findings tool call |
 | cost_rub | NUMERIC(10,2) | Set by `confirm_audit` action |
 | paid | BOOLEAN | **Not in migration file** — added outside version control |
 | created_at / completed_at | TIMESTAMPTZ | |
@@ -424,7 +429,7 @@ Logs `document_upload` events (written by upload route). Schema supports `tokens
 ### AI & Chat
 | Route | Method | Description |
 |---|---|---|
-| `/api/chat` | POST | Sonnet 4.6 audit reasoning + conditional Haiku 4.5 findings extraction |
+| `/api/chat` | POST | Sonnet 5 audit reasoning + tool_use findings extraction (single call) |
 
 ### File Handling
 | Route | Method | Description |
@@ -591,7 +596,7 @@ These could be consolidated into one shared component.
 ### Active and used
 | Package | Purpose |
 |---|---|
-| `@anthropic-ai/sdk ^0.96.0` | Claude API calls (Sonnet + Haiku) |
+| `@anthropic-ai/sdk ^0.96.0` | Claude API calls (Sonnet 5, single-model tool_use) |
 | `@supabase/ssr ^0.10.3` | Cookie-based Supabase client for SSR/API routes |
 | `@supabase/supabase-js ^2.105.4` | Admin client (service role, bypasses RLS) |
 | `fflate ^0.8.3` | XLSX and DOCX unzipping (no native dep needed) |
@@ -659,7 +664,7 @@ These are known issues to address before any production deployment.
 - **Database:** Supabase PostgreSQL (US)
 - **Storage:** Supabase Storage (US)
 - **Auth:** Supabase Auth
-- **AI:** Claude Sonnet 4.6 (audit) + Claude Haiku 4.5 (findings extraction)
+- **AI:** Claude Sonnet 5 (audit reasoning + tool_use findings extraction, single call)
 - **Purpose:** Demo and client acquisition
 
 ### Phase 2 — Production (Per Russian Client, On Contract Signing)
@@ -685,9 +690,9 @@ Each client gets a **dedicated isolated instance** for data confidentiality and 
 - System prompt is already in Russian — minor adjustment required for GigaChat compliance
 
 **GigaChat model hierarchy:**
-- GigaChat Max → replaces Claude Sonnet 4.6 (deep audit reasoning)
-- GigaChat Pro → replaces Claude Haiku 4.5 (findings extraction)
+- GigaChat Max → replaces Claude Sonnet 5 (deep audit reasoning + tool_use findings extraction, single call)
 - GigaChat Lite → not suitable for audit use
+- *(No GigaChat Pro mapping needed — Haiku's old findings-extraction role was folded into the main Sonnet call via tool_use on July 3, 2026, so Phase 2 only needs to replace one model, not two. Confirm GigaChat Max supports function/tool calling before committing to this — if it doesn't, Phase 2 may need to reintroduce a second-call extraction step specific to the GigaChat migration.)*
 
 ### Domain Strategy
 
@@ -777,11 +782,11 @@ PM2 keeps Next.js running as background process, auto-restarts on crash. Cost: f
 - File parser: XLSX (multi-sheet), XLS (multi-sheet), CSV, XML, DOCX, DOC, 1C bank export (Windows-1251), PDF text-layer extraction, scanned-PDF → vision rendering, images → native vision
 - Chat route now trusts `documents.file_type` (DB-classified) instead of re-deriving type from filename extension — root-cause fix that unlocked `.doc`/`.txt`/`.pdf` routing
 - PDF report generation (client-side, pdfmake, full Russian audit report with branding, now includes evidence-confidence label per finding)
-- Hybrid AI: Sonnet 4.6 reasoning + Haiku 4.5 findings extraction (now also extracts evidence_status)
+- Single-model AI: Sonnet 5 reasoning + tool_use findings extraction in one call (Haiku removed July 3, 2026 — see Session Log)
 - Pay-per-audit pricing with tier lookup and per-client overrides
 - Supabase Storage upload with background parse and result caching
 - Server-side-only Supabase auth: login AND logout both proxied through Vercel API routes; no page in the app makes a direct browser-to-Supabase call (full tree audited July 1, 2026)
-- Evidence-confidence tier (`ПОДТВЕРЖДЁННОЕ НАРУШЕНИЕ` / `ПРИЗНАК РИСКА` / `КОСВЕННЫЙ ПРИЗНАК`) now persisted end-to-end: system prompt → Haiku extraction → DB column → UI badge → PDF
+- Evidence-confidence tier (`ПОДТВЕРЖДЁННОЕ НАРУШЕНИЕ` / `ПРИЗНАК РИСКА` / `КОСВЕННЫЙ ПРИЗНАК`) now persisted end-to-end: system prompt → record_findings tool call → DB column → UI badge → PDF
 
 ### Not yet built — Next To-Do (prioritized)
 
@@ -794,7 +799,7 @@ PM2 keeps Next.js running as background process, auto-restarts on crash. Cost: f
 **P1 — Blocks demo / core flow**
 - [ ] Subscription creation when creating a new client — new clients currently can't start an audit until someone fixes it manually in Supabase
 - [ ] Real-deploy verification of the June 30 PDF/vision + multi-sheet parsing fixes — confirmed to *build*, not yet confirmed working on the live Vercel deploy
-- [ ] Run one full end-to-end audit post-deploy and confirm `findings.evidence_status` produces a non-default value (`confirmed`/`indirect`), not just the `risk_flag` default (see July 1 Session Log, Part 2)
+- [ ] Run one full end-to-end audit post-deploy and confirm `findings.evidence_status` produces a non-default value (`confirmed`/`indirect`), not just the `risk_flag` default — this check now also needs to confirm the `record_findings` tool_use call itself fires correctly (after the report text, not mid-report, exactly once) since Haiku's separate extraction step was removed July 3, 2026 (see Session Log)
 - [ ] 1C live connection — UI is built and the OData call is wired, but has never been tested against a real 1C server
 
 **P2 — Important, not urgent**
@@ -807,6 +812,37 @@ PM2 keeps Next.js running as background process, auto-restarts on crash. Cost: f
 
 **P3 — Cleanup / deferred**
 - [ ] Chat page's own attachment-button accept attribute still missing `.txt`/`.doc` (only `.xls,.pdf` currently) — left unpatched on purpose, decide if it should match the other two upload surfaces
+
+---
+
+## Session Log — Haiku Removal & Sonnet 5 Upgrade (July 3, 2026)
+
+**Goal:** upgrade `SONNET_MODEL` from Sonnet 4.6 to Sonnet 5, then evaluate whether the Haiku 4.5 findings-extraction step was still worth keeping now that real usage data existed.
+
+### Part 1 — Sonnet 5 upgrade
+
+**Change:** `lib/anthropic.ts` — `SONNET_MODEL` changed from `"claude-sonnet-4-6"` to `"claude-sonnet-5"`.
+
+**Behavior differences vs 4.6 confirmed not to be a problem for this codebase:** Sonnet 5 rejects (400 error) manual `thinking.budget_tokens` config and non-default `temperature`/`top_p`/`top_k`. `app/api/chat/route.ts` was checked — it only sets `max_tokens`, `system`, and `messages` (now also `tools`/`tool_choice`, added in Part 2), no sampling params or manual thinking config, so no incompatibility.
+
+**Not yet done:** `SONNET_PRICING` in `lib/anthropic.ts` was deliberately left at the standard $3/$15-per-1M rate rather than updated to Sonnet 5's introductory $2/$10 rate (valid through August 31, 2026) — bundled into the existing P2 punch-list item about reconciling pricing constants across `lib/anthropic.ts` and `lib/billing.ts`, to fix once rather than twice.
+
+### Part 2 — Haiku removed, consolidated to single-call tool_use
+
+**Investigation:** before deciding whether to drop Haiku, real console usage data from June 30, 2026 (a heavy real-audit-testing day) was reviewed — daily token cost and token usage broken down by model. Haiku accounted for ~$0.20 of a $7.63 daily total (≈2.6%) and 76K of 2.26M total tokens. This settled the cost question: Haiku's presence in the pipeline was not meaningfully reducing spend.
+
+**Decision driver:** cost being negligible shifted the question to quality risk, and the two-call split had already caused a real bug — the `evidence_status` field (fixed July 1, see below) was computed by Sonnet but silently dropped because Haiku's extraction schema didn't request it. A second live risk was identified but not yet observed in production: Haiku's extraction call was gated by a keyword regex (`нарушени`, `критич`, `риск`, `штраф`, etc.) on Sonnet's response text — a finding phrased outside that keyword list would never trigger extraction and would be silently absent from the findings table despite being visible in the chat transcript.
+
+**Fix — consolidated to one Sonnet call with `tool_use`:**
+1. **`lib/anthropic.ts`** — removed `HAIKU_MODEL` and `HAIKU_PRICING`. Added `FINDINGS_TOOL`, a `record_findings` tool schema mirroring the fields the old Haiku prompt requested (title, risk_level, evidence_status, description, legal_basis, recommendation), with the same "default to risk_flag, never confirmed on ambiguity" instruction now embedded in the schema description. Appended a new section to `AUDIT_SYSTEM_PROMPT` instructing Sonnet to write the full report first, then call `record_findings` exactly once with everything found — or not call it at all if there's nothing to report.
+2. **`app/api/chat/route.ts`** — removed `extractAndSaveFindings()` (the Haiku call, regex gate, markdown-fence-stripping, and fallback JSON parsing) entirely. Replaced with `saveFindings()`, which only validates and inserts what the tool call already produced — no LLM call, no JSON parsing, since `tool_use` input arrives as a typed object from the SDK. The generation loop now attaches `tools: [FINDINGS_TOOL]` and walks every content block in the response instead of assuming `content[0]` is text, since a single response can now legitimately contain a text block and a tool_use block together. `stop_reason: "tool_use"` is treated as a normal completion (model finished the report and made its one findings call), distinct from `stop_reason: "max_tokens"` (real truncation, still auto-continues exactly as before).
+3. **DB-side validation intentionally kept**, not removed: `saveFindings()` still checks `risk_level`/`evidence_status` against valid enum sets and defaults ambiguous/missing `evidence_status` to `risk_flag`, never `confirmed`. Tool_use input is schema-*guided* by the tool definition, not schema-*enforced* — the model can still in principle return an out-of-enum value, and that must not silently overstate certainty or corrupt the DB.
+
+**What this closes:** the class of bug that caused the July 1 `evidence_status` incident (a field Sonnet reasons about but a second model's schema doesn't request) is now structurally impossible, since there's no second interpretation step. The keyword-regex extraction gate is also gone — no finding can be silently skipped for not matching a keyword list.
+
+**Not yet verified:** whether Sonnet 5 reliably calls `record_findings` after finishing the report text (not mid-report, not skipped) is a behavioral assumption backed only by the system prompt instruction, not yet confirmed against a real audit. **Run one full end-to-end audit and check `findings_ct`/the `findings` table populates correctly, with correct `evidence_status` values, before treating this as done** — same verification standard already applied to the July 1 fix, now needs to be re-cleared under the new architecture.
+
+**Also updated same session:** `PUNCH_LIST.md` — added a P1 item for the tool_use verification above, updated the P2 pricing-reconciliation item to reflect `HAIKU_PRICING`'s removal, and noted the P3 usage-logging item is simpler now (one `usage` object per chat turn instead of two to reconcile).
 
 ---
 

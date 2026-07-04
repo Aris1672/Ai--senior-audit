@@ -1,5 +1,6 @@
 import { createAdminClient } from "@/lib/supabase-server";
 import { NextRequest, NextResponse } from "next/server";
+import { LEGAL_FORM_VALUES, TAX_REGIME_VALUES, VAT_STATUS_VALUES } from "@/lib/audit-constants";
 
 export async function POST(req: NextRequest) {
   try {
@@ -144,6 +145,15 @@ export async function POST(req: NextRequest) {
       }
 
       // ── Get or create active session ───────────────────────
+      // NOTE (July 2026): this path creates a session with NO tax-profile
+      // fields (legal_form/tax_regime/vat_status all null) — it bypasses
+      // the gate enforced in create_audit_session below entirely. Left
+      // unchanged here because the caller (likely app/client/chat/page.tsx)
+      // hasn't been reviewed yet. confirm_audit's defense-in-depth check
+      // will still block a session created this way from ever reaching
+      // full analysis, but this path can currently produce an orphaned
+      // "active" session with no way to complete it — worth fixing once
+      // the calling page is in hand. See PROJECT_STATUS.md.
       case "get_or_create_session": {
         const { clientId } = payload;
         const { data: existing } = await supabase
@@ -190,13 +200,45 @@ export async function POST(req: NextRequest) {
 
       // ── Create new audit session ───────────────────────────
       case "create_audit_session": {
-        const { clientId, companyName, inn, period, sourceType } = payload;
+        const {
+          clientId, companyName, inn, period, sourceType,
+          legalForm, legalFormOther, taxRegime, taxRegimeOther, vatStatus,
+        } = payload;
+
+        // ── Tax-profile gate — server-side validation, never trust the
+        //    dropdown alone (this is the actual enforcement point; the
+        //    wizard's client-side check is just UX, not security/correctness).
+        //    Added July 2026 — see PROJECT_STATUS.md Session Log for why:
+        //    identical input data was producing different risk-tier
+        //    conclusions across separate AI runs, traced partly to the
+        //    model guessing at (or inconsistently asking about) tax regime.
+        if (!legalForm || !LEGAL_FORM_VALUES.has(legalForm)) {
+          return NextResponse.json({ error: "Не указана организационно-правовая форма" }, { status: 400 });
+        }
+        if (legalForm === "Другое" && !legalFormOther?.trim()) {
+          return NextResponse.json({ error: 'Укажите организационно-правовую форму в поле "Другое"' }, { status: 400 });
+        }
+        if (!taxRegime || !TAX_REGIME_VALUES.has(taxRegime)) {
+          return NextResponse.json({ error: "Не указана система налогообложения" }, { status: 400 });
+        }
+        if (taxRegime === "Другое" && !taxRegimeOther?.trim()) {
+          return NextResponse.json({ error: 'Укажите систему налогообложения в поле "Другое"' }, { status: 400 });
+        }
+        if (!vatStatus || !VAT_STATUS_VALUES.has(vatStatus)) {
+          return NextResponse.json({ error: "Не указан статус НДС" }, { status: 400 });
+        }
+
         const { data: session } = await supabase
           .from("audit_sessions")
           .insert({
-            client_id: clientId,
-            title:     `Аудит: ${companyName}${period ? ` (${period})` : ""}`,
-            status:    "active",
+            client_id:         clientId,
+            title:             `Аудит: ${companyName}${period ? ` (${period})` : ""}`,
+            status:            "active",
+            legal_form:        legalForm,
+            legal_form_other:  legalForm === "Другое" ? legalFormOther.trim() : null,
+            tax_regime:        taxRegime,
+            tax_regime_other:  taxRegime === "Другое" ? taxRegimeOther.trim() : null,
+            vat_status:        vatStatus,
           })
           .select().single();
         return NextResponse.json({ sessionId: session?.id });
@@ -205,6 +247,29 @@ export async function POST(req: NextRequest) {
       // ── Confirm audit — save final price ──────────────────
       case "confirm_audit": {
         const { sessionId, priceRub, transactionCount } = payload;
+
+        // ── Defense-in-depth: re-check the tax-profile gate against the
+        //    DB row itself, not just at creation time. Catches any session
+        //    that reached this point without going through
+        //    create_audit_session's validation above — e.g. via
+        //    get_or_create_session (see note on that action above), or a
+        //    direct API call bypassing the wizard entirely.
+        const { data: existingSession } = await supabase
+          .from("audit_sessions")
+          .select("legal_form, tax_regime, vat_status")
+          .eq("id", sessionId)
+          .single();
+
+        if (!existingSession?.legal_form || !existingSession?.tax_regime || !existingSession?.vat_status) {
+          return NextResponse.json(
+            {
+              error:
+                "Для этой сессии не заполнен налоговый профиль (организационно-правовая форма, система налогообложения, статус НДС). Начните аудит заново через мастер создания.",
+            },
+            { status: 400 }
+          );
+        }
+
         await supabase.from("audit_sessions").update({
           cost_rub:        priceRub,
           transactions_ct: transactionCount ?? 0,
@@ -217,7 +282,10 @@ export async function POST(req: NextRequest) {
         const { sessionId } = payload;
         const { data } = await supabase
           .from("audit_sessions")
-          .select("id, title, status, transactions_ct, cost_rub, period_from, period_to")
+          .select(`
+            id, title, status, transactions_ct, cost_rub, period_from, period_to,
+            legal_form, legal_form_other, tax_regime, tax_regime_other, vat_status
+          `)
           .eq("id", sessionId)
           .single();
 
@@ -232,6 +300,12 @@ export async function POST(req: NextRequest) {
           company_name: companyMatch?.[1]?.trim() || title,
           period:       periodMatch?.[1]?.trim()  || "",
           source_type:  "file",
+          // Resolved single-value display strings — "Другое" swapped for
+          // the free-text value the client actually entered, so anything
+          // consuming this response (AI context builder, UI) never has to
+          // special-case "Другое" itself.
+          legal_form_display: data.legal_form === "Другое" ? data.legal_form_other : data.legal_form,
+          tax_regime_display: data.tax_regime === "Другое" ? data.tax_regime_other : data.tax_regime,
         });
       }
 
@@ -285,7 +359,10 @@ export async function POST(req: NextRequest) {
         ] = await Promise.all([
           supabase
             .from("audit_sessions")
-            .select("id, title, status, transactions_ct, findings_ct, cost_rub, created_at")
+            .select(`
+              id, title, status, transactions_ct, findings_ct, cost_rub, created_at,
+              legal_form, legal_form_other, tax_regime, tax_regime_other, vat_status
+            `)
             .eq("id", sessionId)
             .single(),
           supabase
@@ -310,6 +387,8 @@ export async function POST(req: NextRequest) {
           ...sessionRaw,
           company_name: companyMatch?.[1]?.trim() || title,
           period:       periodMatch?.[1]?.trim()  || "",
+          legal_form_display: sessionRaw.legal_form === "Другое" ? sessionRaw.legal_form_other : sessionRaw.legal_form,
+          tax_regime_display: sessionRaw.tax_regime === "Другое" ? sessionRaw.tax_regime_other : sessionRaw.tax_regime,
         };
 
         return NextResponse.json({

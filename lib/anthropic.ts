@@ -1,4 +1,5 @@
 import Anthropic from "@anthropic-ai/sdk";
+import { VAT_STATUS_LABELS } from "./audit-constants";
 
 // ─── Only runs server-side on Vercel ─────────────────────────────────────────
 export const anthropic = new Anthropic({
@@ -229,6 +230,14 @@ export function buildAuditContext(data: {
   transactionCount?: number;
   openFindings?: number;
   criticalCount?: number;
+  // Tax-profile gate fields (July 2026) — captured via required dropdowns
+  // in the new-audit wizard before the session can be confirmed. Passed
+  // here as ground truth so Sonnet never has to guess or ask about them;
+  // see PROJECT_STATUS.md Session Log for why this was needed (identical
+  // input data was producing different risk-tier conclusions across runs).
+  legalForm?: string;
+  taxRegime?: string;
+  vatStatus?: string;
 }): string {
   const fileStatus = (data.transactionCount && data.transactionCount > 0)
     ? `✅ Загружено транзакций: ${data.transactionCount}`
@@ -241,9 +250,18 @@ export function buildAuditContext(data: {
   return `
 ## Контекст текущего аудита
 - Компания: ${data.companyName || "не указана"}
+- Организационно-правовая форма: ${data.legalForm || "не указана"}
+- Система налогообложения: ${data.taxRegime || "не указана"}
+- Статус НДС: ${data.vatStatus ? (VAT_STATUS_LABELS[data.vatStatus] || data.vatStatus) : "не указан"}
 - Период: ${period}
 - Статус данных: ${fileStatus}
 - Открытых нарушений: ${data.openFindings || 0}
 - Из них критичных: ${data.criticalCount || 0}
+
+Организационно-правовая форма, система налогообложения и статус НДС указаны
+клиентом при создании сессии аудита — это подтверждённые факты, а не
+предположения. Используй их напрямую при квалификации нарушений (например,
+применимость личных расходов к налоговой базе зависит от системы
+налогообложения) и НЕ переспрашивай их у пользователя в чате.
   `.trim();
 }
