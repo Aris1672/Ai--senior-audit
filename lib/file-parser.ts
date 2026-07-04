@@ -394,15 +394,19 @@ export async function parsePDF(buffer: ArrayBuffer): Promise<ParseResult> {
     // extraction too — it's the same package already used successfully below
     // in renderPDFPagesAsImages, already externalized correctly, and workerSrc
     // is already disabled there. One less dependency, no nested-copy problem.
-    // Switched from pdfjs-dist/legacy/build/pdf.mjs (ESM) to the CJS legacy
-    // build. Three attempts at satisfying the ESM build's workerSrc check
-    // (empty string, require.resolve, createRequire) all failed with "Invalid
-    // workerSrc type" under Turbopack's bundling — the resolved value wasn't
-    // surviving as a plain string through the bundle. The CJS legacy build
-    // runs pdf.js's Node-detected code path, which executes synchronously on
-    // the main thread and does not require a worker/workerSrc at all — this
-    // sidesteps the problem rather than continuing to fight the bundler.
-    const pdfjsLib: any = await import("pdfjs-dist/legacy/build/pdf.js");
+    // pdfjs-dist v4+ only ships the .mjs legacy build — the CJS legacy build
+    // doesn't exist (confirmed by a failed Vercel build). Reverting to .mjs.
+    // workerSrc history: "" was falsy (treated as unset) → require.resolve()
+    // produced a value pdfjs-dist rejected as "Invalid workerSrc type" under
+    // Turbopack. The actual correct pattern is `new URL(spec, import.meta.url)`
+    // — bundlers (Turbopack included) specifically recognize this exact syntax
+    // as an asset reference and bundle/copy the target file, which plain
+    // require.resolve()/string paths don't trigger.
+    const pdfjsLib = await import("pdfjs-dist/legacy/build/pdf.mjs");
+    pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
+      "pdfjs-dist/legacy/build/pdf.worker.mjs",
+      import.meta.url
+    ).toString();
 
     const loadingTask = pdfjsLib.getDocument({
       data: new Uint8Array(buffer),
