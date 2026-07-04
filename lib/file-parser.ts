@@ -383,16 +383,20 @@ export async function parseDOC(buffer: ArrayBuffer): Promise<ParseResult> {
 // pages as images and route them through Claude's vision instead (see
 // renderPDFPagesAsImages below).
 export async function parsePDF(buffer: ArrayBuffer): Promise<ParseResult> {
+  let parser: any = null;
   try {
-    // pdf-parse's ESM build doesn't declare a `.default` export in its types
-    // even though some versions provide one at runtime — cast to `any` and
-    // fall back to the namespace itself so this works regardless of which
-    // shape the installed version actually exports, without a TS error.
-    const pdfParseModule: any = await import("pdf-parse");
-    const pdfParse = pdfParseModule.default ?? pdfParseModule;
-    const result   = await pdfParse(Buffer.from(buffer));
+    // pdf-parse@2.x is a full rewrite — no more callable default export.
+    // v1: const pdf = require('pdf-parse'); pdf(buffer).then(r => r.text)
+    // v2: const { PDFParse } = require('pdf-parse');
+    //     const parser = new PDFParse({ data: buffer }); await parser.getText()
+    // Calling the old v1 shape against v2 throws (no default export to call),
+    // which was silently swallowed by the catch block below and returned the
+    // generic "could not read PDF" fallback for every PDF, scanned or not.
+    const { PDFParse } = await import("pdf-parse");
+    parser = new PDFParse({ data: Buffer.from(buffer) });
+    const result    = await parser.getText();
     const rawText: string  = String(result.text || "").trim();
-    const numPages: number = Number(result.numpages) || 1;
+    const numPages: number = Number(result.pages?.length ?? result.numpages) || 1;
 
     // Heuristic: near-zero text relative to page count means there's
     // essentially no real text layer (a few stray characters from a stamp
@@ -428,13 +432,22 @@ export async function parsePDF(buffer: ArrayBuffer): Promise<ParseResult> {
       parsedAt: now(),
     };
   } catch (err) {
-    console.warn("[file-parser] PDF parse failed:", err);
+    // Logged with full detail (not just a string) — this is the exact spot
+    // that was silently swallowing the v1-vs-v2 API mismatch before. If this
+    // fires again for a different reason, the real error is now visible.
+    console.error("[file-parser] PDF parse failed:", err);
     return {
       rowCount:    0,
       parseMethod: "fallback",
       textContent: "[Не удалось прочитать содержимое файла PDF]",
       parsedAt:    now(),
     };
+  } finally {
+    // pdf-parse@2.x docs: always call destroy() to free memory (worker/WASM
+    // resources) — no-op safe even if the parser was never constructed.
+    if (parser) {
+      try { await parser.destroy(); } catch { /* best-effort cleanup */ }
+    }
   }
 }
 
