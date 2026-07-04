@@ -383,20 +383,36 @@ export async function parseDOC(buffer: ArrayBuffer): Promise<ParseResult> {
 // pages as images and route them through Claude's vision instead (see
 // renderPDFPagesAsImages below).
 export async function parsePDF(buffer: ArrayBuffer): Promise<ParseResult> {
-  let parser: any = null;
   try {
-    // pdf-parse@2.x is a full rewrite — no more callable default export.
-    // v1: const pdf = require('pdf-parse'); pdf(buffer).then(r => r.text)
-    // v2: const { PDFParse } = require('pdf-parse');
-    //     const parser = new PDFParse({ data: buffer }); await parser.getText()
-    // Calling the old v1 shape against v2 throws (no default export to call),
-    // which was silently swallowed by the catch block below and returned the
-    // generic "could not read PDF" fallback for every PDF, scanned or not.
-    const { PDFParse } = await import("pdf-parse");
-    parser = new PDFParse({ data: Buffer.from(buffer) });
-    const result    = await parser.getText();
-    const rawText: string  = String(result.text || "").trim();
-    const numPages: number = Number(result.pages?.length ?? result.numpages) || 1;
+    // Switched off pdf-parse@2.x entirely (was: PDFParse class from "pdf-parse").
+    // Root cause wasn't fixable from our config: pdf-parse bundles its OWN
+    // nested pdfjs-dist copy, and Next/Vercel's file-tracing does not reliably
+    // follow nested node_modules inside an externalized package — so its
+    // worker .mjs file kept getting dropped from the deployed bundle no matter
+    // what serverExternalPackages said, throwing "Setting up fake worker failed"
+    // on every single PDF. Fix: use the top-level pdfjs-dist directly for text
+    // extraction too — it's the same package already used successfully below
+    // in renderPDFPagesAsImages, already externalized correctly, and workerSrc
+    // is already disabled there. One less dependency, no nested-copy problem.
+    const pdfjsLib = await import("pdfjs-dist/legacy/build/pdf.mjs");
+    pdfjsLib.GlobalWorkerOptions.workerSrc = "";
+
+    const loadingTask = pdfjsLib.getDocument({
+      data: new Uint8Array(buffer),
+      useWorkerFetch: false,
+      isEvalSupported: false,
+    });
+    const pdf = await loadingTask.promise;
+    const numPages = pdf.numPages || 1;
+
+    let rawText = "";
+    for (let i = 1; i <= numPages; i++) {
+      const page = await pdf.getPage(i);
+      const content = await page.getTextContent();
+      const pageText = content.items.map((item: any) => item.str ?? "").join(" ");
+      rawText += pageText + "\n";
+    }
+    rawText = rawText.trim();
 
     // Heuristic: near-zero text relative to page count means there's
     // essentially no real text layer (a few stray characters from a stamp
@@ -432,9 +448,7 @@ export async function parsePDF(buffer: ArrayBuffer): Promise<ParseResult> {
       parsedAt: now(),
     };
   } catch (err) {
-    // Logged with full detail (not just a string) — this is the exact spot
-    // that was silently swallowing the v1-vs-v2 API mismatch before. If this
-    // fires again for a different reason, the real error is now visible.
+    // Logged with full detail — visible now, not silently swallowed.
     console.error("[file-parser] PDF parse failed:", err);
     return {
       rowCount:    0,
@@ -442,12 +456,6 @@ export async function parsePDF(buffer: ArrayBuffer): Promise<ParseResult> {
       textContent: "[Не удалось прочитать содержимое файла PDF]",
       parsedAt:    now(),
     };
-  } finally {
-    // pdf-parse@2.x docs: always call destroy() to free memory (worker/WASM
-    // resources) — no-op safe even if the parser was never constructed.
-    if (parser) {
-      try { await parser.destroy(); } catch { /* best-effort cleanup */ }
-    }
   }
 }
 
