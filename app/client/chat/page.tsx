@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import ReactMarkdown from "react-markdown";
 
-interface Message { role: "user" | "assistant"; content: string; costRub?: number; }
+interface Message { role: "user" | "assistant"; content: string; costRub?: number; fileName?: string; fileType?: string; }
 
 // ── Markdown rendering for assistant messages ──────────────────────────────
 // Added to fix the "flat" chat feel: report headers (## Резюме аудитора),
@@ -292,7 +292,11 @@ export default function ChatPage() {
     if ((!input.trim() && !pendingFile) || !clientId || !sessionId || loading) return;
 
     const messageText = input.trim() || `Проанализируй загруженный документ: ${pendingFile?.name}`;
-    const userMsg: Message = { role: "user", content: messageText };
+    const userMsg: Message = {
+      role: "user",
+      content: messageText,
+      ...(pendingFile ? { fileName: pendingFile.name, fileType: pendingFile.type } : {}),
+    };
     const newMessages = [...messages, userMsg];
 
     setMessages(newMessages);
@@ -408,6 +412,17 @@ export default function ChatPage() {
                 // handle their own spacing, so "normal" avoids double gaps
                 whiteSpace: renderMarkdown ? "normal" : "pre-wrap",
               }}>
+                {msg.fileName && (
+                  <div style={{
+                    display: "flex", alignItems: "center", gap: "6px",
+                    marginBottom: "8px", padding: "6px 10px",
+                    background: "rgba(255,255,255,0.12)", borderRadius: "8px",
+                    fontSize: "13px", color: "#e8edf8", width: "fit-content",
+                  }}>
+                    <span>📎</span>
+                    <span style={{ wordBreak: "break-all" }}>{msg.fileName}</span>
+                  </div>
+                )}
                 {isTyping
                   ? <TypewriterMessage
                       text={msg.content}
