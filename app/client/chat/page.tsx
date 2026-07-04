@@ -2,8 +2,66 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
+import ReactMarkdown from "react-markdown";
 
 interface Message { role: "user" | "assistant"; content: string; costRub?: number; }
+
+// ── Markdown rendering for assistant messages ──────────────────────────────
+// Added to fix the "flat" chat feel: report headers (## Резюме аудитора),
+// finding subheaders (### Нарушение: ...), and bold labels (**Уровень
+// риска:**) were previously shown as literal markdown syntax because
+// messages rendered as plain text. Only applied to FINISHED assistant
+// messages — the actively-typing message still renders as plain text via
+// TypewriterMessage, since partial/unclosed markdown (e.g. "**Провер")
+// mid-animation would render incorrectly. User messages also stay plain
+// text; they're never markdown.
+const markdownComponents = {
+  h1: (props: any) => (
+    <h1 style={{
+      fontSize: "17px", fontWeight: 800, color: "#e8edf8",
+      margin: "0 0 12px 0", paddingBottom: "8px",
+      borderBottom: "1px solid #1e2d55",
+    }} {...props} />
+  ),
+  h2: (props: any) => (
+    <h2 style={{
+      fontSize: "14px", fontWeight: 700, color: "#4d91ff",
+      textTransform: "uppercase", letterSpacing: "0.03em",
+      margin: "18px 0 10px 0",
+    }} {...props} />
+  ),
+  h3: (props: any) => (
+    <h3 style={{
+      fontSize: "14px", fontWeight: 700, color: "#e8edf8",
+      margin: "14px 0 8px 0", paddingLeft: "10px",
+      borderLeft: "3px solid #1565e8",
+    }} {...props} />
+  ),
+  p: (props: any) => (
+    <p style={{ margin: "0 0 10px 0", lineHeight: "1.6" }} {...props} />
+  ),
+  strong: (props: any) => (
+    <strong style={{ color: "#a9c1f0", fontWeight: 700 }} {...props} />
+  ),
+  ul: (props: any) => (
+    <ul style={{ margin: "0 0 10px 0", paddingLeft: "20px" }} {...props} />
+  ),
+  ol: (props: any) => (
+    <ol style={{ margin: "0 0 10px 0", paddingLeft: "20px" }} {...props} />
+  ),
+  li: (props: any) => (
+    <li style={{ marginBottom: "5px", lineHeight: "1.55" }} {...props} />
+  ),
+  hr: (props: any) => (
+    <hr style={{ border: "none", borderTop: "1px solid #1e2d55", margin: "16px 0" }} {...props} />
+  ),
+  code: (props: any) => (
+    <code style={{
+      background: "#0c1220", padding: "2px 6px", borderRadius: "4px",
+      fontSize: "13px", color: "#8fb3f5",
+    }} {...props} />
+  ),
+};
 
 // ── Typewriter component ───────────────────────────────────────────────────
 function TypewriterMessage({ text, onDone, onScroll }: { 
@@ -332,27 +390,37 @@ export default function ChatPage() {
           </div>
         )}
 
-        {messages.map((msg, i) => (
-          <div key={i} style={{ marginBottom: "16px", display: "flex", justifyContent: msg.role === "user" ? "flex-end" : "flex-start" }}>
-            <div style={{
-              maxWidth: "80%", padding: "12px 16px",
-              borderRadius: msg.role === "user" ? "12px 12px 2px 12px" : "12px 12px 12px 2px",
-              background: msg.role === "user" ? "#1565e8" : "#101828",
-              border: msg.role === "user" ? "none" : "1px solid #1e2d55",
-              color: "#e8edf8", fontSize: "14px", lineHeight: "1.6", whiteSpace: "pre-wrap",
-            }}>
-              {/* Typewriter only on the latest assistant message; rest render instantly */}
-              {msg.role === "assistant" && i === typingIndex
-                ? <TypewriterMessage
-    text={msg.content}
-    onDone={() => setTypingIndex(-1)}
-    onScroll={() => bottomRef.current?.scrollIntoView({ behavior: "smooth" })}
-  />
-                : msg.content
-              }
+        {messages.map((msg, i) => {
+          const isTyping       = msg.role === "assistant" && i === typingIndex;
+          const renderMarkdown = msg.role === "assistant" && !isTyping;
+
+          return (
+            <div key={i} style={{ marginBottom: "16px", display: "flex", justifyContent: msg.role === "user" ? "flex-end" : "flex-start" }}>
+              <div style={{
+                maxWidth: msg.role === "user" ? "80%" : "88%",
+                padding: "12px 16px",
+                borderRadius: msg.role === "user" ? "12px 12px 2px 12px" : "12px 12px 12px 2px",
+                background: msg.role === "user" ? "#1565e8" : "#101828",
+                border: msg.role === "user" ? "none" : "1px solid #1e2d55",
+                color: "#e8edf8", fontSize: "14px", lineHeight: "1.6",
+                // pre-wrap only for plain text — markdown's own <p>/<li> tags
+                // handle their own spacing, so "normal" avoids double gaps
+                whiteSpace: renderMarkdown ? "normal" : "pre-wrap",
+              }}>
+                {isTyping
+                  ? <TypewriterMessage
+                      text={msg.content}
+                      onDone={() => setTypingIndex(-1)}
+                      onScroll={() => bottomRef.current?.scrollIntoView({ behavior: "smooth" })}
+                    />
+                  : renderMarkdown
+                    ? <ReactMarkdown components={markdownComponents}>{msg.content}</ReactMarkdown>
+                    : msg.content
+                }
+              </div>
             </div>
-          </div>
-        ))}
+          );
+        })}
 
         {(loading || uploading) && (
           <div style={{ display: "flex", alignItems: "center", gap: "10px", padding: "8px 0" }}>
