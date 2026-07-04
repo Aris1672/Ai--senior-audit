@@ -395,7 +395,12 @@ export async function parsePDF(buffer: ArrayBuffer): Promise<ParseResult> {
     // in renderPDFPagesAsImages, already externalized correctly, and workerSrc
     // is already disabled there. One less dependency, no nested-copy problem.
     const pdfjsLib = await import("pdfjs-dist/legacy/build/pdf.mjs");
-    pdfjsLib.GlobalWorkerOptions.workerSrc = "";
+    // Empty string is falsy — pdfjs-dist's own check treats "" as "not set"
+    // and tries the fake-worker fallback anyway, which then fails because
+    // there's genuinely nothing to fall back to. Point it at the real worker
+    // file instead so a worker can actually be constructed.
+    pdfjsLib.GlobalWorkerOptions.workerSrc =
+      require.resolve("pdfjs-dist/legacy/build/pdf.worker.mjs");
 
     const loadingTask = pdfjsLib.getDocument({
       data: new Uint8Array(buffer),
