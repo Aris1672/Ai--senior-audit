@@ -309,6 +309,7 @@ export async function POST(req: NextRequest) {
     let continuations = 0;
     let stopReason: string | null = null;
     let toolFindings: any[] = [];
+    let toolCallSeen = false; // true once record_findings has fired — see guard below
 
     do {
       const response = await anthropic.messages.create({
@@ -324,14 +325,32 @@ export async function POST(req: NextRequest) {
       // (model writes the full report, then calls record_findings once at
       // the end) — content[0] is no longer a safe assumption now that a
       // tool is attached, so all blocks are walked explicitly.
+      //
+      // GUARD: record_findings must fire at most once across the ENTIRE
+      // do/while loop, not once per iteration. Nothing in the API prevents
+      // the model from calling the tool again on a later continuation
+      // (e.g. once mid-report before hitting max_tokens, then again after
+      // "continue" — possibly with different/conflicting evidence_status
+      // values for what's meant to be the same finding). The system prompt
+      // asks for exactly one call, but that's a request, not an enforced
+      // constraint — so it's enforced here instead.
       let chunk = "";
       for (const block of response.content) {
         if (block.type === "text") {
           chunk += block.text;
         } else if (block.type === "tool_use" && block.name === "record_findings") {
+          if (toolCallSeen) {
+            console.warn(
+              "[chat] record_findings called again after an earlier call in this turn — " +
+              "ignoring this second call to prevent duplicate/conflicting findings. " +
+              "This should not happen per AUDIT_SYSTEM_PROMPT; investigate if seen repeatedly."
+            );
+            continue;
+          }
           const input = block.input as { findings?: any[] };
           if (Array.isArray(input?.findings)) {
-            toolFindings = toolFindings.concat(input.findings);
+            toolFindings = input.findings;
+            toolCallSeen = true;
           }
         }
       }
