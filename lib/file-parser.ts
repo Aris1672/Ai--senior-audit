@@ -394,15 +394,15 @@ export async function parsePDF(buffer: ArrayBuffer): Promise<ParseResult> {
     // extraction too — it's the same package already used successfully below
     // in renderPDFPagesAsImages, already externalized correctly, and workerSrc
     // is already disabled there. One less dependency, no nested-copy problem.
-    const pdfjsLib = await import("pdfjs-dist/legacy/build/pdf.mjs");
-    // Bare `require` isn't reliable inside Turbopack's bundled output (it
-    // returned a non-string from .resolve(), causing "Invalid workerSrc
-    // type"). createRequire gives a real Node CJS resolver regardless of
-    // how this module itself got bundled.
-    const { createRequire } = await import("node:module");
-    const nodeRequire = createRequire(import.meta.url);
-    pdfjsLib.GlobalWorkerOptions.workerSrc =
-      nodeRequire.resolve("pdfjs-dist/legacy/build/pdf.worker.mjs");
+    // Switched from pdfjs-dist/legacy/build/pdf.mjs (ESM) to the CJS legacy
+    // build. Three attempts at satisfying the ESM build's workerSrc check
+    // (empty string, require.resolve, createRequire) all failed with "Invalid
+    // workerSrc type" under Turbopack's bundling — the resolved value wasn't
+    // surviving as a plain string through the bundle. The CJS legacy build
+    // runs pdf.js's Node-detected code path, which executes synchronously on
+    // the main thread and does not require a worker/workerSrc at all — this
+    // sidesteps the problem rather than continuing to fight the bundler.
+    const pdfjsLib: any = await import("pdfjs-dist/legacy/build/pdf.js");
 
     const loadingTask = pdfjsLib.getDocument({
       data: new Uint8Array(buffer),
