@@ -395,12 +395,14 @@ export async function parsePDF(buffer: ArrayBuffer): Promise<ParseResult> {
     // in renderPDFPagesAsImages, already externalized correctly, and workerSrc
     // is already disabled there. One less dependency, no nested-copy problem.
     const pdfjsLib = await import("pdfjs-dist/legacy/build/pdf.mjs");
-    // Empty string is falsy — pdfjs-dist's own check treats "" as "not set"
-    // and tries the fake-worker fallback anyway, which then fails because
-    // there's genuinely nothing to fall back to. Point it at the real worker
-    // file instead so a worker can actually be constructed.
+    // Bare `require` isn't reliable inside Turbopack's bundled output (it
+    // returned a non-string from .resolve(), causing "Invalid workerSrc
+    // type"). createRequire gives a real Node CJS resolver regardless of
+    // how this module itself got bundled.
+    const { createRequire } = await import("node:module");
+    const nodeRequire = createRequire(import.meta.url);
     pdfjsLib.GlobalWorkerOptions.workerSrc =
-      require.resolve("pdfjs-dist/legacy/build/pdf.worker.mjs");
+      nodeRequire.resolve("pdfjs-dist/legacy/build/pdf.worker.mjs");
 
     const loadingTask = pdfjsLib.getDocument({
       data: new Uint8Array(buffer),
