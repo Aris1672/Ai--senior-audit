@@ -1,6 +1,6 @@
 # AI Senior Auditor — Project Status
 
-> Last updated: July 4, 2026. Tax-profile gate + audit-purpose gate + chat UX/markdown rendering session — see Session Log at bottom for detail. **Later the same day:** two future-phase tasks scoped — counterparty ЕГРЮЛ verification (blocked on SpaceWeb migration) and the privacy pre-processing pipeline's concrete mechanism, including an open strategic question about whether it removes the need for the GigaChat swap entirely. See Phase 2 section and P2 punch list above.
+> Last updated: July 4, 2026 (evening). PDF/image parsing fixes + chat file-chip UX + record_findings duplicate-call guard — see Session Log at bottom for detail. **Two bugs found and scoped for next session (not yet fixed):** multi-file attach in chat is single-file only, and re-analysis after a mid-chat upload appends duplicate findings instead of updating/deduping them. See new P1 punch-list items.
 > GitHub: https://github.com/Aris1672/Ai--senior-audit
 > Live demo: https://ai-senior-audit.vercel.app
 > Admin login: support@assistant24.tech (role set manually in Supabase)
@@ -848,7 +848,40 @@ PM2 keeps Next.js running as background process, auto-restarts on crash. Cost: f
 
 ---
 
-## Session Log — Tax-Profile Gate, Audit-Purpose Gate & Chat UX (July 4, 2026)
+## Session Log — PDF/Image Parsing Fixes, Chat File Chip, tool_use Guard (July 4, 2026, evening)
+
+**Goal:** verify the `record_findings` tool_use extraction end-to-end (P1 punch-list item), then fix file-parser gaps found along the way (PDF and images both silently failing).
+
+### Part 1 — record_findings duplicate-call guard
+
+Live test confirmed the common case works (single Sonnet call, `stop_reason: tool_use`, 10 findings saved, no continuation needed). But the code had no guard against the model calling `record_findings` more than once across a `max_tokens` continuation loop — `toolFindings` was `.concat()`-ed with no limit. Fixed in `app/api/chat/route.ts`: added a `toolCallSeen` flag; a second call in the same turn is now logged (`console.warn`) and dropped instead of silently merged. Not yet stress-tested against a real multi-continuation run (report was short enough to finish in one call every time tested).
+
+### Part 2 — PDF parsing, three bugs in sequence
+
+1. **`pdf-parse@2.4.5` API mismatch.** Installed version is a full rewrite (`PDFParse` class, no callable default export) but code called the old v1 function API. Every PDF silently fell back to "could not read PDF." Fixed to use `new PDFParse({data}).getText()` — **later abandoned, see #2.**
+2. **Nested `pdfjs-dist` worker untraceable.** `pdf-parse` bundles its own internal `pdfjs-dist` copy; Vercel's file-tracing didn't reliably include its worker `.mjs` file no matter what `serverExternalPackages` said. **Decision: dropped `pdf-parse` entirely.** `parsePDF()` now uses the top-level `pdfjs-dist` directly (`getTextContent()` per page) — the same package already used successfully for scanned-PDF rendering, already correctly externalized. `npm uninstall pdf-parse` recommended.
+3. **`workerSrc` config, three failed attempts before the fix:** empty string (falsy, treated as unset) → `require.resolve()` (Turbopack returned a non-string, "Invalid workerSrc type") → `createRequire` (same error) → **fixed** with `new URL("pdfjs-dist/legacy/build/pdf.worker.mjs", import.meta.url).toString()`, the bundler-recognized asset-reference pattern. Also briefly tried switching to the CJS legacy build (`pdf.js` instead of `.mjs`) — doesn't exist in pdfjs-dist v4+, reverted.
+4. **Detached ArrayBuffer.** Once PDF parsing worked, `parsePDF()`'s `getDocument()` call was transferring/detaching the shared buffer, so the following `renderPDFPagesAsImages()` call (scanned-PDF → vision path) crashed on the same request. Fixed with `.slice(0)` copies in both functions. Also pre-emptively fixed the same `workerSrc=""` bug in `renderPDFPagesAsImages()`, which hadn't surfaced yet only because the buffer bug fired first.
+
+**Verified working end-to-end** on real client files: a text-layer PDF (`ПРОТОКОЛ №1.pdf`) and a scanned PDF (`Новация 2.pdf`, correctly detected as `likelyScanned: true` and routed to vision) both processed successfully in a live chat session, producing real findings referencing their content.
+
+### Part 3 — Images unreachable, then invisible in UI
+
+1. **Picker filtering images out.** `app/client/chat/page.tsx`'s attachment `accept` attribute had no `.jpg/.jpeg/.png` — server-side handling (`/api/upload`'s `ALLOWED_TYPES`) already supported images correctly, only the picker was blocking selection. One-line fix.
+2. **Uploaded file invisible in the chat transcript.** Confirmed working via vision after the accept fix, but the user message bubble never showed which file was attached — `Message` only carried `content` (plain text), not file metadata. Fixed: `Message` type extended with optional `fileName`/`fileType`; `sendMessage()` attaches them; bubble renders a 📎 chip. Chip styling iterated once: initial semi-transparent-white chip blurred into the blue bubble — changed to light background (`#e8edf8`) / dark text (`#0c1220`) for contrast.
+
+**Verified working** on a real session — image upload analyzed correctly by the model (correctly identified an irrelevant recruitment ad and asked for the right document instead of hallucinating a finding from the filename).
+
+### Part 4 — Two bugs found, scoped for next session (not fixed yet)
+
+Found while reviewing a full downloaded PDF report:
+
+1. **Chat only supports single-file attachment.** `handleFileSelect` takes `e.target.files?.[0]` — no `multiple` on the input, no loop over multiple files in `uploadAndSend`.
+2. **Re-analysis duplicates findings instead of updating them.** The downloaded report showed the same violation restated near-verbatim 3 times (e.g. "Отсутствие подтверждающих документов" as findings #1, #4, #7; "Новация трудовой задолженности" as #3, #6, #9). Each mid-chat document upload appears to trigger a fresh `record_findings` call that **appends** to the `findings` table rather than checking for/updating an existing matching finding from an earlier turn in the same session. Needs investigation into whether Sonnet is re-stating already-known findings each turn (prompt issue — should only report *new* findings) and/or whether `saveFindings()` needs a dedup/upsert strategy against existing rows for the session.
+
+---
+
+
 
 **Trigger:** running the same 71-transaction bank statement through three separate AI runs produced three different behaviors — two full analyses with different risk-tier conclusions on the same facts (concentration risk flipped between СУЩЕСТВЕННО and НЕСУЩЕСТВЕННО; personal-expense mixing flipped the other way), and a third run that stopped to ask clarifying questions (tax regime, audit purpose) before analyzing at all. All three are consistent with the same prompt, because nothing in the prompt governed whether to ask or what to assume.
 
