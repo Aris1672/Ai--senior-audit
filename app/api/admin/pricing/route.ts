@@ -1,65 +1,90 @@
+/**
+ * app/api/admin/pricing/route.ts
+ *
+ * GET   -> returns the global rate (billing_settings row)
+ * PATCH -> updates either the global rate or one client's override rate
+ *          body: { scope: "global", price_per_transaction_rub } |
+ *                { scope: "client", clientId, custom_price_rub: number|null }
+ *
+ * NOTE: still no admin-role check here -- same P0 gap as before
+ * (see PUNCH_LIST.md). Add auth before this touches real client data.
+ */
+
 import { createAdminClient } from "@/lib/supabase-server";
 import { NextRequest, NextResponse } from "next/server";
 
-// GET — list all tiers including inactive
+// GET -- current global rate
 export async function GET() {
   const supabase = createAdminClient();
-  const { data } = await supabase
-    .from("pricing_tiers")
-    .select("*")
-    .order("sort_order");
-  return NextResponse.json(data || []);
-}
-
-// POST — create new tier
-export async function POST(req: NextRequest) {
-  const supabase = createAdminClient();
-  const { name, max_transactions, price_rub, description } = await req.json();
-
-  // Set sort_order as max + 1
-  const { data: existing } = await supabase
-    .from("pricing_tiers")
-    .select("sort_order")
-    .order("sort_order", { ascending: false })
-    .limit(1);
-
-  const nextOrder = (existing?.[0]?.sort_order || 0) + 1;
-
-  const { error } = await supabase.from("pricing_tiers").insert({
-    name, max_transactions, price_rub,
-    description: description || `До ${max_transactions.toLocaleString("ru")} транзакций на 1 аудит`,
-    sort_order: nextOrder,
-    is_active: true,
-  });
+  const { data, error } = await supabase
+    .from("billing_settings")
+    .select("price_per_transaction_rub, updated_at")
+    .eq("id", 1)
+    .single();
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
-  return NextResponse.json({ success: true });
+  return NextResponse.json(data);
 }
 
-// PATCH — update tier
+// PATCH -- update global rate or a client's override
 export async function PATCH(req: NextRequest) {
   const supabase = createAdminClient();
-  const { tierId, ...updates } = await req.json();
+  const body = await req.json();
 
-  const { error } = await supabase
-    .from("pricing_tiers")
-    .update(updates)
-    .eq("id", tierId);
+  if (body.scope === "global") {
+    const { price_per_transaction_rub } = body;
+    if (!price_per_transaction_rub || price_per_transaction_rub <= 0) {
+      return NextResponse.json({ error: "Некорректная ставка" }, { status: 400 });
+    }
 
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 });
-  return NextResponse.json({ success: true });
-}
+    const { error } = await supabase
+      .from("billing_settings")
+      .update({
+        price_per_transaction_rub,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", 1);
 
-// DELETE — remove tier
-export async function DELETE(req: NextRequest) {
-  const supabase = createAdminClient();
-  const { tierId } = await req.json();
+    if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+    return NextResponse.json({ success: true });
+  }
 
-  const { error } = await supabase
-    .from("pricing_tiers")
-    .delete()
-    .eq("id", tierId);
+  if (body.scope === "client") {
+    const { clientId, custom_price_rub } = body;
+    if (!clientId) {
+      return NextResponse.json({ error: "clientId обязателен" }, { status: 400 });
+    }
 
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 });
-  return NextResponse.json({ success: true });
+    // One subscription row per client is assumed here. If a client has no
+    // row yet, create one; otherwise update the most recent row.
+    const { data: existing } = await supabase
+      .from("client_subscriptions")
+      .select("id")
+      .eq("client_id", clientId)
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (existing) {
+      const { error } = await supabase
+        .from("client_subscriptions")
+        .update({
+          custom_price_rub,
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", existing.id);
+
+      if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+    } else {
+      const { error } = await supabase
+        .from("client_subscriptions")
+        .insert({ client_id: clientId, custom_price_rub });
+
+      if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+    }
+
+    return NextResponse.json({ success: true });
+  }
+
+  return NextResponse.json({ error: "Unknown scope" }, { status: 400 });
 }

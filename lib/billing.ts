@@ -1,24 +1,10 @@
-// ─── Pricing tier structure ───────────────────────────────────────────────────
-export interface PricingTier {
-  id:             string;
-  name:           string;
-  maxTransactions: number;
-  priceRub:       number;
-  description:    string;
-}
-
-// ─── Client billing state ────────────────────────────────────────────────────
+// --- Client billing state ----------------------------------------------
 export interface ClientBilling {
-  tier:            PricingTier;
-  effectivePrice:  number;   // custom override or tier default
-  effectiveMaxTx:  number;   // custom override or tier default
-  auditsRemaining: number;
-  auditsPurchased: number;
-  auditsUsed:      number;
-  validTo:         string | null;
+  ratePerTransactionRub: number;   // custom override or global default
+  isCustomRate:          boolean;  // true if client has a per-client override set
 }
 
-// ─── Usage breakdown shown on client Usage tab ───────────────────────────────
+// --- Usage breakdown shown on client Usage tab --------------------------
 export interface UsageBreakdown {
   aiMessages:           number;
   tokensIn:             number;
@@ -33,16 +19,13 @@ export interface UsageBreakdown {
   }[];
 }
 
-// ─── Risk level type (matches DB enum) ───────────────────────────────────────
+// --- Risk level type (matches DB enum) -----------------------------------
 export type RiskLevel = "КРИТИЧНО" | "СУЩЕСТВЕННО" | "НЕСУЩЕСТВЕННО";
 
-// ─── Evidence-confidence type (matches DB enum `finding_evidence_status`) ────
-// Distinct from RiskLevel (severity) and from a finding's workflow `status`
-// (open/resolved/disputed). This tracks how certain the AI is, per the
-// three-tier system in AUDIT_SYSTEM_PROMPT: confirmed / risk_flag / indirect.
+// --- Evidence-confidence type (matches DB enum `finding_evidence_status`) --
 export type EvidenceStatus = "confirmed" | "risk_flag" | "indirect";
 
-// ─── Format number as Russian rubles ─────────────────────────────────────────
+// --- Format number as Russian rubles --------------------------------------
 export function formatRubles(amount: number): string {
   return new Intl.NumberFormat("ru-RU", {
     style:                 "currency",
@@ -52,8 +35,22 @@ export function formatRubles(amount: number): string {
   }).format(amount);
 }
 
-// ─── Calculate AI cost in rubles ─────────────────────────────────────────────
+// --- Calculate audit price from transaction count + rate -----------------
+// Replaces the old tier-lookup (calcPrice against pricing_tiers). Rate is
+// rubles per transaction — either the client's custom_price_rub override
+// (client_subscriptions) or the global billing_settings.price_per_transaction_rub.
+export function calcAuditPrice(
+  transactionCount: number,
+  ratePerTransactionRub: number
+): number {
+  return Math.round(transactionCount * ratePerTransactionRub * 100) / 100;
+}
+
+// --- Calculate AI cost in rubles ------------------------------------------
 // Claude Haiku 4.5: $0.025 per 1K input, $0.125 per 1K output
+// NOTE: unrelated to client billing above — this is internal AI token-cost
+// tracking (see PUNCH_LIST.md P2 item on reconciling this against Sonnet-only
+// pricing; left untouched here, out of scope for this change).
 export function calcAiCostRub(
   tokensIn:  number,
   tokensOut: number,
@@ -66,7 +63,7 @@ export function calcAiCostRub(
   return costUsd * usdToRub;
 }
 
-// ─── Get risk level color for UI badges ──────────────────────────────────────
+// --- Get risk level color for UI badges -----------------------------------
 export function getRiskColor(level: RiskLevel): string {
   switch (level) {
     case "КРИТИЧНО":       return "#e84040";
@@ -75,7 +72,7 @@ export function getRiskColor(level: RiskLevel): string {
   }
 }
 
-// ─── Get risk level background color (lighter) ───────────────────────────────
+// --- Get risk level background color (lighter) ----------------------------
 export function getRiskBgColor(level: RiskLevel): string {
   switch (level) {
     case "КРИТИЧНО":       return "#3d1515";
@@ -84,7 +81,7 @@ export function getRiskBgColor(level: RiskLevel): string {
   }
 }
 
-// ─── Get human-readable Russian label for evidence-confidence tier ───────────
+// --- Get human-readable Russian label for evidence-confidence tier -------
 export function getEvidenceStatusLabel(status: EvidenceStatus): string {
   switch (status) {
     case "confirmed": return "Подтверждённое нарушение";
@@ -93,9 +90,7 @@ export function getEvidenceStatusLabel(status: EvidenceStatus): string {
   }
 }
 
-// ─── Get evidence-confidence color for UI badges ──────────────────────────────
-// Deliberately a different palette axis from risk-level color (severity),
-// so the two badges never get visually confused with each other.
+// --- Get evidence-confidence color for UI badges ---------------------------
 export function getEvidenceStatusColor(status: EvidenceStatus): string {
   switch (status) {
     case "confirmed": return "#e8edf8";
@@ -110,26 +105,4 @@ export function getEvidenceStatusBgColor(status: EvidenceStatus): string {
     case "risk_flag":  return "#0d1f3e";
     case "indirect":   return "#101828";
   }
-}
-
-// ─── Check if a client has exceeded their transaction limit ──────────────────
-export function checkTierLimit(
-  transactionCount: number,
-  effectiveMaxTx:   number
-): { allowed: boolean; percentUsed: number; remaining: number } {
-  const percentUsed = Math.round((transactionCount / effectiveMaxTx) * 100);
-  const remaining   = Math.max(0, effectiveMaxTx - transactionCount);
-  return {
-    allowed:     transactionCount <= effectiveMaxTx,
-    percentUsed: Math.min(percentUsed, 100),
-    remaining,
-  };
-}
-
-// ─── Suggest upgrade tier based on transaction count ─────────────────────────
-export function suggestTier(transactionCount: number): string {
-  if (transactionCount <= 500)   return "Базовый — 8 000 ₽";
-  if (transactionCount <= 2000)  return "Стандарт — 15 000 ₽";
-  if (transactionCount <= 5000)  return "Профи — 30 000 ₽";
-  return "Корпоратив — 75 000 ₽";
 }

@@ -2,55 +2,62 @@
  * app/api/audit/calculate-price/route.ts
  *
  * Counts transactions from a parsed document or a live 1C connection,
- * then maps the count to a pricing tier.
+ * then prices the audit as (transaction count) x (rate per transaction).
+ * Rate is the client's custom override (client_subscriptions.custom_price_rub)
+ * if set, otherwise the global default (billing_settings.price_per_transaction_rub).
  *
  * POST { sessionId, clientId, documentId? } | { sessionId, clientId, c1Config? }
- * → { transactionCount, priceRub, tierName }
+ * -> { transactionCount, priceRub, rateRub, isCustomRate }
  */
 
 import { createAdminClient } from "@/lib/supabase-server";
 import { parseFile } from "@/lib/file-parser";
+import { calcAuditPrice } from "@/lib/billing";
 import { NextRequest, NextResponse } from "next/server";
-
-// ─── Pricing ──────────────────────────────────────────────────────────────────
-
-function calcPrice(
-  txCount: number,
-  tiers: { name: string; max_transactions: number; price_rub: number }[]
-): { priceRub: number; tierName: string } {
-  const sorted = [...tiers].sort((a, b) => a.max_transactions - b.max_transactions);
-  for (const tier of sorted) {
-    if (txCount <= tier.max_transactions) {
-      return { priceRub: tier.price_rub, tierName: tier.name };
-    }
-  }
-  const top = sorted[sorted.length - 1];
-  return { priceRub: top.price_rub, tierName: `${top.name} (превышен лимит)` };
-}
-
-// ─── Route ────────────────────────────────────────────────────────────────────
 
 export async function POST(req: NextRequest) {
   try {
     const { documentId, sessionId, clientId, c1Config } = await req.json();
     const supabase = createAdminClient();
 
-    // ── Load active pricing tiers ─────────────────────────────────────────
-    const { data: tiers } = await supabase
-      .from("pricing_tiers")
-      .select("name, max_transactions, price_rub")
-      .eq("is_active", true);
+    // --- Resolve rate: client override -> global default -----------------
+    let rateRub = 0;
+    let isCustomRate = false;
 
-    if (!tiers || tiers.length === 0) {
-      return NextResponse.json(
-        { error: "Тарифы не настроены. Обратитесь к администратору." },
-        { status: 500 }
-      );
+    if (clientId) {
+      const { data: sub } = await supabase
+        .from("client_subscriptions")
+        .select("custom_price_rub")
+        .eq("client_id", clientId)
+        .order("created_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
+      if (sub?.custom_price_rub != null) {
+        rateRub = Number(sub.custom_price_rub);
+        isCustomRate = true;
+      }
+    }
+
+    if (!isCustomRate) {
+      const { data: settings } = await supabase
+        .from("billing_settings")
+        .select("price_per_transaction_rub")
+        .eq("id", 1)
+        .single();
+
+      if (!settings) {
+        return NextResponse.json(
+          { error: "Тариф не настроен. Обратитесь к администратору." },
+          { status: 500 }
+        );
+      }
+      rateRub = Number(settings.price_per_transaction_rub);
     }
 
     let transactionCount = 0;
 
-    // ── FILE MODE ─────────────────────────────────────────────────────────
+    // --- FILE MODE ----------------------------------------------------------
     if (documentId) {
       const { data: doc } = await supabase
         .from("documents")
@@ -59,11 +66,11 @@ export async function POST(req: NextRequest) {
         .single();
 
       if (doc?.parsed_data?.rowCount != null) {
-        // Already parsed — use cached value (fast path)
+        // Already parsed -- use cached value (fast path)
         transactionCount = doc.parsed_data.rowCount;
 
       } else if (["xlsx", "csv", "xml"].includes(doc?.file_type ?? "")) {
-        // Not yet ready — download and parse now (Vercel → Supabase)
+        // Not yet ready -- download and parse now (Vercel -> Supabase)
         const { data: blob, error: dlErr } = await supabase.storage
           .from("audit-documents")
           .download(doc!.storage_path);
@@ -91,7 +98,7 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // ── LIVE 1C MODE ──────────────────────────────────────────────────────
+    // --- LIVE 1C MODE ---------------------------------------------------------
     else if (c1Config) {
       const { url, username, password, base } = c1Config;
       const auth = Buffer.from(`${username}:${password}`).toString("base64");
@@ -123,21 +130,20 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // ── Price & persist ───────────────────────────────────────────────────
-    const { priceRub, tierName } = calcPrice(transactionCount, tiers);
+    // --- Price & persist --------------------------------------------------
+    const priceRub = calcAuditPrice(transactionCount, rateRub);
 
     if (sessionId) {
       await supabase
         .from("audit_sessions")
         .update({
           transactions_ct: transactionCount,
-          price_rub:       priceRub,
-          tier_name:       tierName,
+          cost_rub:        priceRub,
         })
         .eq("id", sessionId);
     }
 
-    return NextResponse.json({ transactionCount, priceRub, tierName });
+    return NextResponse.json({ transactionCount, priceRub, rateRub, isCustomRate });
 
   } catch (err) {
     console.error("[calculate-price] error:", err);

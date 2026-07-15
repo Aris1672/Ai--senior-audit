@@ -37,10 +37,8 @@ export async function POST(req: NextRequest) {
             status,
             created_at,
             client_subscriptions (
-              audits_purchased,
-              audits_used,
               custom_price_rub,
-              pricing_tiers ( name, price_rub )
+              created_at
             ),
             audit_sessions (
               id,
@@ -61,6 +59,78 @@ export async function POST(req: NextRequest) {
         }
 
         return NextResponse.json(data || []);
+      }
+
+      // ── Client dashboard data ──────────────────────────────
+      case "client_dashboard": {
+        const { clientId } = payload;
+        const [
+          { data: profile },
+          { data: sub },
+          { data: sessions },
+          { data: findings },
+          { data: usage },
+          { data: settings },
+        ] = await Promise.all([
+          supabase.from("profiles").select("company_name").eq("id", clientId).single(),
+          supabase.from("client_subscriptions")
+            .select("custom_price_rub")
+            .eq("client_id", clientId).order("created_at", { ascending: false }).limit(1),
+          supabase.from("audit_sessions")
+            .select("id, title, status, transactions_ct, findings_ct, cost_rub, paid, created_at")
+            .eq("client_id", clientId).order("created_at", { ascending: false }).limit(5),
+          supabase.from("findings")
+            .select("id, risk_level, title, created_at")
+            .eq("client_id", clientId).eq("status", "open")
+            .order("created_at", { ascending: false }).limit(8),
+          supabase.from("usage_events")
+            .select("cost_rub, transactions_ct")
+            .eq("client_id", clientId),
+          supabase.from("billing_settings")
+            .select("price_per_transaction_rub")
+            .eq("id", 1).single(),
+        ]);
+
+        const effectiveRate = sub?.[0]?.custom_price_rub ?? settings?.price_per_transaction_rub ?? 0;
+
+        return NextResponse.json({ profile, sub, sessions, findings, usage, effectiveRate });
+      }
+        // ── Admin: clients + their per-transaction rate override ──
+      case "admin_client_rates": {
+        const { data, error } = await supabase
+          .from("profiles")
+          .select(`
+            id,
+            company_name,
+            client_subscriptions (
+              custom_price_rub,
+              created_at
+            )
+          `)
+          .eq("role", "client")
+          .neq("status", "deleted")
+          .order("company_name");
+ 
+        if (error) {
+          console.error("admin_client_rates error:", error);
+          return NextResponse.json({ error: error.message }, { status: 500 });
+        }
+ 
+        // Each client may have multiple subscription rows (historical);
+        // take the most recent one's custom_price_rub, or null if none.
+        const rows = (data || []).map((c: any) => {
+          const subs = Array.isArray(c.client_subscriptions) ? c.client_subscriptions : [];
+          const latest = subs.sort((a: any, b: any) =>
+            new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+          )[0];
+          return {
+            id:               c.id,
+            company_name:     c.company_name || "(без названия)",
+            custom_price_rub: latest?.custom_price_rub ?? null,
+          };
+        });
+ 
+        return NextResponse.json(rows);
       }
 
       // ── Pricing tiers ──────────────────────────────────────
