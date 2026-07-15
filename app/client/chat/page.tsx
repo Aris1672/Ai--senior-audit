@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import ReactMarkdown from "react-markdown";
 
-interface Message { role: "user" | "assistant"; content: string; costRub?: number; fileName?: string; fileType?: string; }
+interface Message { role: "user" | "assistant"; content: string; costRub?: number; fileNames?: string[]; }
 
 // ── Markdown rendering for assistant messages ──────────────────────────────
 // Added to fix the "flat" chat feel: report headers (## Резюме аудитора),
@@ -123,7 +123,7 @@ export default function ChatPage() {
   const [totalCost,      setTotalCost]      = useState(0);
   const [context,        setContext]        = useState<any>(null);
   const [initDone,       setInitDone]       = useState(false);
-  const [pendingFile,    setPendingFile]    = useState<File | null>(null);
+  const [pendingFiles,   setPendingFiles]   = useState<File[]>([]);
   const [uploading,      setUploading]      = useState(false);
   const [auditCompleted, setAuditCompleted] = useState(false);
   // index of the message currently being typewritten (-1 = none)
@@ -243,32 +243,47 @@ export default function ChatPage() {
   }, [messages]);
 
   // ── Handle file selection ─────────────────────────────────────────────────
+  // Supports selecting (or dragging-in via multiple picks) more than one
+  // file at once. Newly selected files are appended to whatever is already
+  // pending, so the attach button can be used more than once before send.
   function handleFileSelect(e: React.ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0];
-    if (file) {
-      setPendingFile(file);
-      if (!input.trim()) setInput(`Загружен документ: ${file.name}. Проанализируй его в контексте текущего аудита.`);
+    const files = Array.from(e.target.files || []);
+    if (files.length > 0) {
+      setPendingFiles(prev => [...prev, ...files]);
+      if (!input.trim()) {
+        const names = files.map(f => f.name).join(", ");
+        setInput(`Загружены документы: ${names}. Проанализируй их в контексте текущего аудита.`);
+      }
     }
     e.target.value = "";
   }
 
-  // ── Upload pending file, then send ───────────────────────────────────────
-  async function uploadAndSend(file: File, uid: string, sid: string, messageText: string, currentMessages: Message[]) {
+  // ── Upload all pending files (one /api/upload call per file — that route's
+  //    contract is unchanged), then send a single /api/chat call once every
+  //    upload has succeeded. /api/chat already re-reads ALL documents linked
+  //    to the session on every turn (see getAllDocumentsContent server-side),
+  //    so a single call after all uploads is sufficient — no need to call
+  //    /api/chat once per file. ─────────────────────────────────────────────
+  async function uploadFilesAndSend(files: File[], uid: string, sid: string, currentMessages: Message[]) {
     setUploading(true);
 
-    const formData = new FormData();
-    formData.append("file",      file);
-    formData.append("clientId",  uid);
-    formData.append("sessionId", sid);
+    for (const file of files) {
+      const formData = new FormData();
+      formData.append("file",      file);
+      formData.append("clientId",  uid);
+      formData.append("sessionId", sid);
 
-    const uploadRes  = await fetch("/api/upload", { method: "POST", body: formData });
-    const uploadData = await uploadRes.json();
-    setUploading(false);
+      const uploadRes  = await fetch("/api/upload", { method: "POST", body: formData });
+      const uploadData = await uploadRes.json();
 
-    if (!uploadRes.ok) {
-      pushAssistantReply(`❌ Ошибка загрузки файла: ${uploadData.error || "неизвестная ошибка"}`);
-      return;
+      if (!uploadRes.ok) {
+        setUploading(false);
+        pushAssistantReply(`❌ Ошибка загрузки файла «${file.name}»: ${uploadData.error || "неизвестная ошибка"}`);
+        return; // stop on first failure — avoids sending a partial/confusing analysis
+      }
     }
+
+    setUploading(false);
 
     const res  = await fetch("/api/chat", {
       method: "POST",
@@ -289,19 +304,20 @@ export default function ChatPage() {
 
   // ── Main send handler ─────────────────────────────────────────────────────
   async function sendMessage() {
-    if ((!input.trim() && !pendingFile) || !clientId || !sessionId || loading) return;
+    if ((!input.trim() && pendingFiles.length === 0) || !clientId || !sessionId || loading) return;
 
-    const messageText = input.trim() || `Проанализируй загруженный документ: ${pendingFile?.name}`;
+    const messageText = input.trim() || `Проанализируй загруженные документы: ${pendingFiles.map(f => f.name).join(", ")}`;
     const userMsg: Message = {
       role: "user",
       content: messageText,
-      ...(pendingFile ? { fileName: pendingFile.name, fileType: pendingFile.type } : {}),
+      ...(pendingFiles.length > 0 ? { fileNames: pendingFiles.map(f => f.name) } : {}),
     };
     const newMessages = [...messages, userMsg];
 
     setMessages(newMessages);
     setInput("");
-    setPendingFile(null);
+    const filesToUpload = pendingFiles;
+    setPendingFiles([]);
     setLoading(true);
 
     const ta = document.querySelector("textarea") as HTMLTextAreaElement | null;
@@ -313,8 +329,8 @@ export default function ChatPage() {
       body: JSON.stringify({ action: "save_message", payload: { sessionId, clientId, role: "user", content: messageText } }),
     });
 
-    if (pendingFile) {
-      await uploadAndSend(pendingFile, clientId, sessionId, messageText, newMessages);
+    if (filesToUpload.length > 0) {
+      await uploadFilesAndSend(filesToUpload, clientId, sessionId, newMessages);
     } else {
       const res  = await fetch("/api/chat", {
         method: "POST",
@@ -412,15 +428,18 @@ export default function ChatPage() {
                 // handle their own spacing, so "normal" avoids double gaps
                 whiteSpace: renderMarkdown ? "normal" : "pre-wrap",
               }}>
-                {msg.fileName && (
-                  <div style={{
-                    display: "flex", alignItems: "center", gap: "6px",
-                    marginBottom: "8px", padding: "6px 10px",
-                    background: "#e8edf8", borderRadius: "8px",
-                    fontSize: "13px", color: "#0c1220", width: "fit-content",
-                  }}>
-                    <span>📎</span>
-                    <span style={{ wordBreak: "break-all" }}>{msg.fileName}</span>
+                {msg.fileNames && msg.fileNames.length > 0 && (
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: "6px", marginBottom: "8px" }}>
+                    {msg.fileNames.map((name, idx) => (
+                      <div key={idx} style={{
+                        display: "flex", alignItems: "center", gap: "6px",
+                        padding: "6px 10px", background: "#e8edf8", borderRadius: "8px",
+                        fontSize: "13px", color: "#0c1220", width: "fit-content",
+                      }}>
+                        <span>📎</span>
+                        <span style={{ wordBreak: "break-all" }}>{name}</span>
+                      </div>
+                    ))}
                   </div>
                 )}
                 {isTyping
@@ -451,25 +470,29 @@ export default function ChatPage() {
         <div ref={bottomRef} />
       </div>
 
-      {/* Pending file badge */}
-      {pendingFile && (
-        <div style={{ display: "flex", alignItems: "center", gap: "8px", padding: "8px 12px", marginBottom: "8px", background: "#0d1f3e", border: "1px solid #1565e8", borderRadius: "8px", fontSize: "13px", color: "#7a90c0" }}>
-          <span>📎</span>
-          <span style={{ flex: 1, color: "#e8edf8" }}>{pendingFile.name}</span>
-          <span style={{ fontSize: "11px" }}>{(pendingFile.size / 1024).toFixed(0)} KB</span>
-          <button onClick={() => { setPendingFile(null); setInput(""); }} style={{ background: "none", border: "none", color: "#7a90c0", cursor: "pointer", fontSize: "16px", padding: "0 4px" }}>×</button>
+      {/* Pending files list */}
+      {pendingFiles.length > 0 && (
+        <div style={{ display: "flex", flexDirection: "column", gap: "6px", marginBottom: "8px" }}>
+          {pendingFiles.map((file, idx) => (
+            <div key={idx} style={{ display: "flex", alignItems: "center", gap: "8px", padding: "8px 12px", background: "#0d1f3e", border: "1px solid #1565e8", borderRadius: "8px", fontSize: "13px", color: "#7a90c0" }}>
+              <span>📎</span>
+              <span style={{ flex: 1, color: "#e8edf8" }}>{file.name}</span>
+              <span style={{ fontSize: "11px" }}>{(file.size / 1024).toFixed(0)} KB</span>
+              <button onClick={() => setPendingFiles(prev => prev.filter((_, i) => i !== idx))} style={{ background: "none", border: "none", color: "#7a90c0", cursor: "pointer", fontSize: "16px", padding: "0 4px" }}>×</button>
+            </div>
+          ))}
         </div>
       )}
 
       {/* Input row */}
       <div style={{ display: "flex", gap: "10px", alignItems: "flex-end" }}>
-        <input ref={fileInputRef} type="file" accept=".xlsx,.csv,.xml,.xls,.pdf,.docx,.doc,.txt,.jpg,.jpeg,.png" style={{ display: "none" }} onChange={handleFileSelect} />
+        <input ref={fileInputRef} type="file" multiple accept=".xlsx,.csv,.xml,.xls,.pdf,.docx,.doc,.txt,.jpg,.jpeg,.png" style={{ display: "none" }} onChange={handleFileSelect} />
 
-        <button onClick={() => fileInputRef.current?.click()} disabled={loading || uploading || auditCompleted} title="Прикрепить документ" style={{
+        <button onClick={() => fileInputRef.current?.click()} disabled={loading || uploading || auditCompleted} title="Прикрепить документ(ы)" style={{
           width: "48px", height: "48px", flexShrink: 0,
-          background: pendingFile ? "#0d3a8a" : "#101828",
-          border: `1px solid ${pendingFile ? "#1565e8" : "#1e2d55"}`,
-          borderRadius: "8px", color: pendingFile ? "#4d91ff" : "#7a90c0",
+          background: pendingFiles.length > 0 ? "#0d3a8a" : "#101828",
+          border: `1px solid ${pendingFiles.length > 0 ? "#1565e8" : "#1e2d55"}`,
+          borderRadius: "8px", color: pendingFiles.length > 0 ? "#4d91ff" : "#7a90c0",
           fontSize: "20px", cursor: loading ? "not-allowed" : "pointer",
           display: "flex", alignItems: "center", justifyContent: "center",
         }}>📎</button>
@@ -478,13 +501,13 @@ export default function ChatPage() {
           value={input}
           onChange={e => { setInput(e.target.value); e.target.style.height = "auto"; e.target.style.height = Math.min(e.target.scrollHeight, 200) + "px"; }}
           onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendMessage(); } }}
-          placeholder={pendingFile ? "Добавьте комментарий или нажмите → для отправки..." : "Введите вопрос... (Shift+Enter для новой строки)"}
+          placeholder={pendingFiles.length > 0 ? "Добавьте комментарий или нажмите → для отправки..." : "Введите вопрос... (Shift+Enter для новой строки)"}
           disabled={loading || uploading || auditCompleted}
           rows={1}
           style={{ flex: 1, padding: "13px 16px", background: "#0c1220", border: "1px solid #1e2d55", borderRadius: "8px", color: "#e8edf8", fontSize: "14px", outline: "none", resize: "none", overflow: "hidden", lineHeight: "1.5", minHeight: "48px", maxHeight: "200px", fontFamily: "inherit" }}
         />
 
-        <button onClick={sendMessage} disabled={loading || uploading || (!input.trim() && !pendingFile) || auditCompleted} style={{
+        <button onClick={sendMessage} disabled={loading || uploading || (!input.trim() && pendingFiles.length === 0) || auditCompleted} style={{
           width: "48px", height: "48px", flexShrink: 0,
           background: (loading || uploading) ? "#0d3a8a" : "#1565e8",
           border: "none", borderRadius: "8px", color: "#fff",

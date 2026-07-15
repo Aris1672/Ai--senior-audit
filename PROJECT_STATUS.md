@@ -1,6 +1,6 @@
 # AI Senior Auditor — Project Status
 
-> Last updated: July 4, 2026 (evening). PDF/image parsing fixes + chat file-chip UX + record_findings duplicate-call guard — see Session Log at bottom for detail. **Two bugs found and scoped for next session (not yet fixed):** multi-file attach in chat is single-file only, and re-analysis after a mid-chat upload appends duplicate findings instead of updating/deduping them. See new P1 punch-list items.
+> Last updated: July 15, 2026. Billing switched from flat per-tier pricing to per-transaction pricing (count × rate), with a global default rate and optional per-client override — see Session Log at bottom for detail. Previous entry (July 4, evening): PDF/image parsing fixes + chat file-chip UX + record_findings duplicate-call guard. **Two bugs still open from that session (not yet fixed):** multi-file attach in chat is single-file only, and re-analysis after a mid-chat upload appends duplicate findings instead of updating/deduping them. See P1 punch-list items.
 > GitHub: https://github.com/Aris1672/Ai--senior-audit
 > Live demo: https://ai-senior-audit.vercel.app
 > Admin login: support@assistant24.tech (role set manually in Supabase)
@@ -845,6 +845,32 @@ PM2 keeps Next.js running as background process, auto-restarts on crash. Cost: f
 
 **P3 — Cleanup / deferred**
 - [ ] Chat page's own attachment-button accept attribute still missing `.txt`/`.doc` (only `.xls,.pdf` currently) — left unpatched on purpose, decide if it should match the other two upload surfaces
+
+---
+
+## Session Log — Per-Transaction Billing (July 15, 2026)
+
+**Goal:** switch billing from flat per-tier pricing (fixed price per max-transaction bracket) to true per-transaction pricing, following a demo to a large prospective client running ~250,000–300,000 transaction audits/month. Requested capability: admin sets a price per transaction; audit cost = transaction count × rate; per-client custom rate override still supported.
+
+**Schema (`006_transaction_billing.sql`, applied):**
+- New `billing_settings` table — single row (`id = 1`, enforced by CHECK), holds `price_per_transaction_rub` (global default rate). Seeded at 15.00 ₽/transaction as a placeholder — **update via the admin pricing tab to the real rate before this goes live for the new client.**
+- `client_subscriptions.custom_price_rub` — **repurposed**, not newly added. This column already existed (previously meant as a flat per-audit override tied to a tier) and was confirmed unused live. Now means: per-transaction override rate in RUB; `NULL` = use the global default. Column comment added in the migration documenting this reinterpretation.
+- `pricing_tiers` table and the old tier-linkage columns on `client_subscriptions` (`tier_id`, `custom_max_tx`, `audits_purchased`, `audits_used`) are **left in place, not dropped**. FK check confirmed `client_subscriptions.tier_id → pricing_tiers.id` is the only reference to the table. Drop statements are written but commented out in the migration — intentionally deferred until the code below is deployed and confirmed working, to avoid a hard cutover with no rollback path.
+
+**Code changes:**
+- `lib/billing.ts` — removed `PricingTier` interface, `checkTierLimit()`, `suggestTier()` (hardcoded tier-price list). Added `calcAuditPrice(transactionCount, ratePerTransactionRub)`. `calcAiCostRub()` (internal AI token-cost tracking, unrelated to client billing) left untouched.
+- `app/api/audit/calculate-price/route.ts` — replaced the tier-bracket lookup (`calcPrice()` scanning sorted tiers) with a rate lookup: `client_subscriptions.custom_price_rub` (most recent row for the client) if set, else `billing_settings.price_per_transaction_rub`. Response shape changed from `{ transactionCount, priceRub, tierName }` to `{ transactionCount, priceRub, rateRub, isCustomRate }`. Also fixed a latent bug in the old code: it wrote `tier_name` to `audit_sessions` on update, but that column doesn't exist in the live schema (confirmed via live schema dump this session) — would have silently failed or errored; removed.
+- `app/client/audit/new/page.tsx` — `PriceResult` interface updated to match the new response shape; price-breakdown display in the Step 4 confirm screen now shows "Ставка за транзакцию" (rate, with a "(инд.)" tag if it's a custom override) instead of "Тарифный план" (tier name).
+- `app/admin/pricing/page.tsx` — full rewrite. Old page was full tier CRUD (create/edit/delete tiers with max_transactions + price_rub). New page: (1) a global-rate editor (single number input + save, reads/writes `billing_settings`), (2) a per-client override table listing all clients with their current rate (custom or "по умолчанию"/default), inline edit, and a "Сбросить" (reset) button to clear back to default.
+- `app/api/admin/pricing/route.ts` — full rewrite. `GET` returns the global rate. `PATCH` takes `{ scope: "global", price_per_transaction_rub }` or `{ scope: "client", clientId, custom_price_rub }` (null clears the override). Client-scope PATCH upserts against the client's most recent `client_subscriptions` row (or inserts a new one if none exists).
+- `app/api/data/route.ts` — added new `admin_client_rates` action (returns all clients + their current `custom_price_rub`, used by the new pricing-tab table). Fixed `admin_clients` and `client_dashboard` actions, both of which previously joined `pricing_tiers(name, price_rub, ...)` through `client_subscriptions` — these joins would have returned stale/broken tier data post-cutover since the tier table is no longer the source of truth. `client_dashboard` now also computes and returns `effectiveRate` (client override → global fallback), though `app/client/dashboard/page.tsx` doesn't currently consume it — confirmed it only destructures `{ profile, sessions, findings }`, so it needed no changes.
+- `app/client/dashboard/page.tsx` — reviewed, **no changes needed**. Confirmed it never referenced tier/pricing fields; all cost display there is computed from `session.cost_rub`, unaffected by this change.
+
+**Open items from this session:**
+- **Not yet verified end-to-end against a real deploy.** Only the migration has been run and confirmed; the code changes above have been handed off but not yet observed passing a build or a live test (new-audit wizard → price shown as count × rate → admin tab edits both global and per-client rates). Run one full flow before treating this as done.
+- `app/api/admin/pricing` still has **no admin-role check** — same P0 gap as the rest of `/api/admin/*`, unchanged by this session; flagged again for visibility since this route now handles live pricing data for a large prospective client.
+- `client_subscriptions` upsert-by-most-recent-row assumption (in the PATCH client-scope handler) may be wrong if subscriptions are meant to be period-scoped (the table has `valid_from`/`valid_to`, suggesting historical rows are expected) — flagged to the user, not yet resolved either way. If period-scoping matters, this should insert a new row instead of updating the latest one.
+- Old `pricing_tiers` table, its now-dead columns on `client_subscriptions`, and the admin CRUD/route code for them are still live but unused — cleanup deferred until the new code is confirmed solid in production, per the migration's own comments.
 
 ---
 
