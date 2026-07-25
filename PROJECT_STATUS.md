@@ -1,6 +1,6 @@
 # AI Senior Auditor — Project Status
 
-> Last updated: July 15, 2026. Billing switched from flat per-tier pricing to per-transaction pricing (count × rate), with a global default rate and optional per-client override — see Session Log at bottom for detail. Previous entry (July 4, evening): PDF/image parsing fixes + chat file-chip UX + record_findings duplicate-call guard. **Two bugs still open from that session (not yet fixed):** multi-file attach in chat is single-file only, and re-analysis after a mid-chat upload appends duplicate findings instead of updating/deduping them. See P1 punch-list items.
+> Last updated: July 15, 2026 (later same day). Multi-file chat attachments implemented — client can now attach and send several files in one message. Previous entry (same day, earlier): billing switched from flat per-tier pricing to per-transaction pricing (count × rate), global default rate + per-client override. **One bug still open:** re-analysis after a mid-chat upload appends duplicate findings instead of updating/deduping them — next on the punch list, and now higher-impact since multi-file uploads mean more documents can trigger it per turn. See P1 punch-list items.
 > GitHub: https://github.com/Aris1672/Ai--senior-audit
 > Live demo: https://ai-senior-audit.vercel.app
 > Admin login: support@assistant24.tech (role set manually in Supabase)
@@ -845,6 +845,29 @@ PM2 keeps Next.js running as background process, auto-restarts on crash. Cost: f
 
 **P3 — Cleanup / deferred**
 - [ ] Chat page's own attachment-button accept attribute still missing `.txt`/`.doc` (only `.xls,.pdf` currently) — left unpatched on purpose, decide if it should match the other two upload surfaces
+
+---
+
+## Session Log — Multi-File Chat Attachments (July 15, 2026, later same day)
+
+**Goal:** close the P1 punch-list item — chat only supported attaching one file per message (`handleFileSelect` read `e.target.files?.[0]`, input lacked `multiple`, `uploadAndSend` handled one file per call).
+
+**Key finding that simplified the fix:** `/api/chat`'s `getAllDocumentsContent` already re-fetches *every* document linked to the session on *every* turn — it was never scoped to "the file attached to this specific message." That meant the backend (`app/api/chat/route.ts`, `app/api/upload/route.ts`) needed **zero changes**. This was purely a frontend fix.
+
+**Changes, all in `app/client/chat/page.tsx`:**
+- `Message.fileName?: string` → `Message.fileNames?: string[]`.
+- New state: `pendingFiles: File[]` replaces `pendingFile: File | null`.
+- `handleFileSelect` now reads the full `FileList`, appends to any already-pending files (so the attach button can be used more than once before sending) rather than replacing.
+- New `uploadFilesAndSend()` replaces `uploadAndSend()`: loops over pending files, uploading each individually via the unchanged `/api/upload` contract (sequential, not parallel — stops and surfaces an error on the first failed upload rather than sending a partial/confusing set), then makes **one** `/api/chat` call after all uploads succeed (relying on the all-documents-per-turn behavior above).
+- `sendMessage()` updated to build `fileNames` from `pendingFiles`, clear the pending list on send, and branch to `uploadFilesAndSend` vs. the plain `/api/chat` call depending on whether files are attached.
+- Message rendering: single file chip replaced with a wrapped row of chips, one per attached file.
+- Pending-files preview (above the input box): list of files instead of one, each with its own remove (×) button.
+- File input: added the `multiple` attribute.
+- Attach/send button `disabled`/styling conditionals updated from `!pendingFile` to `pendingFiles.length === 0`.
+
+**Verified:** not yet — user reported "works well" after applying the change and testing manually, but no specific multi-file test scenario (e.g. exact file count, mixed file types) was logged. Treat as working-per-user-report rather than independently verified against edge cases (e.g. one file in a batch failing mid-upload, very large batches).
+
+**Known follow-on effect (expected, not a new bug):** this change makes the **duplicate-findings bug** (existing P1 item, not yet fixed) more visible/impactful — attaching N files in one message now means N documents' worth of content feeding a single `record_findings` call, and if that session already has findings from earlier turns, the duplication surface is larger. This was flagged to the user before the change was made; fixing the duplicate-findings item is the natural next step.
 
 ---
 
