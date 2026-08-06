@@ -152,6 +152,36 @@ async function getAllDocumentsContent(
   }
 }
 
+// ─── Title normalization + similarity for dedup ────────────────────────────
+// Deliberately simple (word-overlap ratio, not embeddings/fuzzy-string
+// libraries) — this only needs to catch "same finding, slightly different
+// wording" (e.g. "Отсутствие подтверждающих документов" vs "Отсутствуют
+// подтверждающие документы по операциям"), not do general-purpose semantic
+// matching. False negatives here are recoverable (worst case: an occasional
+// near-duplicate slips through, same as before this fix); false positives
+// would be worse (a genuinely new finding silently dropped), so the
+// threshold below is deliberately conservative (high overlap required).
+function normalizeTitle(title: string): Set<string> {
+  return new Set(
+    title
+      .toLowerCase()
+      .replace(/[^\p{L}\p{N}\s]/gu, " ") // strip punctuation, keep letters/digits (unicode-aware for Cyrillic)
+      .split(/\s+/)
+      .filter(w => w.length > 2) // drop short connector words (short in Russian too, e.g. "по", "не")
+  );
+}
+
+function titleSimilarity(a: string, b: string): number {
+  const setA = normalizeTitle(a);
+  const setB = normalizeTitle(b);
+  if (setA.size === 0 || setB.size === 0) return 0;
+  let overlap = 0;
+  for (const word of setA) if (setB.has(word)) overlap++;
+  return overlap / Math.min(setA.size, setB.size); // ratio vs. the shorter title
+}
+
+const DUPLICATE_SIMILARITY_THRESHOLD = 0.7;
+
 // ─── Save findings extracted via record_findings tool_use ─────────────────────
 // Haiku removed (July 2026) — Sonnet now emits structured findings directly via
 // tool_use on the same call that writes the report text, instead of a second
@@ -160,11 +190,22 @@ async function getAllDocumentsContent(
 // Still defensively validated below: tool_use input is schema-guided, not
 // schema-enforced, so a malformed/out-of-enum value from the model is still
 // possible and must not corrupt the DB or silently overstate certainty.
+//
+// DEDUP (July 2026): app-level safety net on top of the prompt-level fix
+// (Sonnet is now told what's already been found and asked not to re-report
+// it — see AUDIT_SYSTEM_PROMPT / buildAuditContext). This guard exists
+// because the prompt instruction is a request, not an enforced constraint —
+// same reasoning as the toolCallSeen guard below it. Checks both against
+// findings already in the DB (existingTitles) AND against other findings
+// in this same tool_use call (Sonnet could still emit two near-identical
+// findings in one call), since without the second check duplicates could
+// still slip in even with the DB check working perfectly.
 async function saveFindings(
   supabase: ReturnType<typeof createAdminClient>,
   sessionId: string,
   clientId: string,
-  findings: any[]
+  findings: any[],
+  existingTitles: string[]
 ): Promise<void> {
   try {
     if (!Array.isArray(findings) || findings.length === 0) return;
@@ -172,12 +213,26 @@ async function saveFindings(
     const validRiskLevels      = new Set(["КРИТИЧНО", "СУЩЕСТВЕННО", "НЕСУЩЕСТВЕННО"]);
     const validEvidenceStatuses = new Set(["confirmed", "risk_flag", "indirect"]);
 
-    const rows = findings
-      .filter((f: any) => f.title && validRiskLevels.has(f.risk_level))
-      .map((f: any) => ({
+    const acceptedTitles: string[] = [...existingTitles];
+    const rows: any[] = [];
+
+    for (const f of findings) {
+      if (!f?.title || !validRiskLevels.has(f.risk_level)) continue;
+
+      const title = String(f.title).slice(0, 100);
+      const isDuplicate = acceptedTitles.some(
+        existing => titleSimilarity(title, existing) >= DUPLICATE_SIMILARITY_THRESHOLD
+      );
+
+      if (isDuplicate) {
+        console.warn(`[chat] Skipping likely-duplicate finding: "${title}"`);
+        continue;
+      }
+
+      rows.push({
         session_id:      sessionId,
         client_id:       clientId,
-        title:           String(f.title).slice(0, 100),
+        title,
         risk_level:      f.risk_level,
         // Default to the middle tier ("risk_flag") rather than "confirmed" if
         // the tool call omits or mis-formats this field — never let a missing
@@ -187,7 +242,9 @@ async function saveFindings(
         legal_basis:     String(f.legal_basis    || "").slice(0, 200),
         recommendation:  String(f.recommendation || "").slice(0, 300),
         status:          "open",
-      }));
+      });
+      acceptedTitles.push(title); // also guards against dupes within this same batch
+    }
 
     if (rows.length === 0) return;
 
@@ -195,7 +252,7 @@ async function saveFindings(
     if (error) {
       console.error("[chat] Failed to save findings:", error.message);
     } else {
-      console.log(`[chat] Saved ${rows.length} finding(s) to DB`);
+      console.log(`[chat] Saved ${rows.length} finding(s) to DB (${findings.length - rows.length} skipped as duplicates)`);
 
       // Update findings_ct on the session
       const { data: sess } = await supabase
@@ -264,9 +321,31 @@ export async function POST(req: NextRequest) {
       }
     }
 
+    // Fetch findings already saved in this session (July 2026, duplicate-
+    // findings fix). Used two ways below: (1) passed into buildAuditContext
+    // so Sonnet sees what's already been reported and can avoid re-emitting
+    // it via record_findings; (2) passed into saveFindings as a second,
+    // app-level dedup check after the response comes back — the prompt
+    // instruction alone is a request, not an enforced constraint.
+    let existingFindings: { title: string; risk_level: string; evidence_status: string }[] = [];
+    if (sessionId) {
+      const { data: existingRows, error: existingErr } = await supabase
+        .from("findings")
+        .select("title, risk_level, evidence_status")
+        .eq("session_id", sessionId)
+        .eq("status", "open");
+
+      if (existingErr) {
+        console.error("[chat] Failed to fetch existing findings for dedup:", existingErr.message);
+      } else {
+        existingFindings = existingRows || [];
+        console.log("[chat] Existing open findings in session:", existingFindings.length);
+      }
+    }
+
     // Build system prompt: base + audit context + all file contents
     const systemPrompt = context
-      ? `${AUDIT_SYSTEM_PROMPT}\n\n${buildAuditContext(context)}${fileSection}`
+      ? `${AUDIT_SYSTEM_PROMPT}\n\n${buildAuditContext({ ...context, existingFindings })}${fileSection}`
       : `${AUDIT_SYSTEM_PROMPT}${fileSection}`;
 
     console.log("[chat] System prompt length:", systemPrompt.length,
@@ -396,7 +475,7 @@ export async function POST(req: NextRequest) {
         content:    text,
       }),
 
-      saveFindings(supabase, sessionId, clientId, toolFindings),
+      saveFindings(supabase, sessionId, clientId, toolFindings, existingFindings.map(f => f.title)),
     ]);
 
     return NextResponse.json({ message: text });
