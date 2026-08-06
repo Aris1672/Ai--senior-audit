@@ -1,6 +1,6 @@
 # AI Senior Auditor — Project Status
 
-> Last updated: July 15, 2026 (later same day). Multi-file chat attachments implemented — client can now attach and send several files in one message. Previous entry (same day, earlier): billing switched from flat per-tier pricing to per-transaction pricing (count × rate), global default rate + per-client override. **One bug still open:** re-analysis after a mid-chat upload appends duplicate findings instead of updating/deduping them — next on the punch list, and now higher-impact since multi-file uploads mean more documents can trigger it per turn. See P1 punch-list items.
+> Last updated: August 6, 2026. Duplicate-findings bug fixed — two-layer defense (prompt-level: Sonnet now sees titles of already-saved findings and is told to skip re-reporting them; app-level: word-overlap similarity dedup check before insert). **Not yet tested against a real duplicate scenario** — implemented and handed off, but the similarity threshold is an untested heuristic; verify against a real transcript before considering this closed. Previous entry (July 15, later): multi-file chat attachments — done, working per user report. Before that: per-transaction billing rework — done, not yet independently verified end-to-end.
 > GitHub: https://github.com/Aris1672/Ai--senior-audit
 > Live demo: https://ai-senior-audit.vercel.app
 > Admin login: support@assistant24.tech (role set manually in Supabase)
@@ -845,6 +845,32 @@ PM2 keeps Next.js running as background process, auto-restarts on crash. Cost: f
 
 **P3 — Cleanup / deferred**
 - [ ] Chat page's own attachment-button accept attribute still missing `.txt`/`.doc` (only `.xls,.pdf` currently) — left unpatched on purpose, decide if it should match the other two upload surfaces
+
+---
+
+## Session Log — Duplicate-Findings Fix (August 6, 2026)
+
+**Goal:** close the P1 punch-list item — mid-chat re-analysis (triggered by any document upload) was producing duplicate findings, since the report/record_findings pipeline reruns in full on every turn with no awareness of what was already saved.
+
+**Root cause, confirmed by source review:**
+1. **Prompt-level:** `buildAuditContext()` only ever passed `openFindings`/`criticalCount` as bare numbers into the system prompt. Sonnet had no way to know *which* findings were already recorded — only how many — so on every full re-analysis it had no basis to recognize "already reported" and would restate the same violations under the same or slightly reworded titles.
+2. **App-level:** `saveFindings()` did an unconditional `insert()` — zero dedup check against the session's existing rows. The `findings` table itself also has no unique constraint that could have caught this at the DB level (confirmed via live schema dump).
+
+**Fix — two layers, as scoped in the punch list:**
+
+- **`lib/anthropic.ts`:**
+  - `buildAuditContext()` signature extended with `existingFindings?: { title, risk_level, evidence_status }[]`. When present, renders an actual titled list ("Уже зафиксированные нарушения") into the context block, with an instruction not to re-pass these to `record_findings`.
+  - `AUDIT_SYSTEM_PROMPT`'s "ФИКСАЦИЯ НАРУШЕНИЙ ЧЕРЕЗ ИНСТРУМЕНТ" section rewritten: Sonnet is now told to compare newly-identified findings against the existing list and pass only new-or-materially-changed ones to `record_findings`, while still being allowed to *mention* already-known findings in the prose report (e.g. in "Резюме аудитора") for a complete-reading report — the restriction is scoped to the tool call, not the text.
+
+- **`app/api/chat/route.ts`:**
+  - Before building the system prompt, now fetches all `open` findings for the session (`title, risk_level, evidence_status`) and passes them into `buildAuditContext` — this is what feeds the prompt-level fix above.
+  - `saveFindings()` extended with an `existingTitles: string[]` parameter and a new word-overlap similarity check (`titleSimilarity()` / `normalizeTitle()`): normalizes each title to a set of words (lowercased, punctuation stripped, unicode-aware for Cyrillic, connector words ≤2 chars dropped), computes overlap ratio against the shorter title, and treats ≥70% overlap as a duplicate. Checked against **both** the DB's existing titles **and** other findings within the same `record_findings` batch (Sonnet could in principle emit two near-identical findings in one call, so within-batch dedup matters too). Duplicates are skipped with a `console.warn`, not inserted.
+  - This is explicitly a **second, app-level safety net** on top of the prompt fix — the prompt instruction is a request, not an enforced constraint, same reasoning as the existing `toolCallSeen` guard it sits next to.
+
+**Open items:**
+- **Not yet verified against a real duplicate case.** The 70% similarity threshold and the >2-character word-length cutoff for "connector words" are untested heuristics, not validated against the actual repeated finding from the original bug report (missing-documents finding appearing as #1/#4/#7 in a real downloaded report). Should be checked against that same scenario, or a fresh equivalent, before this is considered closed. Risk of either direction: threshold too loose → genuinely distinct findings get silently dropped; too strict → duplicates still slip through.
+- If the threshold needs tuning, the fix is contained to `titleSimilarity()`/`DUPLICATE_SIMILARITY_THRESHOLD` in `app/api/chat/route.ts` — no schema or prompt changes should be needed for a tuning pass alone.
+- Existing-findings fetch only pulls `status = 'open'` rows — resolved/disputed findings are intentionally excluded from the "don't re-report" list (a resolved finding reappearing might be meaningful — e.g. same problem recurring — so it isn't silently swallowed by dedup). Worth confirming this is the intended behavior once tested.
 
 ---
 
