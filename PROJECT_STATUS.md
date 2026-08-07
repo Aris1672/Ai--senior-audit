@@ -1,6 +1,6 @@
 # AI Senior Auditor — Project Status
 
-> Last updated: August 6, 2026. Duplicate-findings bug fixed — two-layer defense (prompt-level: Sonnet now sees titles of already-saved findings and is told to skip re-reporting them; app-level: word-overlap similarity dedup check before insert). **Not yet tested against a real duplicate scenario** — implemented and handed off, but the similarity threshold is an untested heuristic; verify against a real transcript before considering this closed. Previous entry (July 15, later): multi-file chat attachments — done, working per user report. Before that: per-transaction billing rework — done, not yet independently verified end-to-end.
+> Last updated: August 7, 2026. Per-transaction billing verified end-to-end — tested with two real clients on different rates (one global-default, one custom override), both priced correctly. Global rate updated in Supabase from the 15 ₽ placeholder to **12.5 ₽/transaction** (live). Landing page (`audit.html`) pricing section rewritten to match: old 4-tier flat-price grid replaced with a single 12.5 ₽/transaction card + "custom pricing for high volume — contact us" note for large clients. Previous entry (August 6): Duplicate-findings bug fixed — two-layer defense (prompt-level: Sonnet now sees titles of already-saved findings and is told to skip re-reporting them; app-level: word-overlap similarity dedup check before insert). **Not yet tested against a real duplicate scenario** — implemented and handed off, but the similarity threshold is an untested heuristic; verify against a real transcript before considering this closed. Previous entry (July 15, later): multi-file chat attachments — done, working per user report. Before that: per-transaction billing rework — done, not yet independently verified end-to-end.
 > GitHub: https://github.com/Aris1672/Ai--senior-audit
 > Live demo: https://ai-senior-audit.vercel.app
 > Admin login: support@assistant24.tech (role set manually in Supabase)
@@ -176,7 +176,16 @@ A pure library with no HTTP calls or side effects. Runs server-side on Vercel No
 
 ## Pricing & Billing System
 
-### Default tiers (seeded in `002_billing_and_tiers.sql`)
+**Superseded July 15, 2026 — flat per-tier pricing replaced with true per-transaction pricing.** The tier table below is historical; `pricing_tiers` is no longer the source of truth (see P2 punch-list item for its pending removal).
+
+### Per-transaction pricing (current)
+
+- **Global default rate:** `billing_settings.price_per_transaction_rub` — single row (`id = 1`). Was seeded at 15.00 ₽ as a placeholder; **updated August 7, 2026 to 12.5 ₽/transaction (live)**, matching the rate now published on the landing page.
+- **Per-client override:** `client_subscriptions.custom_price_rub` — `NULL` = use global default; set = that client's own rate. Editable from `/admin/pricing`.
+- Audit cost = `transactionCount × rate` (client's override if set, else global default).
+- **Verified end-to-end August 7, 2026** — tested with two real clients on different rates (one on the global default, one on a custom override); both priced correctly. Closes the P1 verification item opened July 15.
+
+### Historical flat tiers (superseded, table left unused)
 
 | Tier | Max transactions | Price |
 |---|---|---|
@@ -184,8 +193,6 @@ A pure library with no HTTP calls or side effects. Runs server-side on Vercel No
 | Стандарт | 2 000 | 15 000 ₽ |
 | Профи | 5 000 | 30 000 ₽ |
 | Корпоратив | 20 000 | 75 000 ₽ |
-
-Tiers are fully editable from the admin panel. Custom per-client price and transaction limit overrides are supported via the `client_subscriptions.custom_price_rub` and `custom_max_tx` columns.
 
 ### New audit pricing flow
 
@@ -845,6 +852,19 @@ PM2 keeps Next.js running as background process, auto-restarts on crash. Cost: f
 
 **P3 — Cleanup / deferred**
 - [ ] Chat page's own attachment-button accept attribute still missing `.txt`/`.doc` (only `.xls,.pdf` currently) — left unpatched on purpose, decide if it should match the other two upload surfaces
+
+---
+
+## Session Log — Per-Transaction Billing Verified, Rate Set, Landing Page Updated (August 7, 2026)
+
+**Goal:** verify the July 15 per-transaction billing rework end-to-end, set a real global rate, and bring the public landing page's pricing section in line with the new model.
+
+**What happened:**
+1. **Billing verified.** Ran real audits for two clients on different rates — one using the global default, one with a `client_subscriptions.custom_price_rub` override — and confirmed both priced correctly (`transactionCount × rate`, correct rate selected in each case). Closes the P1 verification item opened July 15.
+2. **Global rate set.** `billing_settings.price_per_transaction_rub` updated in Supabase from the 15.00 ₽ placeholder to **12.5 ₽/transaction** (applied manually via SQL/table editor, not the admin panel, per user preference this session).
+3. **Landing page (`audit.html`) rewritten.** Found still showing the old flat 4-tier grid (8 000 ₽ / 15 000 ₽ / 30 000 ₽ / 75 000 ₽ with transaction caps) — stale since the July 15 billing rework, never updated at the time. Replaced with a single pricing card: 12.5 ₽/transaction, cost = count × rate, plus a note directing high-volume prospects (~250k+ tx/month) to contact sales for a custom rate. Section eyebrow changed from "Тарифы" (plural tiers) to "Стоимость" to match. Also fixed a leftover "тариф" reference in the how-it-works step copy.
+
+**Not yet done:** the old `pricing_tiers` table and dead `client_subscriptions` columns (`tier_id`, `custom_max_tx`, `audits_purchased`, `audits_used`) are still not dropped — this session's verification was the explicit blocker noted for that cleanup (see P2 punch-list item), so it can now be unblocked. Drop statements are already written and commented out in `006_transaction_billing.sql`.
 
 ---
 
