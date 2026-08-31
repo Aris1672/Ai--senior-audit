@@ -264,16 +264,27 @@ export default function ChatPage() {
 
   // ── Helper: stream a reply into a live-updating message bubble ────────────
   // Replaces the old "await full response, then push it" pattern. A blank
-  // assistant bubble is added immediately; streamChat's onDelta callback
-  // updates that same bubble's content as text arrives from the server, so
-  // the user sees the report being written in real time instead of a frozen
-  // "thinking" indicator that could previously sit stuck for 30s-2min+ (or
-  // silently fail on a 504 with no visible error at all).
+  // assistant bubble is added immediately; content grows as text arrives
+  // from the server, so the user sees the report being written in real
+  // time instead of a frozen "thinking" indicator (or a silent 504 with no
+  // visible error at all).
+  //
+  // SMOOTHING: raw network deltas arrive in bursts (Claude streams by
+  // token/sentence-sized chunks, not evenly), which on its own looks choppy
+  // — text visibly jumping in clumps rather than the smooth reveal the old
+  // TypewriterMessage gave. Fix: `target` always holds the latest text the
+  // server has actually sent (updated instantly, no delay); `displayed` is
+  // what's shown on screen, and a requestAnimationFrame loop advances it
+  // toward `target` a few characters at a time on a fixed interval — same
+  // pacing constants the old TypewriterMessage used. This keeps the real
+  // streaming behavior (fast delivery, no more stuck-forever screen) while
+  // making the on-screen reveal feel smooth regardless of how bursty the
+  // underlying network chunks are.
   //
   // typingIndex is reused here for its existing purpose: while it points at
-  // this message, the render below shows plain growing text; once the
-  // stream finishes (or errors), typingIndex is cleared so the message
-  // switches over to full Markdown rendering, same as before.
+  // this message, the render below shows plain growing text; once fully
+  // caught up (or on error), typingIndex is cleared so the message switches
+  // over to full Markdown rendering.
   async function runStreamedReply(payload: Record<string, unknown>): Promise<boolean> {
     let msgIndex = -1;
     setMessages(prev => {
@@ -282,14 +293,53 @@ export default function ChatPage() {
     });
     setTypingIndex(msgIndex);
 
+    let target = "";      // latest text actually received from the server
+    let displayed = "";   // what's currently shown — chases `target`
+    let rafId = 0;
+    let serverDone = false;
+
+    const INTERVAL_MS      = 18; // same pacing as the old TypewriterMessage
+    const CHARS_PER_TICK   = 3;  // slightly faster than before, to avoid falling behind on long bursts
+    let lastTick = 0;
+
+    function tick(ts: number) {
+      if (ts - lastTick >= INTERVAL_MS) {
+        lastTick = ts;
+        if (displayed.length < target.length) {
+          displayed = target.slice(0, Math.min(displayed.length + CHARS_PER_TICK, target.length));
+          setMessages(prev => {
+            const next = [...prev];
+            if (next[msgIndex]) next[msgIndex] = { ...next[msgIndex], content: displayed };
+            return next;
+          });
+          bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+        }
+      }
+      // Keep ticking until the server is done AND the display has fully
+      // caught up — this is what lets `displayed` finish revealing even
+      // after the network stream itself has already ended.
+      if (!serverDone || displayed.length < target.length) {
+        rafId = requestAnimationFrame(tick);
+      }
+    }
+    rafId = requestAnimationFrame(tick);
+
     try {
       const finalText = await streamChat(payload, (partial) => {
-        setMessages(prev => {
-          const next = [...prev];
-          if (next[msgIndex]) next[msgIndex] = { ...next[msgIndex], content: partial };
-          return next;
-        });
-        bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+        target = partial; // tick() above picks this up on its own schedule
+      });
+      target = finalText; // authoritative final text, in case of any drift
+      serverDone = true;
+
+      // Wait for the display to actually finish catching up before
+      // resolving — otherwise the message would flip to Markdown rendering
+      // (typingIndex cleared) mid-reveal.
+      await new Promise<void>(resolve => {
+        function waitForCatchUp() {
+          if (displayed.length >= target.length) resolve();
+          else requestAnimationFrame(waitForCatchUp);
+        }
+        waitForCatchUp();
       });
 
       setMessages(prev => {
@@ -301,6 +351,8 @@ export default function ChatPage() {
 
     } catch (err) {
       console.error("[chat] streamed reply failed:", err);
+      serverDone = true;
+      cancelAnimationFrame(rafId);
       setMessages(prev => {
         const next = [...prev];
         if (next[msgIndex]) {
@@ -314,6 +366,7 @@ export default function ChatPage() {
       return false;
 
     } finally {
+      cancelAnimationFrame(rafId); // safety net — normal paths above already stop ticking on their own
       setTypingIndex(-1); // always release — this is what previously never ran on the error path
     }
   }
