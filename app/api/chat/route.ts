@@ -3,6 +3,8 @@ import { createAdminClient } from "@/lib/supabase-server";
 import { parseFile, renderPDFPagesAsImages } from "@/lib/file-parser";
 import { NextRequest, NextResponse } from "next/server";
 
+export const maxDuration = 60; // Hobby's ceiling — real fix is still needed for longer runs
+
 // ─── Fetch + parse ALL documents linked to this session ───────────────────────
 // Returns text content for the system prompt PLUS a separate list of images
 // (for native vision, not text extraction — Claude reads images directly).
