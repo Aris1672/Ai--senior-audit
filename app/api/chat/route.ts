@@ -3,7 +3,11 @@ import { createAdminClient } from "@/lib/supabase-server";
 import { parseFile, renderPDFPagesAsImages } from "@/lib/file-parser";
 import { NextRequest, NextResponse } from "next/server";
 
-export const maxDuration = 60; // Hobby's ceiling — real fix is still needed for longer runs
+// Pro plan: up to 300s by default (800s with Fluid Compute enabled).
+// 300 gives real headroom over the 6-call continuation loop below while
+// staying under the Fluid Compute threshold — raise further only if audits
+// are still timing out after streaming (this change) is confirmed live.
+export const maxDuration = 300;
 
 // ─── Fetch + parse ALL documents linked to this session ───────────────────────
 // Returns text content for the system prompt PLUS a separate list of images
@@ -354,133 +358,178 @@ export async function POST(req: NextRequest) {
       "| Model:", SONNET_MODEL,
       "| Has files:", fileSection.length > 0);
 
-    // Main audit call — Sonnet for deep legal and financial reasoning.
-    // Audit reports can be long (multi-section, tables, per-month breakdowns),
-    // so we raise max_tokens and auto-continue server-side if the model is
-    // cut off mid-response (stop_reason === "max_tokens"), instead of making
-    // the user notice the truncation and type "continue" themselves.
-    const MAX_OUTPUT_TOKENS = 16000; // per-call cap (well under Sonnet 5's 128K ceiling — raise if reports need more headroom)
-    const MAX_CONTINUATIONS = 5;     // hard safety limit on auto-continue loops
+    // ─── Streaming response ─────────────────────────────────────────────────
+    // Was: buffer the full response (potentially 6 sequential Anthropic calls
+    // + parsing) then return one NextResponse.json(). That meant the HTTP
+    // response didn't start until EVERYTHING was done — if total time exceeded
+    // maxDuration, Vercel killed the function and the client got a raw 504
+    // HTML page instead of any answer, even though the backend had often
+    // finished the actual audit work and written it to Supabase.
+    //
+    // Now: text is streamed to the client as newline-delimited JSON (NDJSON)
+    // events the instant Claude produces it. Two things this fixes:
+    //   1. The user sees the report appear in real time instead of a frozen
+    //      "thinking" indicator for 30s-2min+.
+    //   2. If Vercel's maxDuration is ever hit mid-stream, the client has
+    //      already received partial content instead of nothing at all.
+    // NOTE: streaming does NOT lift the maxDuration ceiling itself — total
+    // work still must fit inside `maxDuration` (300s, see top of file). This
+    // fixes the "silent 504 + stuck UI" failure mode; it doesn't make an
+    // arbitrarily long audit run forever. See PROJECT_STATUS.md.
+    //
+    // Event shapes sent, one per line:
+    //   { type: "delta", text: string }        — a chunk of report text
+    //   { type: "done", message: string }       — final full text, stream ends
+    //   { type: "error", error: string }        — something failed mid-stream
+    const encoder = new TextEncoder();
 
-    let fullText = "";
-    let workingMessages = [...messages];
-
-    // Attach any images to the last user message as vision content blocks.
-    // Images are only attached on this first call, not on continuation calls,
-    // since Claude already has them in context once seen.
-    if (images.length > 0) {
-      const lastIdx = workingMessages.length - 1;
-      if (lastIdx >= 0 && workingMessages[lastIdx].role === "user") {
-        const existingText = typeof workingMessages[lastIdx].content === "string"
-          ? workingMessages[lastIdx].content
-          : "";
-        workingMessages[lastIdx] = {
-          role: "user",
-          content: [
-            ...images.map(img => ({
-              type:   "image" as const,
-              source: { type: "base64" as const, media_type: img.mediaType as "image/jpeg" | "image/png", data: img.base64 },
-            })),
-            { type: "text" as const, text: existingText || "Проанализируй приложенные изображения документов." },
-          ],
-        };
-      }
-    }
-
-    let continuations = 0;
-    let stopReason: string | null = null;
-    let toolFindings: any[] = [];
-    let toolCallSeen = false; // true once record_findings has fired — see guard below
-
-    do {
-      const response = await anthropic.messages.create({
-        model:       SONNET_MODEL,
-        max_tokens:  MAX_OUTPUT_TOKENS,
-        system:      systemPrompt,
-        messages:    workingMessages,
-        tools:       [FINDINGS_TOOL],
-        tool_choice: { type: "auto" },
-      });
-
-      // A single response can contain a text block AND a tool_use block
-      // (model writes the full report, then calls record_findings once at
-      // the end) — content[0] is no longer a safe assumption now that a
-      // tool is attached, so all blocks are walked explicitly.
-      //
-      // GUARD: record_findings must fire at most once across the ENTIRE
-      // do/while loop, not once per iteration. Nothing in the API prevents
-      // the model from calling the tool again on a later continuation
-      // (e.g. once mid-report before hitting max_tokens, then again after
-      // "continue" — possibly with different/conflicting evidence_status
-      // values for what's meant to be the same finding). The system prompt
-      // asks for exactly one call, but that's a request, not an enforced
-      // constraint — so it's enforced here instead.
-      let chunk = "";
-      for (const block of response.content) {
-        if (block.type === "text") {
-          chunk += block.text;
-        } else if (block.type === "tool_use" && block.name === "record_findings") {
-          if (toolCallSeen) {
-            console.warn(
-              "[chat] record_findings called again after an earlier call in this turn — " +
-              "ignoring this second call to prevent duplicate/conflicting findings. " +
-              "This should not happen per AUDIT_SYSTEM_PROMPT; investigate if seen repeatedly."
-            );
-            continue;
-          }
-          const input = block.input as { findings?: any[] };
-          if (Array.isArray(input?.findings)) {
-            toolFindings = input.findings;
-            toolCallSeen = true;
-          }
+    const stream = new ReadableStream({
+      async start(controller) {
+        function send(obj: Record<string, unknown>) {
+          controller.enqueue(encoder.encode(JSON.stringify(obj) + "\n"));
         }
-      }
 
-      fullText += chunk;
-      stopReason = response.stop_reason;
+        try {
+          const MAX_OUTPUT_TOKENS = 16000; // per-call cap (well under Sonnet 5's 128K ceiling — raise if reports need more headroom)
+          const MAX_CONTINUATIONS = 5;     // hard safety limit on auto-continue loops
 
-      console.log("[chat] Sonnet call — stop_reason:", stopReason,
-        "| chunk length:", chunk.length, "| total so far:", fullText.length,
-        "| findings captured:", toolFindings.length);
+          let fullText = "";
+          let workingMessages = [...messages];
 
-      if (stopReason === "max_tokens" && continuations < MAX_CONTINUATIONS) {
-        // Feed the partial response back as assistant history and ask the
-        // model to continue exactly where it left off — no "continue" prompt
-        // needed from the user, and no duplicated/rephrased seam text.
-        workingMessages = [
-          ...workingMessages,
-          { role: "assistant", content: chunk },
-          { role: "user", content: "Продолжи с того места, где остановился. Не повторяй уже написанное." },
-        ];
-        continuations++;
-      }
-      // stop_reason === "tool_use" means the model finished its report text
-      // and made its one record_findings call per AUDIT_SYSTEM_PROMPT's
-      // instructions — that's a normal, complete turn, not truncation, so
-      // the loop ends here rather than trying to "continue" generation.
-    } while (stopReason === "max_tokens" && continuations <= MAX_CONTINUATIONS);
+          // Attach any images to the last user message as vision content blocks.
+          // Images are only attached on this first call, not on continuation
+          // calls, since Claude already has them in context once seen.
+          if (images.length > 0) {
+            const lastIdx = workingMessages.length - 1;
+            if (lastIdx >= 0 && workingMessages[lastIdx].role === "user") {
+              const existingText = typeof workingMessages[lastIdx].content === "string"
+                ? workingMessages[lastIdx].content
+                : "";
+              workingMessages[lastIdx] = {
+                role: "user",
+                content: [
+                  ...images.map(img => ({
+                    type:   "image" as const,
+                    source: { type: "base64" as const, media_type: img.mediaType as "image/jpeg" | "image/png", data: img.base64 },
+                  })),
+                  { type: "text" as const, text: existingText || "Проанализируй приложенные изображения документов." },
+                ],
+              };
+            }
+          }
 
-    if (stopReason === "max_tokens") {
-      console.warn("[chat] Hit MAX_CONTINUATIONS limit — response may still be truncated");
-    }
+          let continuations = 0;
+          let stopReason: string | null = null;
+          let toolFindings: any[] = [];
+          let toolCallSeen = false; // true once record_findings has fired — see guard below
 
-    const text = fullText;
+          do {
+            // chunk = text produced in THIS iteration only (not cumulative) —
+            // needed below to feed continuation turns exactly what was
+            // written since the last "continue" prompt, same as the
+            // original non-streaming loop.
+            let chunk = "";
 
-    // Save message and persist any findings captured via tool_use, in parallel.
-    // No second model call here anymore — saveFindings only validates and
-    // inserts what Sonnet already produced in the same request above.
-    await Promise.all([
-      supabase.from("audit_messages").insert({
-        session_id: sessionId,
-        client_id:  clientId,
-        role:       "assistant",
-        content:    text,
-      }),
+            const messageStream = anthropic.messages.stream({
+              model:       SONNET_MODEL,
+              max_tokens:  MAX_OUTPUT_TOKENS,
+              system:      systemPrompt,
+              messages:    workingMessages,
+              tools:       [FINDINGS_TOOL],
+              tool_choice: { type: "auto" },
+            });
 
-      saveFindings(supabase, sessionId, clientId, toolFindings, existingFindings.map(f => f.title)),
-    ]);
+            messageStream.on("text", (textDelta: string) => {
+              chunk += textDelta;
+              fullText += textDelta;
+              send({ type: "delta", text: textDelta });
+            });
 
-    return NextResponse.json({ message: text });
+            const finalMessage = await messageStream.finalMessage();
+
+            // GUARD: record_findings must fire at most once across the ENTIRE
+            // do/while loop, not once per iteration — see original comment
+            // this was ported from; unchanged reasoning, just re-homed here
+            // since blocks now come from finalMessage.content instead of a
+            // buffered response.content.
+            for (const block of finalMessage.content) {
+              if (block.type === "tool_use" && block.name === "record_findings") {
+                if (toolCallSeen) {
+                  console.warn(
+                    "[chat] record_findings called again after an earlier call in this turn — " +
+                    "ignoring this second call to prevent duplicate/conflicting findings. " +
+                    "This should not happen per AUDIT_SYSTEM_PROMPT; investigate if seen repeatedly."
+                  );
+                  continue;
+                }
+                const input = block.input as { findings?: any[] };
+                if (Array.isArray(input?.findings)) {
+                  toolFindings = input.findings;
+                  toolCallSeen = true;
+                }
+              }
+            }
+
+            stopReason = finalMessage.stop_reason;
+
+            console.log("[chat] Sonnet call — stop_reason:", stopReason,
+              "| chunk length:", chunk.length, "| total so far:", fullText.length,
+              "| findings captured:", toolFindings.length);
+
+            if (stopReason === "max_tokens" && continuations < MAX_CONTINUATIONS) {
+              // Feed the partial response back as assistant history and ask
+              // the model to continue exactly where it left off.
+              workingMessages = [
+                ...workingMessages,
+                { role: "assistant", content: chunk },
+                { role: "user", content: "Продолжи с того места, где остановился. Не повторяй уже написанное." },
+              ];
+              continuations++;
+            }
+            // stop_reason === "tool_use" means the model finished its report
+            // text and made its one record_findings call — normal completion,
+            // not truncation, so the loop ends here.
+          } while (stopReason === "max_tokens" && continuations <= MAX_CONTINUATIONS);
+
+          if (stopReason === "max_tokens") {
+            console.warn("[chat] Hit MAX_CONTINUATIONS limit — response may still be truncated");
+          }
+
+          // Save message and persist any findings captured via tool_use, in
+          // parallel — same as before, just now happens after the stream's
+          // content has already reached the client instead of before.
+          await Promise.all([
+            supabase.from("audit_messages").insert({
+              session_id: sessionId,
+              client_id:  clientId,
+              role:       "assistant",
+              content:    fullText,
+            }),
+
+            saveFindings(supabase, sessionId, clientId, toolFindings, existingFindings.map(f => f.title)),
+          ]);
+
+          send({ type: "done", message: fullText });
+          controller.close();
+
+        } catch (err) {
+          console.error("[chat] stream error:", err);
+          send({ type: "error", error: "Внутренняя ошибка сервера во время генерации ответа" });
+          controller.close();
+        }
+      },
+    });
+
+    return new Response(stream, {
+      headers: {
+        "Content-Type": "application/x-ndjson; charset=utf-8",
+        "Cache-Control": "no-cache, no-transform",
+        // Disables buffering on some proxy layers (esp. relevant given the
+        // RU → Vercel proxy path) so chunks aren't held and released in one
+        // burst, which would defeat the point of streaming.
+        "X-Accel-Buffering": "no",
+      },
+    });
 
   } catch (err) {
     console.error("[chat] route error:", err);

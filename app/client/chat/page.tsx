@@ -64,54 +64,85 @@ const markdownComponents = {
   ),
 };
 
-// ── Typewriter component ───────────────────────────────────────────────────
-function TypewriterMessage({ text, onDone, onScroll }: { 
-  text: string; onDone: () => void; onScroll: () => void; 
-}) {
-  const [displayed, setDisplayed] = useState("");
-  const indexRef = useRef(0);
-  const rafRef   = useRef(0);
+// ── (TypewriterMessage removed) ────────────────────────────────────────────
+// Previously simulated a typing effect over an already-fully-received
+// response. No longer needed: /api/chat now streams real text as Claude
+// generates it, so the message content itself grows in real time — see
+// runStreamedReply below and its use of typingIndex to gate plain-text vs.
+// Markdown rendering in the message list.
 
-  useEffect(() => {
-    indexRef.current = 0;
-    setDisplayed("");
+// ── Streaming chat helper ───────────────────────────────────────────────────
+// Reads the NDJSON stream from /api/chat (see route.ts: one JSON object per
+// line — {type:"delta"}, {type:"done"}, {type:"error"}) and calls onDelta
+// with the cumulative text so far as each chunk arrives.
+//
+// Also fixes the original bug directly: previously every call site did
+// `const data = await res.json()` with no !res.ok check and no try/catch.
+// If the server ever returned a 504 (Vercel function timeout) or any
+// non-JSON error page, res.json() threw uncaught — which skipped
+// setLoading(false) further down and left the whole chat input locked
+// forever, with no visible error. Every failure path here instead throws a
+// normal Error with a real message, which callers catch and always resolve
+// (loading/uploading state is guaranteed to reset — see finally blocks below).
+async function streamChat(
+  payload: Record<string, unknown>,
+  onDelta: (fullTextSoFar: string) => void
+): Promise<string> {
+  const res = await fetch("/api/chat", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
 
-    const INTERVAL    = 18; // ms per tick (unchanged — this is the frame-safe interval)
-    const CHARS_PER_TICK = 2; // 2x speed: advance 2 characters per tick instead of 1
-    let last = 0;
-
-    function tick(ts: number) {
-      if (ts - last >= INTERVAL) {
-        last = ts;
-        if (indexRef.current < text.length) {
-          indexRef.current = Math.min(indexRef.current + CHARS_PER_TICK, text.length);
-          setDisplayed(text.slice(0, indexRef.current));
-          onScroll(); // ← scroll on every tick
-        } else {
-          onDone();
-          return;
-        }
-      }
-      rafRef.current = requestAnimationFrame(tick);
+  if (!res.ok || !res.body) {
+    // Pre-stream failures (400/403/500) still come back as plain JSON, not
+    // NDJSON — read it as such for a real error message where possible.
+    let errMsg = `Ошибка сервера (${res.status})`;
+    try {
+      const errData = await res.json();
+      if (errData?.error) errMsg = errData.error;
+    } catch {
+      // body wasn't JSON either (e.g. a raw Vercel error page) — keep the
+      // generic HTTP-status message above rather than throwing here too.
     }
+    throw new Error(errMsg);
+  }
 
-    rafRef.current = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(rafRef.current);
-  }, [text]);
+  const reader  = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer   = "";
+  let fullText = "";
 
-  return (
-    <>
-      {displayed}
-      {displayed.length < text.length && (
-        <span style={{
-          display: "inline-block", width: "2px", height: "1em",
-          background: "#4d91ff", marginLeft: "2px",
-          verticalAlign: "text-bottom",
-          animation: "cursorBlink 0.7s steps(1) infinite",
-        }} />
-      )}
-    </>
-  );
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split("\n");
+    buffer = lines.pop() || ""; // last entry may be a partial line — hold it for next read
+
+    for (const line of lines) {
+      if (!line.trim()) continue;
+      let evt: any;
+      try {
+        evt = JSON.parse(line);
+      } catch {
+        console.warn("[chat] Skipping malformed stream line:", line.slice(0, 100));
+        continue;
+      }
+
+      if (evt.type === "delta") {
+        fullText += evt.text;
+        onDelta(fullText);
+      } else if (evt.type === "done") {
+        fullText = evt.message; // authoritative final text, in case of any drift
+      } else if (evt.type === "error") {
+        throw new Error(evt.error || "Ошибка сервера во время генерации ответа");
+      }
+    }
+  }
+
+  return fullText;
 }
 
 export default function ChatPage() {
@@ -226,16 +257,72 @@ export default function ChatPage() {
     setTotalCost(prev => prev + (costRub || 0));
   }
 
+  // ── Helper: stream a reply into a live-updating message bubble ────────────
+  // Replaces the old "await full response, then push it" pattern. A blank
+  // assistant bubble is added immediately; streamChat's onDelta callback
+  // updates that same bubble's content as text arrives from the server, so
+  // the user sees the report being written in real time instead of a frozen
+  // "thinking" indicator that could previously sit stuck for 30s-2min+ (or
+  // silently fail on a 504 with no visible error at all).
+  //
+  // typingIndex is reused here for its existing purpose: while it points at
+  // this message, the render below shows plain growing text; once the
+  // stream finishes (or errors), typingIndex is cleared so the message
+  // switches over to full Markdown rendering, same as before.
+  async function runStreamedReply(payload: Record<string, unknown>): Promise<boolean> {
+    let msgIndex = -1;
+    setMessages(prev => {
+      msgIndex = prev.length;
+      return [...prev, { role: "assistant" as const, content: "" }];
+    });
+    setTypingIndex(msgIndex);
+
+    try {
+      const finalText = await streamChat(payload, (partial) => {
+        setMessages(prev => {
+          const next = [...prev];
+          if (next[msgIndex]) next[msgIndex] = { ...next[msgIndex], content: partial };
+          return next;
+        });
+        bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+      });
+
+      setMessages(prev => {
+        const next = [...prev];
+        if (next[msgIndex]) next[msgIndex] = { ...next[msgIndex], content: finalText };
+        return next;
+      });
+      return true;
+
+    } catch (err) {
+      console.error("[chat] streamed reply failed:", err);
+      setMessages(prev => {
+        const next = [...prev];
+        if (next[msgIndex]) {
+          next[msgIndex] = {
+            ...next[msgIndex],
+            content: "⚠️ Не удалось получить ответ. Попробуйте обновить страницу — сообщение могло всё же обработаться на сервере.",
+          };
+        }
+        return next;
+      });
+      return false;
+
+    } finally {
+      setTypingIndex(-1); // always release — this is what previously never ran on the error path
+    }
+  }
+
   async function sendAutoMessageDirect(content: string, uid: string, sid: string, ctx?: any) {
     setLoading(true);
-    const res  = await fetch("/api/chat", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ clientId: uid, sessionId: sid, context: ctx, messages: [{ role: "user", content }] }),
-    });
-    const data = await res.json();
-    if (data.message) pushAssistantReply(data.message, data.costRub);
-    setLoading(false);
+    try {
+      await runStreamedReply({
+        clientId: uid, sessionId: sid, context: ctx,
+        messages: [{ role: "user", content }],
+      });
+    } finally {
+      setLoading(false); // always runs — previously skipped entirely if res.json() threw on a 504/error page
+    }
   }
 
   useEffect(() => {
@@ -285,10 +372,8 @@ export default function ChatPage() {
 
     setUploading(false);
 
-    const res  = await fetch("/api/chat", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
+    try {
+      await runStreamedReply({
         clientId: uid, sessionId: sid,
         context: context ? {
           companyName: context.company_name, periodFrom: context.period,
@@ -296,10 +381,14 @@ export default function ChatPage() {
           legalForm: context.legal_form_display, taxRegime: context.tax_regime_display, vatStatus: context.vat_status,
         } : undefined,
         messages: currentMessages.map(m => ({ role: m.role, content: m.content })),
-      }),
-    });
-    const data = await res.json();
-    if (data.message) pushAssistantReply(data.message, data.costRub);
+      });
+    } catch (err) {
+      // runStreamedReply already surfaces its own in-bubble error message on
+      // failure and never throws — this catch only guards against something
+      // unexpected escaping it, so uploadFilesAndSend's caller (sendMessage)
+      // still reaches its own finally block below either way.
+      console.error("[chat] post-upload streamed reply failed unexpectedly:", err);
+    }
   }
 
   // ── Main send handler ─────────────────────────────────────────────────────
@@ -329,13 +418,11 @@ export default function ChatPage() {
       body: JSON.stringify({ action: "save_message", payload: { sessionId, clientId, role: "user", content: messageText } }),
     });
 
-    if (filesToUpload.length > 0) {
-      await uploadFilesAndSend(filesToUpload, clientId, sessionId, newMessages);
-    } else {
-      const res  = await fetch("/api/chat", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
+    try {
+      if (filesToUpload.length > 0) {
+        await uploadFilesAndSend(filesToUpload, clientId, sessionId, newMessages);
+      } else {
+        await runStreamedReply({
           clientId, sessionId,
           context: context ? {
             companyName: context.company_name, periodFrom: context.period,
@@ -343,13 +430,16 @@ export default function ChatPage() {
             legalForm: context.legal_form_display, taxRegime: context.tax_regime_display, vatStatus: context.vat_status,
           } : undefined,
           messages: newMessages.map(m => ({ role: m.role, content: m.content })),
-        }),
-      });
-      const data = await res.json();
-      if (data.message) pushAssistantReply(data.message, data.costRub);
+        });
+      }
+    } finally {
+      // Always runs — this is the fix for the original bug: previously
+      // setLoading(false) sat unconditionally after the if/else, so if the
+      // fetch inside either branch threw (504, non-JSON error page), it was
+      // never reached and the whole input stayed locked with no way to
+      // recover short of a manual page reload.
+      setLoading(false);
     }
-
-    setLoading(false);
   }
 
   // ── Complete audit ────────────────────────────────────────────────────────
@@ -443,11 +533,15 @@ export default function ChatPage() {
                   </div>
                 )}
                 {isTyping
-                  ? <TypewriterMessage
-                      text={msg.content}
-                      onDone={() => setTypingIndex(-1)}
-                      onScroll={() => bottomRef.current?.scrollIntoView({ behavior: "smooth" })}
-                    />
+                  ? <>
+                      {msg.content}
+                      <span style={{
+                        display: "inline-block", width: "2px", height: "1em",
+                        background: "#4d91ff", marginLeft: "2px",
+                        verticalAlign: "text-bottom",
+                        animation: "cursorBlink 0.7s steps(1) infinite",
+                      }} />
+                    </>
                   : renderMarkdown
                     ? <ReactMarkdown components={markdownComponents}>{msg.content}</ReactMarkdown>
                     : msg.content
