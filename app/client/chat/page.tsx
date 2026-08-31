@@ -138,6 +138,11 @@ async function streamChat(
         fullText = evt.message; // authoritative final text, in case of any drift
       } else if (evt.type === "error") {
         throw new Error(evt.error || "Ошибка сервера во время генерации ответа");
+      } else if (evt.type === "heartbeat") {
+        // No-op. Sent every ~15s server-side purely to keep bytes flowing
+        // over the connection so no idle-timeout (proxy, CDN, or browser)
+        // fires during long silent gaps before Claude's first visible text —
+        // see route.ts. Nothing to do here but keep reading.
       }
     }
   }

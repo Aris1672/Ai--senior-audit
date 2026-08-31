@@ -389,6 +389,33 @@ export async function POST(req: NextRequest) {
           controller.enqueue(encoder.encode(JSON.stringify(obj) + "\n"));
         }
 
+        // ─── Heartbeat ──────────────────────────────────────────────────────
+        // Real-world case that motivated this: a request where Claude took
+        // ~150s to produce its first visible text (all internal reasoning +
+        // tool prep before any "text" delta fired). No bytes flowed to the
+        // client for that entire span. The server finished fine and saved
+        // everything to Supabase — but the browser's stream reader errored
+        // out before the final payload arrived. Given the mandatory RU →
+        // Vercel proxy hop in this deployment, the leading suspect is an
+        // idle-connection timeout somewhere in that path (proxy, CDN, or
+        // even the browser itself) killing a connection with no data flowing
+        // for too long, even though the origin was still alive and working.
+        //
+        // Fix: emit a trivial no-op event every 15s so bytes never stop
+        // flowing, regardless of how long Claude takes to produce its first
+        // real token. The client (streamChat in page.tsx) just ignores any
+        // event type it doesn't recognize, so this is fully backward-safe.
+        const HEARTBEAT_INTERVAL_MS = 15000;
+        const heartbeat = setInterval(() => {
+          try {
+            send({ type: "heartbeat" });
+          } catch {
+            // controller may already be closed — interval is cleared below
+            // in the finally-equivalent cleanup either way, this is just a
+            // defensive no-op if a tick races the close.
+          }
+        }, HEARTBEAT_INTERVAL_MS);
+
         try {
           const MAX_OUTPUT_TOKENS = 16000; // per-call cap (well under Sonnet 5's 128K ceiling — raise if reports need more headroom)
           const MAX_CONTINUATIONS = 5;     // hard safety limit on auto-continue loops
@@ -510,11 +537,13 @@ export async function POST(req: NextRequest) {
           ]);
 
           send({ type: "done", message: fullText });
+          clearInterval(heartbeat);
           controller.close();
 
         } catch (err) {
           console.error("[chat] stream error:", err);
           send({ type: "error", error: "Внутренняя ошибка сервера во время генерации ответа" });
+          clearInterval(heartbeat);
           controller.close();
         }
       },
