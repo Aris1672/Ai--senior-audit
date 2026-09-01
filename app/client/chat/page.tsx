@@ -154,6 +154,12 @@ export default function ChatPage() {
   const [messages,       setMessages]       = useState<Message[]>([]);
   const [input,          setInput]          = useState("");
   const [loading,        setLoading]        = useState(false);
+  // Shown alongside the pulsing dots during a long-running audit request, so
+  // the wait feels less like a frozen screen. statusText cycles through a
+  // few phrases; elapsedSeconds just counts up — both purely cosmetic, driven
+  // by a local timer in runStreamedReply, not tied to actual pipeline stages.
+  const [statusText,     setStatusText]     = useState("");
+  const [elapsedSeconds, setElapsedSeconds]  = useState(0);
   const [sessionId,      setSessionId]      = useState<string | null>(null);
   const [clientId,       setClientId]       = useState<string | null>(null);
   const [totalCost,      setTotalCost]      = useState(0);
@@ -293,6 +299,32 @@ export default function ChatPage() {
     });
     setTypingIndex(msgIndex);
 
+    // ── Rotating status text + elapsed timer ──────────────────────────────
+    // Purely cosmetic — audits can genuinely take 1-3 minutes (real model
+    // reasoning time, not a bug), and a static pulsing-dots indicator that
+    // long starts to look broken even when it isn't. These give the person
+    // something to read and a sense of "still working, X seconds in"
+    // instead of an ambiguous frozen screen.
+    const STATUS_MESSAGES = [
+      "Анализирую документ...",
+      "Проверяю налоговые риски...",
+      "Сопоставляю операции...",
+      "Формирую выводы аудитора...",
+      "Ищу признаки риска...",
+    ];
+    let statusIdx = 0;
+    setStatusText(STATUS_MESSAGES[0]);
+    setElapsedSeconds(0);
+
+    const statusInterval = setInterval(() => {
+      statusIdx = (statusIdx + 1) % STATUS_MESSAGES.length;
+      setStatusText(STATUS_MESSAGES[statusIdx]);
+    }, 4000);
+
+    const timerInterval = setInterval(() => {
+      setElapsedSeconds(s => s + 1);
+    }, 1000);
+
     let target = "";      // latest text actually received from the server
     let displayed = "";   // what's currently shown — chases `target`
     let rafId = 0;
@@ -367,6 +399,8 @@ export default function ChatPage() {
 
     } finally {
       cancelAnimationFrame(rafId); // safety net — normal paths above already stop ticking on their own
+      clearInterval(statusInterval);
+      clearInterval(timerInterval);
       setTypingIndex(-1); // always release — this is what previously never ran on the error path
     }
   }
@@ -617,6 +651,19 @@ export default function ChatPage() {
               ))}
             </div>
             {uploading && <span style={{ fontSize: "12px", color: "#7a90c0" }}>Загрузка файла...</span>}
+            {/* Rotating status + elapsed timer — only during the actual chat
+                request (not file upload), and only before real content has
+                started streaming in (once text appears, that IS the status). */}
+            {loading && !uploading && (
+              <span style={{ fontSize: "12px", color: "#7a90c0" }}>
+                {statusText}
+                {elapsedSeconds > 0 && (
+                  <span style={{ marginLeft: "8px", color: "#4d6a9e" }}>
+                    {Math.floor(elapsedSeconds / 60)}:{String(elapsedSeconds % 60).padStart(2, "0")}
+                  </span>
+                )}
+              </span>
+            )}
           </div>
         )}
         <div ref={bottomRef} />
