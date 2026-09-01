@@ -7,6 +7,18 @@ import { VAT_STATUS_LABELS } from "./audit-constants";
 // directly). On SpaceWeb, set ANTHROPIC_BASE_URL to the Kazakhstan VPS proxy
 // domain (e.g. https://audit.assistant24info.ru) — see PROJECT_STATUS.md for
 // why direct access from Russia is blocked and this proxy exists.
+//
+// DIAGNOSTIC LOG (added while debugging a persistent 403 "Request not
+// allowed" on SpaceWeb that doesn't reproduce via curl through the same
+// proxy): confirms, on every cold start, whether this process actually
+// picked up ANTHROPIC_BASE_URL from its environment — rules out "the env
+// var silently isn't being injected into the runtime" as a cause. Safe to
+// remove once the 403 is resolved.
+console.log(
+  "[anthropic] Using baseURL:",
+  process.env.ANTHROPIC_BASE_URL || "(default: api.anthropic.com — NOT proxied!)"
+);
+
 export const anthropic = new Anthropic({
   apiKey:  process.env.ANTHROPIC_API_KEY!,
   baseURL: process.env.ANTHROPIC_BASE_URL || undefined,
