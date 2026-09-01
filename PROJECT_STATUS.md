@@ -1,6 +1,7 @@
 # AI Senior Auditor — Project Status
 
-> Last updated: August 7, 2026. Per-transaction billing verified end-to-end — tested with two real clients on different rates (one global-default, one custom override), both priced correctly. Global rate updated in Supabase from the 15 ₽ placeholder to **12.5 ₽/transaction** (live). Landing page (`audit.html`) pricing section rewritten to match: old 4-tier flat-price grid replaced with a single 12.5 ₽/transaction card + "custom pricing for high volume — contact us" note for large clients. Previous entry (August 6): Duplicate-findings bug fixed — two-layer defense (prompt-level: Sonnet now sees titles of already-saved findings and is told to skip re-reporting them; app-level: word-overlap similarity dedup check before insert). **Not yet tested against a real duplicate scenario** — implemented and handed off, but the similarity threshold is an untested heuristic; verify against a real transcript before considering this closed. Previous entry (July 15, later): multi-file chat attachments — done, working per user report. Before that: per-transaction billing rework — done, not yet independently verified end-to-end.
+> Last updated: September 1, 2026. **Major infrastructure migration: Vercel → SpaceWeb, with a new Kazakhstan VPS proxy for Anthropic.** Root cause: Vercel billing failed because the only available payment card is Russia-issued (accepted at signup, but Vercel cannot actually charge it — see Session Log for full story). App is now hosted on SpaceWeb Serverless (beta); Anthropic calls are routed through a dedicated reverse-proxy vhost on the existing Kazakhstan VPS (`audit.assistant24info.ru` → `api.anthropic.com`); Supabase is reachable directly from SpaceWeb, no proxy needed. Also fixed, same session: the `/api/chat` route had no `maxDuration` set (silently defaulting to Vercel Hobby's 10s), which combined with a fully-buffered (non-streaming) response and zero client-side error handling caused audits to time out with the UI stuck locked forever; converted to true NDJSON streaming with a 15s heartbeat (to survive proxy idle-timeouts) and added try/catch/finally everywhere so the input never locks up again. **Vercel is being kept live as a fallback for now, not yet decommissioned.** Previous entry (August 7): per-transaction billing verified end-to-end...
+
 > GitHub: https://github.com/Aris1672/Ai--senior-audit
 > Live demo: https://ai-senior-audit.vercel.app
 > Admin login: support@assistant24.tech (role set manually in Supabase)
@@ -15,7 +16,9 @@
 | Framework | Next.js App Router, TypeScript | 16.2.6 |
 | Runtime | React | 19.2.4 |
 | Database + Auth | Supabase (PostgreSQL + Auth + Storage) | @supabase/supabase-js 2.105.4 |
-| Hosting / Proxy | Vercel | — |
+| Hosting | SpaceWeb Serverless (beta) — primary, as of Sep 1 2026 | — |
+| Hosting (fallback, not decommissioned) | Vercel | — |
+| Outbound proxy (Anthropic only) | nginx on existing Kazakhstan VPS (`audit.assistant24info.ru`) | — |
 | AI — audit reasoning + findings extraction | Claude Sonnet 5 | @anthropic-ai/sdk 0.96.0 |
 | XLSX parsing | fflate (hand-rolled) + xlsx (legacy .xls only) | 0.8.3 / 0.18.5 |
 | DOCX parsing | fflate (hand-rolled) | same |
@@ -26,10 +29,27 @@
 
 ---
 
-## Architecture: Russia → Vercel Proxy
+## Architecture: Russia → Kazakhstan VPS Proxy (SpaceWeb hosting)
 
-All external calls are routed through Vercel serverless functions because direct connections from Russia to Supabase and Anthropic are blocked by local network restrictions.
+**Superseded September 1, 2026** — see Session Log below for the full migration story. The app now runs on SpaceWeb (Russia-based hosting, billed in RUB, solves the Vercel card problem), with only the Anthropic leg proxied through an existing Kazakhstan VPS. Supabase is reachable directly from SpaceWeb — no proxy needed for that leg.
 
+```
+Browser (Russia)
+    │
+    ▼
+SpaceWeb Serverless (Russia) — Next.js SSR/Standalone, auto-deploy on push
+    ├── → Supabase PostgreSQL  (direct, no proxy needed)
+    ├── → Supabase Storage     (direct, no proxy needed)
+    └── → Anthropic API        (via Kazakhstan VPS reverse proxy — see below)
+```
+
+**Anthropic proxy details:**
+- Domain: `audit.assistant24info.ru` (A record → `199.189.249.4`, the Kazakhstan VPS — same server that already hosts `audit.o2plus.ru`, an unrelated *ingress* proxy for the old Vercel deployment, and a few other ispmanager-managed sites)
+- nginx vhost on that VPS reverse-proxies everything to `https://api.anthropic.com`, with `proxy_buffering off` (critical — without it, streaming responses get buffered at this hop and silently look "stuck" again, same failure mode fixed earlier in the app itself)
+- App's `lib/anthropic.ts` reads `ANTHROPIC_BASE_URL` from env, defaulting to the real `api.anthropic.com` if unset (safe for local dev)
+- Confirmed via manual `curl` testing (including a realistic ~28K-char system prompt + `tools` param + streaming) that the proxy itself handles full-scale requests correctly — the extended debugging session was actually about `ANTHROPIC_BASE_URL` not being set/baked into the SpaceWeb build at all (see Session Log), not a proxy or Anthropic-side problem
+
+**Old architecture (Vercel), kept as fallback:**
 ```
 Browser (Russia)
     │
@@ -852,6 +872,40 @@ PM2 keeps Next.js running as background process, auto-restarts on crash. Cost: f
 
 **P3 — Cleanup / deferred**
 - [ ] Chat page's own attachment-button accept attribute still missing `.txt`/`.doc` (only `.xls,.pdf` currently) — left unpatched on purpose, decide if it should match the other two upload surfaces
+
+---
+
+## Session Log — Vercel → SpaceWeb Migration, Kazakhstan Proxy, Streaming/Timeout Fixes (September 1, 2026)
+
+**Goal, in order of how it actually unfolded:** fix a demo-breaking chat timeout bug → discover Vercel billing was broken → migrate hosting to SpaceWeb → build a Kazakhstan proxy for Anthropic → debug three separate deploy bugs → confirm full end-to-end success.
+
+**1. Root-caused and fixed the "stuck thinking, input locked forever" bug.**
+`/api/chat/route.ts` had no `export const maxDuration` set at all — on Vercel Hobby this silently defaults to **10 seconds**, not the 60s the plan actually allows. Combined with a fully-buffered (non-streaming) response that could involve up to 6 sequential Anthropic calls, real audits were virtually guaranteed to 504. Worse, `page.tsx`'s three fetch call sites (`sendMessage`, `sendAutoMessageDirect`, `uploadFilesAndSend`) called `res.json()` with no `!res.ok` check and no try/catch — a 504's HTML error body made `res.json()` throw uncaught, skipping `setLoading(false)` and locking the whole chat input with no recovery except a hard reload.
+
+Fix: set `maxDuration = 60` (later raised to 300 after the Pro upgrade — see below), converted the route to true NDJSON streaming (`anthropic.messages.stream()`, one JSON event per line: `delta`/`done`/`error`/`heartbeat`), and wrapped every client call site in try/catch/finally so `setLoading(false)`/`setTypingIndex(-1)` always run.
+
+**2. Added a 15s heartbeat.** A real case surfaced where Claude took ~150s to produce its first visible text (long internal reasoning before any output). No bytes flowed to the client that whole time; something in the RU→Vercel path (likely an idle-connection timeout on a proxy layer) killed the connection even though the Vercel function itself completed successfully and saved everything to Supabase. Fix: server emits a no-op `{type:"heartbeat"}` event every 15s during any silent gap, purely to keep bytes flowing; client ignores it.
+
+**3. Fixed choppy streaming text.** Real network deltas arrive in bursts (sentence/token-sized chunks), which looked jarring without smoothing. Added a `requestAnimationFrame` loop in `page.tsx` that chases a live-growing `target` string at a steady character-per-tick pace — same pacing idea as the old fake `TypewriterMessage` (now removed), but now driven by real streamed content instead of an already-complete string.
+
+**4. Discovered Vercel billing is broken and can't be fixed easily.** The account's only payment method is a Russia-issued Visa — Vercel accepts the card (no immediate rejection) but cannot actually charge it, leaving the account perpetually in "payment failed" / overdue status with a shutdown threat. This is very likely a sanctions-related card-network restriction, not a Vercel-specific issue, and isn't something to keep retrying.
+
+**5. Decided to migrate off Vercel** to **SpaceWeb** (existing Russian hosting account, already used for other sites via ispmanager on a Kazakhstan VPS at `199.189.249.4`). Confirmed SpaceWeb's **Serverless (beta)** product explicitly supports Next.js SSR/Standalone, with git-push auto-deploy and configurable environment variables — a good fit, avoided the heavier VPS route since a managed deploy target was available.
+
+**6. Built the app on SpaceWeb Serverless.** Platform: "Next.js (SSR/Standalone)", build command `npm run build`, start command `npm run start`. Live at `https://auditor-assistant.sl.swteh.ru`. Confirmed working: login, Supabase (auth + all historical data recovered) — **direct, no proxy needed**. Anthropic calls failed immediately with a generic "communication error," confirming direct Russia→Anthropic access is blocked (also independently confirmed: Kazakhstan is *not* on Anthropic's list of restricted countries, so this is Russia-specific network-level blocking, not an Anthropic account/region restriction).
+
+**7. Built the Kazakhstan VPS proxy for Anthropic only** (Supabase already works directly, so it didn't need one). New subdomain `audit.assistant24info.ru` → same Kazakhstan VPS (`199.189.249.4`) that already runs `audit.o2plus.ru` (an unrelated ingress proxy for the old Vercel app — different vhost, different job). New ispmanager site, Let's Encrypt SSL, nginx `@fallback` block rewritten to `proxy_pass https://api.anthropic.com` with `proxy_buffering off` (critical for streaming) instead of the default PHP/static handling. Verified directly with `curl`, including a realistic-scale test (~28K char system prompt + `tools` param + `stream:true`, 23,579 input tokens) — proxy handles everything correctly, ruling out payload size, streaming, and tool-use as causes of anything that came later.
+
+**8. Chased a persistent 403 "Request not allowed" that turned out to be a much simpler bug than suspected.** The app kept failing even after pointing `lib/anthropic.ts` at the proxy via a new `ANTHROPIC_BASE_URL` env var (SDK client patched to accept an optional `baseURL` override, defaulting to the real Anthropic API when unset). Spent real time investigating red herrings — SDK-vs-curl header fingerprinting, `X-Forwarded-For` leaking Russian origin, stale running processes — before checking the actual Docker build logs, which revealed **`ANTHROPIC_BASE_URL` had never actually been saved in the SpaceWeb panel at all** (the save button had silently failed earlier in the session). Fixed, rebuilt — hit two more unrelated bugs on the way: a corrupted API key value (contained a stray fragment that broke Dockerfile `ENV` parsing entirely) and one transient npm registry timeout during build (`ECONNRESET` on an unrelated package, resolved by just retrying).
+
+**9. Confirmed fully working end-to-end.** Real audit run through SpaceWeb → Kazakhstan proxy → Anthropic completed successfully.
+
+**Not yet done:**
+- **This is NOT the "Phase 2 SpaceWeb migration" already described elsewhere in this document.** That planned migration bundles a GigaChat model swap and a 242-FZ compliance/anonymization pipeline; today's move was an unplanned, narrower fix driven purely by the Vercel billing failure. Sonnet/Anthropic is still the reasoning engine (via the new Kazakhstan proxy) — no GigaChat work happened. The Phase 2 Migration Checklist further down this document should be reviewed against what's now actually true (hosting has moved; the compliance/model-swap work has not started) rather than assumed still fully pending.
+- Vercel is still live and untouched, intentionally kept as a fallback — not yet decommissioned or pointed away from.
+- **Two API keys were exposed in plaintext multiple times during this session's debugging** (pasted directly in build logs shared for troubleshooting): `ANTHROPIC_API_KEY` and `SUPABASE_SERVICE_ROLE_KEY`. **Both have now been rotated** (confirmed by user) — no outstanding action here, but worth double-checking no other deployment (e.g. Vercel) is still configured with the old, now-revoked values.
+- SpaceWeb Serverless is explicitly in beta — no confirmed answer yet on its own execution/timeout limits (the 300s `maxDuration` logic lives in the Next.js app itself, not confirmed as a platform-level constraint on SpaceWeb the way it was on Vercel).
+- `audit.assistant24info.ru`'s nginx config currently has no IP allowlisting — anyone who discovers this subdomain could relay requests to Anthropic using whatever key the app has configured. Worth restricting it to SpaceWeb's outbound IP(s) only.
 
 ---
 
