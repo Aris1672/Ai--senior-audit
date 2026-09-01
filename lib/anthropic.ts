@@ -1,9 +1,15 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { VAT_STATUS_LABELS } from "./audit-constants";
 
-// ─── Only runs server-side on Vercel ─────────────────────────────────────────
+// ─── Only runs server-side ────────────────────────────────────────────────────
+// baseURL defaults to the real api.anthropic.com if ANTHROPIC_BASE_URL isn't
+// set (safe for local dev / any environment that CAN reach Anthropic
+// directly). On SpaceWeb, set ANTHROPIC_BASE_URL to the Kazakhstan VPS proxy
+// domain (e.g. https://audit.assistant24info.ru) — see PROJECT_STATUS.md for
+// why direct access from Russia is blocked and this proxy exists.
 export const anthropic = new Anthropic({
-  apiKey: process.env.ANTHROPIC_API_KEY!,
+  apiKey:  process.env.ANTHROPIC_API_KEY!,
+  baseURL: process.env.ANTHROPIC_BASE_URL || undefined,
 });
 
 // ─── Model identifiers ────────────────────────────────────────────────────────
