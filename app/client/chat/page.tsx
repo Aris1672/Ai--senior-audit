@@ -656,6 +656,9 @@ export default function ChatPage() {
                 started streaming in (once text appears, that IS the status). */}
             {loading && !uploading && (
               <span style={{ fontSize: "12px", color: "#7a90c0" }}>
+                {/* TEMPORARY DEPLOY-VERIFICATION MARKER — remove once confirmed
+                    SpaceWeb is actually serving new builds, not a cached bundle. */}
+                <strong style={{ color: "#ff3b3b", fontSize: "14px" }}>[BUILD TEST V2] </strong>
                 {statusText}
                 {elapsedSeconds > 0 && (
                   <span style={{ marginLeft: "8px", color: "#4d6a9e" }}>
