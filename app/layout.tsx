@@ -2,6 +2,19 @@ import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 
+// Forces every route to render dynamically on every request — no static
+// caching, no ISR. Added after discovering SpaceWeb was serving the chat
+// page from a year-long cache (Cache-Control: s-maxage=31536000,
+// X-Nextjs-Cache: HIT, X-Nextjs-Prerender: 1), which meant the HTML kept
+// referencing OLD JS chunk filenames no matter how many times the app was
+// rebuilt — confirmed via a DevTools global search that a known test string
+// added to a fresh build was completely absent from every loaded file.
+// This app has no purely-static marketing pages inside the Next.js router
+// (the landing page is a separate static audit.html) — every route here is
+// inherently per-session/personalized, so there's no downside to disabling
+// static optimization globally.
+export const dynamic = "force-dynamic";
+
 const geistSans = Geist({
   variable: "--font-geist-sans",
   subsets: ["latin"],
