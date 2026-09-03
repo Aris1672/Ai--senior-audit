@@ -1,5 +1,7 @@
 # AI Senior Auditor — Project Status
 
+> Last updated: September 3, 2026. **SpaceWeb Serverless (beta) discovered to have a platform-level caching bug that ignores the app's own cache settings entirely** — every response served with `Cache-Control: s-maxage=31536000` (one year) and `X-Nextjs-Cache: HIT`, meaning newly deployed code never reaches users regardless of how many times the app is rebuilt. Confirmed via `export const dynamic = "force-dynamic"` at the root layout having zero effect on the served headers, and via a DevTools global search proving a known test string from a fresh build was completely absent from every loaded file. Root-caused to SpaceWeb's own infrastructure (Envoy edge layer), not the app's code — `next.config.ts` has no conflicting header/caching config. **Decision: abandon SpaceWeb Serverless, self-host instead** via **Coolify** on a new Russian VPS (full control over caching/headers, no beta platform surprises), keeping the same working Kazakhstan-VPS-proxy-for-Anthropic architecture. **Also decided, separately: self-host Supabase** (not just the app) on a second new Russian VPS, for 152-FZ data-residency compliance — flagged to the user that this addresses data-at-rest location only, not the separate question of whether audit content (which can contain personal data) transiting to Anthropic's API also needs anonymization first; user's stated plan is a pseudonymization pipeline (script or GigaChat-based) before sending to Anthropic, matching the pre-existing Phase 2 compliance plan — not yet designed or built, tracked as a punch-list item. **Both VPS not yet provisioned as of this update** — user provisioning today; this session captured infrastructure requirements for both in advance. See Session Log for the full SpaceWeb debugging story and VPS spec requirements.
+
 > Last updated: September 1, 2026. **Major infrastructure migration: Vercel → SpaceWeb, with a new Kazakhstan VPS proxy for Anthropic.** Root cause: Vercel billing failed because the only available payment card is Russia-issued (accepted at signup, but Vercel cannot actually charge it — see Session Log for full story). App is now hosted on SpaceWeb Serverless (beta); Anthropic calls are routed through a dedicated reverse-proxy vhost on the existing Kazakhstan VPS (`audit.assistant24info.ru` → `api.anthropic.com`); Supabase is reachable directly from SpaceWeb, no proxy needed. Also fixed, same session: the `/api/chat` route had no `maxDuration` set (silently defaulting to Vercel Hobby's 10s), which combined with a fully-buffered (non-streaming) response and zero client-side error handling caused audits to time out with the UI stuck locked forever; converted to true NDJSON streaming with a 15s heartbeat (to survive proxy idle-timeouts) and added try/catch/finally everywhere so the input never locks up again. **Vercel is being kept live as a fallback for now, not yet decommissioned.** Previous entry (August 7): per-transaction billing verified end-to-end...
 
 > GitHub: https://github.com/Aris1672/Ai--senior-audit
@@ -16,8 +18,11 @@
 | Framework | Next.js App Router, TypeScript | 16.2.6 |
 | Runtime | React | 19.2.4 |
 | Database + Auth | Supabase (PostgreSQL + Auth + Storage) | @supabase/supabase-js 2.105.4 |
-| Hosting | SpaceWeb Serverless (beta) — primary, as of Sep 1 2026 | — |
+| Hosting | **Migrating to self-hosted Coolify on a new Russian VPS** (as of Sep 3 2026 — SpaceWeb Serverless found to have a platform-level caching bug, see Session Log; neither new VPS provisioned yet) | — |
+| Hosting (interim, being abandoned) | SpaceWeb Serverless (beta) | — |
 | Hosting (fallback, not decommissioned) | Vercel | — |
+| Database (interim, working fine) | Supabase Cloud | — |
+| Database (planned, not yet built) | Self-hosted Supabase on a second new Russian VPS, for 152-FZ data residency | — |
 | Outbound proxy (Anthropic only) | nginx on existing Kazakhstan VPS (`audit.assistant24info.ru`) | — |
 | AI — audit reasoning + findings extraction | Claude Sonnet 5 | @anthropic-ai/sdk 0.96.0 |
 | XLSX parsing | fflate (hand-rolled) + xlsx (legacy .xls only) | 0.8.3 / 0.18.5 |
@@ -872,6 +877,37 @@ PM2 keeps Next.js running as background process, auto-restarts on crash. Cost: f
 
 **P3 — Cleanup / deferred**
 - [ ] Chat page's own attachment-button accept attribute still missing `.txt`/`.doc` (only `.xls,.pdf` currently) — left unpatched on purpose, decide if it should match the other two upload surfaces
+
+---
+
+## Session Log — SpaceWeb Caching Bug Discovered, Pivoting to Self-Hosted Coolify + Self-Hosted Supabase (September 3, 2026)
+
+**Goal:** figure out why a UI improvement (rotating status text + elapsed timer during long audit generation) wasn't appearing on SpaceWeb despite multiple confirmed-correct rebuilds — and what to do about it.
+
+**1. Diagnosed a SpaceWeb platform-level caching bug, not a code issue.** Added a loud, unmistakable test marker (`[BUILD TEST V2]`) to `page.tsx` to rule out subtle rendering issues. It never appeared. Confirmed via DevTools' global search (Ctrl+Shift+F across all loaded files) that the string was **completely absent** from every JS file the browser actually received, even immediately after a rebuild the platform confirmed included the right commit. Checked response headers on the chat page request directly: `Cache-Control: s-maxage=31536000` (one full year), `X-Nextjs-Cache: HIT`, `X-Nextjs-Prerender: 1`. The HTML document was frozen, still referencing old JS chunk filenames from a previous build — no amount of rebuilding could fix this since the cached document itself never got invalidated.
+
+**2. Ruled out the app's own code as the cause.** Added `export const dynamic = "force-dynamic"` to the root `app/layout.tsx` (the correct fix *if* this were Next.js's own static-optimization behavior) — redeployed, headers unchanged. Checked the nested `app/client/layout.tsx` in case it was overriding the root — it's a client component, can't export conflicting segment config, and doesn't. Checked `next.config.ts` for a global `headers()` override — completely clean, no caching config of any kind. With the app's own code and config fully ruled out, and the `Server: envoy` header on every response, this points to SpaceWeb's own edge/CDN layer overriding the app unconditionally, regardless of what the Next.js app itself specifies. Given the product is explicitly in beta, treating this as a platform bug rather than something fixable from the app side.
+
+**3. Decision: abandon SpaceWeb Serverless, self-host via Coolify instead.** Coolify (self-hosted, open-source PaaS, Docker-based) gives full control over the reverse proxy/caching layer — the exact category of problem just hit. Same git-push-to-deploy workflow as before. Will run on a **new Russian VPS** (required — the app must be Russia-hosted per Russian law), with the **existing, already-verified Kazakhstan VPS nginx proxy** (`audit.assistant24info.ru` → `api.anthropic.com`) reused as-is for the Anthropic leg. Supabase Cloud stays direct, no proxy — for now (see next point).
+
+**4. Separately decided: self-host Supabase too, for 152-FZ data-residency compliance.** This is a distinct decision from the Coolify move, driven by Russian personal-data-localization law rather than the caching bug. **Important open question flagged to the user, not yet resolved:** self-hosting the database addresses data-at-rest location, but every audit request still sends live document/transaction content — which can contain personal data (names, INNs, payment details) — to Anthropic's API, hosted outside Russia. Whether 152-FZ's requirements extend to that in-transit data is a legal question, not a hosting one, and moving Supabase alone would not resolve it if so. **User's stated plan: a pseudonymization pipeline (script-based regex for structured data like INNs/account numbers, likely GigaChat or a local model for names/company entities) run before sending anything to Anthropic, with a reversible mapping kept in Russia to reconstruct real names in the final report.** This directly matches the "Phase 2" compliance/anonymization work already noted elsewhere in this document — **not yet designed or built**. Also flagged: whether a *reversible* pseudonymization mapping still counts as "processing personal data abroad" under 152-FZ (since the original identity is technically recoverable) is exactly the kind of distinction that needs confirmation from whoever is advising on this law — this document does not resolve that question.
+
+**5. Captured VPS requirements for both new servers** (neither provisioned yet as of this entry — user buying today):
+
+| | Coolify + App VPS | Self-hosted Supabase VPS |
+|---|---|---|
+| **Location** | Russia (required by law) | Russia (152-FZ data residency) |
+| **OS** | Ubuntu 22.04 or 24.04 LTS | Ubuntu 22.04 or 24.04 LTS |
+| **CPU** | 2 vCPU minimum | 4 vCPU minimum |
+| **RAM** | 4GB minimum (Next.js builds — pdfjs-dist, xlsx, mammoth, etc. — are memory-hungry; less risks an OOM-killed build) | 8GB minimum (Postgres + GoTrue + PostgREST + Storage + Realtime + Kong all run together via Docker Compose) |
+| **Storage** | 40GB+ SSD | 100GB+ SSD (Postgres data + uploaded audit documents both live here; grows over time) |
+| **Notes** | Install via Coolify's official one-line installer (`curl -fsSL https://cdn.coollabs.io/coolify/install.sh \| bash`); connects to GitHub for git-push auto-deploy, same env vars as the SpaceWeb attempt (`ANTHROPIC_API_KEY`, `ANTHROPIC_BASE_URL` → Kazakhstan proxy, Supabase vars) | Supabase's official self-hosted Docker Compose stack. Realtime and Logflare/Vector (logging/analytics) can be stripped out if unused, reducing the resource floor somewhat — but not recommended to go below the 8GB figure even trimmed. Backups become the user's own responsibility (Cloud handled this automatically) — recommended: nightly `pg_dump`, compressed, shipped to a *separate* location (different server or S3-compatible storage) from the VPS itself, not just a same-server snapshot. VPS provider snapshots are a reasonable secondary safety net, not a substitute for an offsite dump. |
+
+**Not yet done:**
+- Neither new VPS is provisioned yet — user is buying both today, will return to continue once ready.
+- SpaceWeb Serverless deployment is presumably being abandoned, but not yet explicitly torn down/cancelled — worth confirming intent once the Coolify migration is confirmed working, so as not to keep paying for or maintaining a third hosting target unnecessarily (Vercel fallback, SpaceWeb, and soon Coolify would otherwise all coexist).
+- The pseudonymization/anonymization pipeline for Anthropic-bound data is still just a stated intention, not designed or built. This is now the more consequential of the two "Phase 2" workstreams (data residency without it may not achieve actual compliance) and probably deserves prioritization once infrastructure work settles down.
+- No decision yet on what happens to the rotating-status-text/timer UI feature (`statusText`/`elapsedSeconds` in `page.tsx`) or the `[BUILD TEST V2]` diagnostic marker — the marker in particular should be removed once the Coolify deployment is confirmed serving fresh builds correctly, since it has no purpose beyond that one diagnostic.
 
 ---
 
