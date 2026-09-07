@@ -271,9 +271,22 @@ export async function POST(req: NextRequest) {
       // ── Create new audit session ───────────────────────────
       case "create_audit_session": {
         const {
-          clientId, companyName, inn, period, sourceType,
+          clientId, companyName, inn, periodFrom, periodTo, sourceType,
           legalForm, legalFormOther, taxRegime, taxRegimeOther, vatStatus,
         } = payload;
+
+        // ── Audit period — required, ISO "YYYY-MM-DD" from a real date
+        //    picker (see page.tsx). Rejecting here, not just client-side,
+        //    since a missing/invalid period silently defeats date-range
+        //    filtering in file-parser.ts downstream (rows would be counted
+        //    and analyzed unfiltered instead of erroring loudly).
+        const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
+        if (!periodFrom || !ISO_DATE.test(periodFrom) || !periodTo || !ISO_DATE.test(periodTo)) {
+          return NextResponse.json({ error: "Укажите корректный период аудита (дата начала и окончания)" }, { status: 400 });
+        }
+        if (periodTo < periodFrom) {
+          return NextResponse.json({ error: "Дата окончания периода не может быть раньше даты начала" }, { status: 400 });
+        }
 
         // ── Tax-profile gate — server-side validation, never trust the
         //    dropdown alone (this is the actual enforcement point; the
@@ -302,8 +315,10 @@ export async function POST(req: NextRequest) {
           .from("audit_sessions")
           .insert({
             client_id:         clientId,
-            title:             `Аудит: ${companyName}${period ? ` (${period})` : ""}`,
+            title:             `Аудит: ${companyName}`,
             status:            "active",
+            period_from:       periodFrom,
+            period_to:         periodTo,
             legal_form:        legalForm,
             legal_form_other:  legalForm === "Другое" ? legalFormOther.trim() : null,
             tax_regime:        taxRegime,
@@ -363,12 +378,21 @@ export async function POST(req: NextRequest) {
 
         const title = data.title || "";
         const companyMatch = title.match(/Аудит:\s*(.+?)(?:\s*\(|$)/);
-        const periodMatch  = title.match(/\((.+?)\)/);
+        // period now comes straight from period_from/period_to (see
+        // create_audit_session) — no longer regex-parsed out of the title.
+        // Old sessions created before this fix may still have the period
+        // embedded in title with empty period_from/period_to; fall back to
+        // that regex only when the columns are unset, so historical audits
+        // don't lose their displayed period.
+        const legacyPeriodMatch = title.match(/\((.+?)\)/);
+        const period = (data.period_from && data.period_to)
+          ? `${data.period_from} – ${data.period_to}`
+          : (legacyPeriodMatch?.[1]?.trim() || "");
 
         return NextResponse.json({
           ...data,
           company_name: companyMatch?.[1]?.trim() || title,
-          period:       periodMatch?.[1]?.trim()  || "",
+          period,
           source_type:  "file",
           // Resolved single-value display strings — "Другое" swapped for
           // the free-text value the client actually entered, so anything
@@ -431,6 +455,7 @@ export async function POST(req: NextRequest) {
             .from("audit_sessions")
             .select(`
               id, title, status, transactions_ct, findings_ct, cost_rub, created_at,
+              period_from, period_to,
               legal_form, legal_form_other, tax_regime, tax_regime_other, vat_status
             `)
             .eq("id", sessionId)
@@ -451,12 +476,15 @@ export async function POST(req: NextRequest) {
 
         const title        = sessionRaw.title || "";
         const companyMatch = title.match(/Аудит:\s*(.+?)(?:\s*\(|$)/);
-        const periodMatch  = title.match(/\((.+?)\)/);
+        const legacyPeriodMatch = title.match(/\((.+?)\)/);
+        const period = (sessionRaw.period_from && sessionRaw.period_to)
+          ? `${sessionRaw.period_from} – ${sessionRaw.period_to}`
+          : (legacyPeriodMatch?.[1]?.trim() || "");
 
         const session = {
           ...sessionRaw,
           company_name: companyMatch?.[1]?.trim() || title,
-          period:       periodMatch?.[1]?.trim()  || "",
+          period,
           legal_form_display: sessionRaw.legal_form === "Другое" ? sessionRaw.legal_form_other : sessionRaw.legal_form,
           tax_regime_display: sessionRaw.tax_regime === "Другое" ? sessionRaw.tax_regime_other : sessionRaw.tax_regime,
         };

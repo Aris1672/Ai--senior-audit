@@ -72,6 +72,71 @@ export interface C1Transaction {
 
 const MAX_CONTENT_CHARS = 50_000;
 
+// ─── Date-range filtering (audit period) ─────────────────────────────────────
+// Optional filter applied to tabular formats (xlsx/xls/csv) so a document
+// spanning many months only contributes rows inside the audit's selected
+// period. dateFrom/dateTo are ISO "YYYY-MM-DD" strings (from a <input
+// type="date">, never free text — see page.tsx). Absent -> no filtering,
+// fully backward-compatible.
+export interface DateRange {
+  dateFrom?: string;
+  dateTo?: string;
+}
+
+const DATE_COLUMN_NAMES = [
+  "дата платежа", "дата операции", "дата документа", "дата проводки", "дата",
+  "date", "payment date", "transaction date",
+];
+
+/** Find the index of a likely date column among row headers. -1 if none found. */
+function findDateColumnIndex(headers: string[]): number {
+  const lower = headers.map(h => h.toLowerCase().trim());
+  for (const name of DATE_COLUMN_NAMES) {
+    const idx = lower.findIndex(h => h === name || h.includes(name));
+    if (idx !== -1) return idx;
+  }
+  return -1;
+}
+
+/** Parse "dd.mm.yyyy" (1C/RU convention) or ISO "yyyy-mm-dd" into a Date. */
+function parseFlexibleDate(s: string): Date | null {
+  const t = s.trim();
+  const ru = t.match(/^(\d{1,2})\.(\d{1,2})\.(\d{4})/);
+  if (ru) {
+    const [, d, m, y] = ru;
+    const dt = new Date(Number(y), Number(m) - 1, Number(d));
+    return isNaN(dt.getTime()) ? null : dt;
+  }
+  const iso = t.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (iso) {
+    const [, y, m, d] = iso;
+    const dt = new Date(Number(y), Number(m) - 1, Number(d));
+    return isNaN(dt.getTime()) ? null : dt;
+  }
+  return null;
+}
+
+/**
+ * True if a row's date cell falls inside the given range.
+ * A cell that can't be parsed as a date is KEPT (fail open) rather than
+ * silently dropped — an unparseable date is a data-quality issue for the
+ * auditor to see, not a reason to make a row invisible to it.
+ */
+function dateInRange(cellValue: string, range?: DateRange): boolean {
+  if (!range || (!range.dateFrom && !range.dateTo)) return true;
+  const d = parseFlexibleDate(cellValue);
+  if (!d) return true;
+  if (range.dateFrom) {
+    const from = parseFlexibleDate(range.dateFrom);
+    if (from && d < from) return false;
+  }
+  if (range.dateTo) {
+    const to = parseFlexibleDate(range.dateTo);
+    if (to && d > to) return false;
+  }
+  return true;
+}
+
 // ─── XML candidate tags (1C-first, then generic) ─────────────────────────────
 
 const XML_TRANSACTION_TAGS = [
@@ -82,7 +147,7 @@ const XML_TRANSACTION_TAGS = [
 
 // ─── CSV ──────────────────────────────────────────────────────────────────────
 
-export function parseCSV(buffer: ArrayBuffer): ParseResult {
+export function parseCSV(buffer: ArrayBuffer, range?: DateRange): ParseResult {
   const text  = new TextDecoder("utf-8").decode(buffer);
   const lines = text.split(/\r?\n/).filter(l => l.trim().length > 0);
 
@@ -91,10 +156,19 @@ export function parseCSV(buffer: ArrayBuffer): ParseResult {
   const delimiter = lines[0].includes(";") ? ";" : ",";
   const headers   = lines[0].split(delimiter).map(h => h.replace(/^"|"$/g, "").trim());
 
-  const maxRows   = Math.min(lines.length, 501);
-  const totalRows = Math.max(0, lines.length - 1);
+  let dataLines = lines.slice(1);
+  const dateColIdx = findDateColumnIndex(headers);
+  if (range && (range.dateFrom || range.dateTo) && dateColIdx !== -1) {
+    dataLines = dataLines.filter(line => {
+      const cells = line.split(delimiter);
+      return dateInRange((cells[dateColIdx] ?? "").replace(/^"|"$/g, ""), range);
+    });
+  }
+
+  const maxRows   = Math.min(dataLines.length, 500);
+  const totalRows = dataLines.length;
   const textContent =
-    lines.slice(0, maxRows).join("\n").slice(0, MAX_CONTENT_CHARS) +
+    [headers.join(delimiter), ...dataLines.slice(0, maxRows)].join("\n").slice(0, MAX_CONTENT_CHARS) +
     (totalRows > 500 ? `\n\n[Показаны первые 500 из ${totalRows} строк]` : "");
 
   return { rowCount: totalRows, parseMethod: "csv", detectedColumns: headers.slice(0, 10), textContent, parsedAt: now() };
@@ -155,7 +229,7 @@ export async function parseDOCX(buffer: ArrayBuffer): Promise<ParseResult> {
 // Uses the 'xlsx' npm package which handles the proprietary BIFF binary format.
 // We use it ONLY for .xls — .xlsx continues to use fflate (faster, no dep).
 
-export async function parseXLS(buffer: ArrayBuffer): Promise<ParseResult> {
+export async function parseXLS(buffer: ArrayBuffer, range?: DateRange): Promise<ParseResult> {
   try {
     const XLSX = await import("xlsx");
 
@@ -180,7 +254,12 @@ export async function parseXLS(buffer: ArrayBuffer): Promise<ParseResult> {
       const headers  = (rows[0] as any[]).map(h => String(h ?? "").trim()).filter(Boolean);
       if (allHeaders.length === 0) allHeaders.push(...headers);
 
-      const dataRows  = rows.slice(1);
+      let dataRows = rows.slice(1);
+      const dateColIdx = findDateColumnIndex(headers);
+      if (range && (range.dateFrom || range.dateTo) && dateColIdx !== -1) {
+        dataRows = dataRows.filter(row => dateInRange(String(row[dateColIdx] ?? ""), range));
+      }
+
       const totalRows = dataRows.length;
       totalRowCount  += totalRows;
       const maxRows   = Math.min(dataRows.length, ROWS_PER_SHEET_CAP);
@@ -229,7 +308,7 @@ export async function parseXLS(buffer: ArrayBuffer): Promise<ParseResult> {
 
 // ─── XLSX ─────────────────────────────────────────────────────────────────────
 
-export async function parseXLSX(buffer: ArrayBuffer): Promise<ParseResult> {
+export async function parseXLSX(buffer: ArrayBuffer, range?: DateRange): Promise<ParseResult> {
   try {
     const fflate   = await import("fflate");
     const unzipped = fflate.unzipSync(new Uint8Array(buffer));
@@ -302,14 +381,11 @@ export async function parseXLSX(buffer: ArrayBuffer): Promise<ParseResult> {
 
       const sheetXml = new TextDecoder("utf-8").decode(unzipped[sheetKey]);
       const rowMatches = sheetXml.match(/<row[\s\S]*?<\/row>/gi) || [];
-      const sheetRowCount = Math.max(0, rowMatches.length - 1); // minus header row
-      totalRowCount += sheetRowCount;
 
-      const maxRows = Math.min(rowMatches.length, ROWS_PER_SHEET_CAP + 1);
-      const csvLines: string[] = [];
-
-      for (let i = 0; i < maxRows; i++) {
-        const cells  = rowMatches[i].match(/<c[\s\S]*?<\/c>/gi) || [];
+      // Decode every row to a values[] array up front (needed both to find
+      // the date column via the header row and to filter data rows below).
+      const allRowValues: string[][] = rowMatches.map(rowXml => {
+        const cells  = rowXml.match(/<c[\s\S]*?<\/c>/gi) || [];
         const values: string[] = [];
         for (const cell of cells) {
           const typeMatch = cell.match(/\bt="([^"]+)"/);
@@ -317,7 +393,24 @@ export async function parseXLSX(buffer: ArrayBuffer): Promise<ParseResult> {
           const val       = valMatch ? valMatch[1] : "";
           values.push(typeMatch?.[1] === "s" ? (sharedStrings[parseInt(val, 10)] ?? "") : val);
         }
-        csvLines.push(values.join(";"));
+        return values;
+      });
+
+      const headerValues = allRowValues[0] ?? [];
+      const dateColIdx   = findDateColumnIndex(headerValues);
+
+      let dataRowValues = allRowValues.slice(1);
+      if (range && (range.dateFrom || range.dateTo) && dateColIdx !== -1) {
+        dataRowValues = dataRowValues.filter(v => dateInRange(v[dateColIdx] ?? "", range));
+      }
+
+      const sheetRowCount = dataRowValues.length;
+      totalRowCount += sheetRowCount;
+
+      const maxRows = Math.min(dataRowValues.length, ROWS_PER_SHEET_CAP);
+      const csvLines: string[] = [headerValues.join(";")];
+      for (let i = 0; i < maxRows; i++) {
+        csvLines.push(dataRowValues[i].join(";"));
       }
 
       const sheetTruncationNote = sheetRowCount > ROWS_PER_SHEET_CAP
@@ -735,16 +828,17 @@ export function parse1CTxt(buffer: ArrayBuffer): ParseResult {
 
 export async function parseFile(
   buffer: ArrayBuffer,
-  fileType: "xlsx" | "xls" | "csv" | "xml" | "docx" | "doc" | "1c_txt" | "pdf"
+  fileType: "xlsx" | "xls" | "csv" | "xml" | "docx" | "doc" | "1c_txt" | "pdf",
+  range?: DateRange
 ): Promise<ParseResult> {
-  if (fileType === "csv")    return parseCSV(buffer);
+  if (fileType === "csv")    return parseCSV(buffer, range);
   if (fileType === "xml")    return parseXML(buffer);
   if (fileType === "docx")   return parseDOCX(buffer);
-  if (fileType === "xls")    return parseXLS(buffer);
+  if (fileType === "xls")    return parseXLS(buffer, range);
   if (fileType === "doc")    return parseDOC(buffer);
   if (fileType === "1c_txt") return parse1CTxt(buffer);
   if (fileType === "pdf")    return parsePDF(buffer);
-  return parseXLSX(buffer);
+  return parseXLSX(buffer, range);
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────

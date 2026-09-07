@@ -1,6 +1,6 @@
 import { anthropic, AUDIT_SYSTEM_PROMPT, buildAuditContext, SONNET_MODEL, FINDINGS_TOOL } from "@/lib/anthropic";
 import { createAdminClient } from "@/lib/supabase-server";
-import { parseFile, renderPDFPagesAsImages } from "@/lib/file-parser";
+import { parseFile, renderPDFPagesAsImages, type DateRange } from "@/lib/file-parser";
 import { NextRequest, NextResponse } from "next/server";
 
 // Pro plan: up to 300s by default (800s with Fluid Compute enabled).
@@ -19,7 +19,8 @@ interface DocumentsResult {
 
 async function getAllDocumentsContent(
   supabase: ReturnType<typeof createAdminClient>,
-  sessionId: string
+  sessionId: string,
+  period?: DateRange
 ): Promise<DocumentsResult> {
   const images: DocumentsResult["images"] = [];
 
@@ -90,9 +91,14 @@ async function getAllDocumentsContent(
         continue;
       }
 
+      // period scopes rows to the audit's selected date range for xlsx/xls/csv
+      // (file-parser.ts ignores it for other formats) — same period_from/
+      // period_to used by /api/upload and /api/audit/calculate-price, so the
+      // AI only ever sees what the client was priced and asked to analyze.
       const parsed = await parseFile(
         arrayBuffer,
-        doc.file_type as "xlsx" | "xls" | "csv" | "xml" | "docx" | "doc" | "1c_txt" | "pdf"
+        doc.file_type as "xlsx" | "xls" | "csv" | "xml" | "docx" | "doc" | "1c_txt" | "pdf",
+        period
       );
 
       console.log("[chat]", doc.file_name, "— rowCount:", parsed.rowCount,
@@ -314,7 +320,22 @@ export async function POST(req: NextRequest) {
     let fileSection = "";
     let images: { fileName: string; mediaType: string; base64: string }[] = [];
     if (sessionId) {
-      const docsResult = await getAllDocumentsContent(supabase, sessionId);
+      // Look up the audit's selected period so document parsing only
+      // includes rows inside it — same period_from/period_to written by
+      // create_audit_session and read by /api/upload and
+      // /api/audit/calculate-price, so pricing and analysis always agree
+      // on which rows count (see PROJECT_STATUS.md period-filtering fix).
+      const { data: periodRow } = await supabase
+        .from("audit_sessions")
+        .select("period_from, period_to")
+        .eq("id", sessionId)
+        .single();
+
+      const period: DateRange | undefined = periodRow
+        ? { dateFrom: periodRow.period_from ?? undefined, dateTo: periodRow.period_to ?? undefined }
+        : undefined;
+
+      const docsResult = await getAllDocumentsContent(supabase, sessionId, period);
       images = docsResult.images;
       if (docsResult.textContent) {
         fileSection = `\n\n=== ЗАГРУЖЕННЫЕ ФИНАНСОВЫЕ ДОКУМЕНТЫ ===\n${docsResult.textContent}\n=== КОНЕЦ ДОКУМЕНТОВ ===`;

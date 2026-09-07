@@ -6,6 +6,10 @@
  * Rate is the client's custom override (client_subscriptions.custom_price_rub)
  * if set, otherwise the global default (billing_settings.price_per_transaction_rub).
  *
+ * Transaction count is always scoped to the session's audit period
+ * (audit_sessions.period_from/period_to) — see /api/upload and
+ * lib/file-parser.ts for where the actual date filtering happens.
+ *
  * POST { sessionId, clientId, documentId? } | { sessionId, clientId, c1Config? }
  * -> { transactionCount, priceRub, rateRub, isCustomRate }
  */
@@ -55,6 +59,22 @@ export async function POST(req: NextRequest) {
       rateRub = Number(settings.price_per_transaction_rub);
     }
 
+    // --- Look up the audit period for this session ------------------------
+    // Single source of truth: written once by create_audit_session, read
+    // here (and by /api/upload, /api/parse-file, /api/chat) so pricing and
+    // AI analysis always agree on which rows count.
+    let period: { dateFrom?: string; dateTo?: string } | undefined;
+    if (sessionId) {
+      const { data: session } = await supabase
+        .from("audit_sessions")
+        .select("period_from, period_to")
+        .eq("id", sessionId)
+        .single();
+      if (session) {
+        period = { dateFrom: session.period_from ?? undefined, dateTo: session.period_to ?? undefined };
+      }
+    }
+
     let transactionCount = 0;
 
     // --- FILE MODE ----------------------------------------------------------
@@ -66,7 +86,9 @@ export async function POST(req: NextRequest) {
         .single();
 
       if (doc?.parsed_data?.rowCount != null) {
-        // Already parsed -- use cached value (fast path)
+        // Already parsed -- use cached value (fast path). Cached value was
+        // produced by /api/upload's background parse, which already applied
+        // the same period filter, so this stays consistent.
         transactionCount = doc.parsed_data.rowCount;
 
       } else if (["xlsx", "csv", "xml"].includes(doc?.file_type ?? "")) {
@@ -85,7 +107,8 @@ export async function POST(req: NextRequest) {
         const buffer = await blob.arrayBuffer();
         const result = await parseFile(
           buffer,
-          doc!.file_type as "xlsx" | "csv" | "xml"
+          doc!.file_type as "xlsx" | "csv" | "xml",
+          period
         );
 
         transactionCount = result.rowCount;
@@ -102,6 +125,10 @@ export async function POST(req: NextRequest) {
     else if (c1Config) {
       const { url, username, password, base } = c1Config;
       const auth = Buffer.from(`${username}:${password}`).toString("base64");
+      // NOTE: $count with no date filter — live 1C mode does not yet scope
+      // to period_from/period_to. Same gap as file mode had; tracked
+      // separately since it needs an OData $filter clause, not a change
+      // to file-parser.ts. Flagging here so it isn't assumed fixed.
       const endpoint =
         `${url}/${base}/odata/standard.odata` +
         `/Document_ПоступлениеТоваровУслуг?$count=true&$top=0&$format=json`;

@@ -75,6 +75,21 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    // ── Look up the audit period for this session ─────────────────────────
+    // Read once here so the background parse below counts/extracts rows
+    // scoped to the client's selected audit period, not the whole file —
+    // same period_from/period_to written by create_audit_session, single
+    // source of truth (see PROJECT_STATUS.md period-filtering fix).
+    const { data: session } = await supabase
+      .from("audit_sessions")
+      .select("period_from, period_to")
+      .eq("id", sessionId)
+      .single();
+
+    const period = session
+      ? { dateFrom: session.period_from ?? undefined, dateTo: session.period_to ?? undefined }
+      : undefined;
+
     // ── Upload to Supabase Storage (Vercel → Supabase) ────────────────────
     const timestamp   = Date.now();
     const safeName    = file.name.replace(/[^a-zA-Z0-9._-]/g, "_");
@@ -142,7 +157,7 @@ export async function POST(req: NextRequest) {
     // another HTTP hop. Run after response is returned using waitUntil-style
     // fire-and-forget (no await).
     if (PARSEABLE.has(fileType)) {
-      parseFile(arrayBuffer, fileType as "xlsx" | "xls" | "csv" | "xml" | "docx" | "doc" | "1c_txt")
+      parseFile(arrayBuffer, fileType as "xlsx" | "xls" | "csv" | "xml" | "docx" | "doc" | "1c_txt", period)
         .then((result) =>
           supabase
             .from("documents")

@@ -27,7 +27,8 @@ export default function NewAuditPage() {
   const [clientInfo, setClientInfo] = useState({
     companyName:     "",
     inn:              "",
-    period:           "",
+    periodFrom:       "",
+    periodTo:         "",
     legalForm:        "",
     legalFormOther:   "",
     taxRegime:        "",
@@ -52,6 +53,14 @@ export default function NewAuditPage() {
   function handleClientInfoNext() {
     if (!clientInfo.companyName) {
       setError("Введите название компании клиента");
+      return;
+    }
+    if (!clientInfo.periodFrom || !clientInfo.periodTo) {
+      setError("Укажите период аудита (дата начала и окончания)");
+      return;
+    }
+    if (clientInfo.periodTo < clientInfo.periodFrom) {
+      setError("Дата окончания периода не может быть раньше даты начала");
       return;
     }
     if (!clientInfo.legalForm) {
@@ -102,7 +111,8 @@ export default function NewAuditPage() {
           clientId:        user.id,
           companyName:     clientInfo.companyName,
           inn:             clientInfo.inn,
-          period:          clientInfo.period,
+          periodFrom:      clientInfo.periodFrom,
+          periodTo:        clientInfo.periodTo,
           sourceType:      "file",
           legalForm:       clientInfo.legalForm,
           legalFormOther:  clientInfo.legalFormOther,
@@ -165,7 +175,8 @@ export default function NewAuditPage() {
           clientId:        user.id,
           companyName:     clientInfo.companyName,
           inn:             clientInfo.inn,
-          period:          clientInfo.period,
+          periodFrom:      clientInfo.periodFrom,
+          periodTo:        clientInfo.periodTo,
           sourceType:      "live_1c",
           legalForm:       clientInfo.legalForm,
           legalFormOther:  clientInfo.legalFormOther,
@@ -291,10 +302,15 @@ export default function NewAuditPage() {
                   placeholder="7700000000" />
               </div>
               <div>
-                <label style={labelStyle}>Период аудита</label>
-                <input style={inputStyle} value={clientInfo.period}
-                  onChange={e => updateClientInfo("period", e.target.value)}
-                  placeholder="2024 / Q1 2024" />
+                <label style={labelStyle}>Период аудита *</label>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px" }}>
+                  <input type="date" style={inputStyle} value={clientInfo.periodFrom}
+                    max={clientInfo.periodTo || undefined}
+                    onChange={e => updateClientInfo("periodFrom", e.target.value)} />
+                  <input type="date" style={inputStyle} value={clientInfo.periodTo}
+                    min={clientInfo.periodFrom || undefined}
+                    onChange={e => updateClientInfo("periodTo", e.target.value)} />
+                </div>
               </div>
             </div>
 
