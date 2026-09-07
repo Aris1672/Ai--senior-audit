@@ -98,6 +98,27 @@ function findDateColumnIndex(headers: string[]): number {
   return -1;
 }
 
+/**
+ * Real-world bank/1C exports often have a title row above the actual column
+ * headers — e.g. a merged "Список операций за Январь - Сентябрь 2024 года"
+ * row 0, with real headers ("Дата платежа", "Номер", ...) at row 1. Assuming
+ * row 0 is always the header row causes two compounding bugs: (1) the real
+ * header row gets counted as if it were a data row (off-by-one overcount),
+ * and (2) date-range filtering silently no-ops because the date column is
+ * never found in a title string. Scan the first few rows for one that
+ * contains a recognizable date-column name and treat that as the header
+ * row. Falls back to row 0 if nothing in the scan window matches, so files
+ * whose header genuinely is the first row (the common case) are unaffected.
+ */
+function locateHeaderRow(rows: string[][], maxScan = 5): { headerRowIdx: number; dateColIdx: number } {
+  const scanLimit = Math.min(rows.length, maxScan);
+  for (let i = 0; i < scanLimit; i++) {
+    const idx = findDateColumnIndex((rows[i] ?? []).map(c => String(c ?? "").trim()));
+    if (idx !== -1) return { headerRowIdx: i, dateColIdx: idx };
+  }
+  return { headerRowIdx: 0, dateColIdx: -1 };
+}
+
 /** Parse "dd.mm.yyyy" (1C/RU convention) or ISO "yyyy-mm-dd" into a Date. */
 function parseFlexibleDate(s: string): Date | null {
   const t = s.trim();
@@ -154,10 +175,12 @@ export function parseCSV(buffer: ArrayBuffer, range?: DateRange): ParseResult {
   if (lines.length === 0) return { rowCount: 0, parseMethod: "csv", parsedAt: now() };
 
   const delimiter = lines[0].includes(";") ? ";" : ",";
-  const headers   = lines[0].split(delimiter).map(h => h.replace(/^"|"$/g, "").trim());
+  const cellRows   = lines.map(l => l.split(delimiter).map(c => c.replace(/^"|"$/g, "").trim()));
 
-  let dataLines = lines.slice(1);
-  const dateColIdx = findDateColumnIndex(headers);
+  const { headerRowIdx, dateColIdx } = locateHeaderRow(cellRows);
+  const headers = cellRows[headerRowIdx];
+
+  let dataLines = lines.slice(headerRowIdx + 1);
   if (range && (range.dateFrom || range.dateTo) && dateColIdx !== -1) {
     dataLines = dataLines.filter(line => {
       const cells = line.split(delimiter);
@@ -171,7 +194,7 @@ export function parseCSV(buffer: ArrayBuffer, range?: DateRange): ParseResult {
     [headers.join(delimiter), ...dataLines.slice(0, maxRows)].join("\n").slice(0, MAX_CONTENT_CHARS) +
     (totalRows > 500 ? `\n\n[Показаны первые 500 из ${totalRows} строк]` : "");
 
-  return { rowCount: totalRows, parseMethod: "csv", detectedColumns: headers.slice(0, 10), textContent, parsedAt: now() };
+  return { rowCount: totalRows, parseMethod: "csv", detectedColumns: headers.filter(Boolean).slice(0, 10), textContent, parsedAt: now() };
 }
 
 // ─── XML ──────────────────────────────────────────────────────────────────────
@@ -251,11 +274,13 @@ export async function parseXLS(buffer: ArrayBuffer, range?: DateRange): Promise<
         continue;
       }
 
-      const headers  = (rows[0] as any[]).map(h => String(h ?? "").trim()).filter(Boolean);
+      const rowsAsStrings = rows.map(r => (r as any[]).map(c => String(c ?? "")));
+      const { headerRowIdx, dateColIdx } = locateHeaderRow(rowsAsStrings);
+      const headersRaw = rowsAsStrings[headerRowIdx]; // unfiltered — keeps column alignment with data rows
+      const headers     = headersRaw.map(h => h.trim()).filter(Boolean); // filtered, for detectedColumns display only
       if (allHeaders.length === 0) allHeaders.push(...headers);
 
-      let dataRows = rows.slice(1);
-      const dateColIdx = findDateColumnIndex(headers);
+      let dataRows = rows.slice(headerRowIdx + 1);
       if (range && (range.dateFrom || range.dateTo) && dateColIdx !== -1) {
         dataRows = dataRows.filter(row => dateInRange(String(row[dateColIdx] ?? ""), range));
       }
@@ -265,7 +290,7 @@ export async function parseXLS(buffer: ArrayBuffer, range?: DateRange): Promise<
       const maxRows   = Math.min(dataRows.length, ROWS_PER_SHEET_CAP);
 
       const lines = [
-        headers.join(";"),
+        headersRaw.join(";"),
         ...dataRows.slice(0, maxRows).map(row =>
           (row as any[]).map(cell => String(cell ?? "").trim()).join(";")
         ),
@@ -396,10 +421,10 @@ export async function parseXLSX(buffer: ArrayBuffer, range?: DateRange): Promise
         return values;
       });
 
-      const headerValues = allRowValues[0] ?? [];
-      const dateColIdx   = findDateColumnIndex(headerValues);
+      const { headerRowIdx, dateColIdx } = locateHeaderRow(allRowValues);
+      const headerValues = allRowValues[headerRowIdx] ?? [];
 
-      let dataRowValues = allRowValues.slice(1);
+      let dataRowValues = allRowValues.slice(headerRowIdx + 1);
       if (range && (range.dateFrom || range.dateTo) && dateColIdx !== -1) {
         dataRowValues = dataRowValues.filter(v => dateInRange(v[dateColIdx] ?? "", range));
       }
