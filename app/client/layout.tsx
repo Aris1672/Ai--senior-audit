@@ -8,6 +8,7 @@ const NAV_ITEMS = [
   { href: "/client/chat",      label: "ИИ Аудитор", icon: "◎" },
   //{ href: "/client/documents", label: "Документы",  icon: "↑" },
   { href: "/client/usage",     label: "Журнал действий",    icon: "₽" },
+  { href: "/client/instructions", label: "Инструкции по применению", icon: "📖" },
 ];
 
 export default function ClientLayout({ children }: { children: React.ReactNode }) {
