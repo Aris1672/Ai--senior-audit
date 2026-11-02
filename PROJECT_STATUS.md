@@ -1,5 +1,11 @@
 # AI Senior Auditor — Project Status
 
+> Last updated: November 2, 2026. **Decided: switch the audit LLM from Anthropic (Claude Sonnet 5) to DeepSeek V4 Pro — Anthropic is banned in Russia.** Planning/design session only — **no code changed yet; building starts next session.** Decisions made with the user:
+> 1. **Integration route: DeepSeek's Anthropic-compatible endpoint** (`https://api.deepseek.com/anthropic`, model `deepseek-v4-pro`). Keeps the existing `@anthropic-ai/sdk` code path (streaming, NDJSON heartbeat, `record_findings` tool) — mostly a config change (`ANTHROPIC_BASE_URL`, `ANTHROPIC_API_KEY`, model id). Rename `anthropic`/`SONNET_*` to provider-neutral names while doing it. User has a DeepSeek API key (goes into Coolify env, never the repo).
+> 2. **Scanned PDFs / images → GigaChat** (Sber, hosted in Russia) for vision/OCR, since DeepSeek V4 Pro image input could not be confirmed. GigaChat returns text, which then goes through the same pseudonymization path as every other document.
+> 3. **Pseudonymization must be in place BEFORE any client data is sent to DeepSeek.** Reversible coding: a local program replaces personal data with tokens → DeepSeek works on coded text → the program restores the real values in the output (chat messages and findings) before it reaches the client or the DB.
+> See the new section **"Planned Change: LLM Provider Switch — DeepSeek + GigaChat + Pseudonymization"** below for the full design, and `PUNCH_LIST.md` → "NEXT SESSION" for the build checklist. Open question still to answer: pseudonymize individuals only (152-FZ scope), or also company names (commercial confidentiality)?
+
 > Last updated: September 22, 2026. **Self-host migration completed end-to-end — app is now live on Coolify + self-hosted Supabase, both fully verified.** Following the plan from the September 3 entry below, both new Russian VPS servers were provisioned and the full stack was migrated in one session using `Self-Host-Migration.md` (the cross-project master migration reference) as the guide:
 > - **Supabase Stack 3** stood up on `assistant_vps_3` (77.222.47.140, ports 8002/5434/6545 — the third and last pre-allocated slot in that VPS's port ledger). Schema rebuilt from live Cloud introspection (not the drifted original migration files — see below), all 6 `auth.users` rows and all 10 `public` table's data migrated via `pg_dump --data-only`/`psql`, all 138 Storage files copied via a Node script using both projects' service-role keys. Row counts verified matching Cloud exactly at every step.
 > - **Coolify app** deployed on `assistant_vps_4` (168.222.202.222) directly from the GitHub repo, Dockerfile build pack (repo already a standard `next start` server — no Vercel-serverless-function shim needed, unlike other apps on this Coolify instance). Env vars set to the 5 that are actually live in production (`ANTHROPIC_API_KEY`, `ANTHROPIC_BASE_URL`, `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`) — confirmed `USD_TO_RUB` and `C1_*` are not used by the current live SpaceWeb deployment either, so intentionally omitted rather than migrated as dead config.
@@ -38,7 +44,9 @@
 | Database | **Self-hosted Supabase, Stack 3 on `assistant_vps_3` (77.222.47.140:8002/5434/6545)** — live as of Sep 22 2026, full data parity with Cloud verified | — |
 | Database (superseded, not yet decommissioned) | Supabase Cloud | — |
 | Outbound proxy (Anthropic only) | nginx on existing Kazakhstan VPS (`audit.assistant24info.ru`) — unchanged, shared with other apps on this infra | — |
-| AI — audit reasoning + findings extraction | Claude Sonnet 5 | @anthropic-ai/sdk 0.96.0 |
+| AI — audit reasoning + findings extraction | Claude Sonnet 5 (**to be replaced by DeepSeek V4 Pro via Anthropic-compatible endpoint — decided Nov 2 2026, not built yet**) | @anthropic-ai/sdk 0.96.0 |
+| AI — scanned PDF / image reading (planned) | GigaChat (Russia-hosted) — replaces Claude vision input | not built yet |
+| Pseudonymization (planned) | Own reversible coder/restorer (TS regex + Python/Natasha NER service) | not built yet |
 | XLSX parsing | fflate (hand-rolled) + xlsx (legacy .xls only) | 0.8.3 / 0.18.5 |
 | DOCX parsing | fflate (hand-rolled) | same |
 | DOC parsing | mammoth | 1.12.0 |
@@ -86,6 +94,86 @@ The browser **never** connects directly to Supabase or Anthropic. Every fetch in
 **✅ FIXED July 1, 2026 — direct-browser-to-Supabase bypass in `admin/layout.tsx` and `client/layout.tsx`.** Root cause of intermittent login failures without VPN from Russia. Both layouts called `createClient()` from `lib/supabase-client.ts` (a legitimate `@supabase/ssr` browser client) solely to run `supabase.auth.signOut()` on logout. Constructing that client is not inert: `@supabase/ssr`'s browser client auto-initializes a `GoTrueClient` that reads the session cookie set by `/api/auth/login` and can issue a direct browser → `*.supabase.co` call (session validation/refresh), bypassing Vercel entirely — even though the login POST itself was already correctly proxied. Fix: removed `createClient()` from both layouts; logout now calls a new `POST /api/auth/logout` route that runs `signOut()` server-side, matching the same pattern as `/api/auth/login`. Every remaining page in the app tree was individually swept for `createClient`/`@supabase/ssr` imports — none found. See Session Log for the full audit trail.
 
 **Residual risk, not fully closed:** `*.vercel.app` is shared infrastructure; Roskomnadzor blocking is sometimes done by IP range/SNI rather than per-site, so the app can still inherit collateral blocking unrelated to its own code. Not yet moved to a custom domain (`assistant24tech.ru` subdomain via CNAME) — recommended before relying on the `.vercel.app` URL for future demos in Russia.
+
+---
+
+## Planned Change: LLM Provider Switch — DeepSeek + GigaChat + Pseudonymization
+
+> **Decided November 2, 2026 — not built yet.** Everything in "AI Agent: Single-Model Tool-Use Architecture" below describes the *current* (Anthropic) implementation, which this section replaces once built. Reason: Anthropic is banned in Russia.
+
+### Target architecture
+
+```
+Client upload
+   │
+   ├─ Scanned PDF / image ──► GigaChat (Russia) ── vision/OCR ──► extracted text
+   │
+   └─ Structured files (xlsx/xls/csv/docx/1C txt/text PDF) ──► parseFile() ──► text
+                                   │
+                                   ▼
+             PSEUDONYMIZER (ours, runs on our servers)
+             - detects personal data, replaces with tokens
+             - token map saved per audit session in our DB (Russia, encrypted)
+             - FAIL CLOSED: if coding fails, nothing is sent
+                                   │
+                                   ▼
+             DeepSeek V4 Pro (Anthropic-compatible endpoint, coded text only)
+             - streaming reply + record_findings tool call
+                                   │
+                                   ▼
+             RESTORER (ours) — tokens → real values
+             - stream-safe (token split across chunks is buffered)
+             - also applied to record_findings tool input
+                                   │
+                                   ▼
+             Client chat UI / findings table / PDF report (real values)
+```
+
+### 1. DeepSeek integration (Anthropic-compatible endpoint)
+- Env: `ANTHROPIC_BASE_URL=https://api.deepseek.com/anthropic`, `ANTHROPIC_API_KEY=<DeepSeek key>`; model id `deepseek-v4-pro`. Consider renaming env vars to `LLM_BASE_URL`/`LLM_API_KEY`/`LLM_MODEL` and the exports `anthropic`/`SONNET_MODEL`/`SONNET_PRICING` to `llm`/`AUDIT_MODEL`/`AUDIT_MODEL_PRICING` so the next provider change is config-only.
+- Remove the leftover diagnostic `console.log` at the top of `lib/anthropic.ts`.
+- **Must be verified, not assumed:**
+  - `record_findings` tool calling + `tool_choice: auto` works through the compat endpoint, *while streaming*. One source says tool calls are supported in **non-thinking mode** — may need thinking/reasoning disabled.
+  - The Russian `AUDIT_SYSTEM_PROMPT` (tuned for Claude) still behaves: audit-purpose question first, three evidence tiers, three risk levels, no greetings, findings recorded once at the end. Compare against real client files previously audited with Claude.
+  - Duplicate-findings dedup threshold (`titleSimilarity()` in `/api/chat`) still fits DeepSeek's phrasing.
+  - Context window and rate limits (one source cites 500 concurrent requests for V4 Pro); `max_tokens` 16000 + auto-continue still valid.
+  - Pricing constants: take real numbers from DeepSeek's official pricing page (third-party sources conflict: ~$0.44–$1.74/M input).
+- **Kazakhstan proxy:** check whether DeepSeek is reachable directly from the Coolify VPS (168.222.202.222). If yes, this app no longer needs `audit.assistant24info.ru` (proxy itself stays — shared with other apps).
+
+### 2. GigaChat for images / scanned PDFs
+- Replaces the current path where `renderPDFPagesAsImages()` sends page images to Claude as vision input.
+- New small client (GigaChat API is **not** Anthropic-compatible): OAuth token (expires ~30 min → cache + refresh), file upload/image input, Russian root CA (НУЦ Минцифры) must be added to the Docker image for TLS.
+- New env vars in Coolify: GigaChat auth key / scope.
+- Output = plain text (tables as text/markdown) → goes into the pseudonymizer like any other document. GigaChat sees raw images, which is acceptable because it is hosted in Russia.
+- Test OCR accuracy on real scans (bank statements, invoices, acts), especially tables.
+
+### 3. Pseudonymizer / Restorer (reversible tokenization)
+**What to code vs keep:**
+- Code: ФИО, ИНН (individual/ИП; companies — see open question), СНИЛС, passport data, phone, email, address, full bank account and card numbers.
+- Keep untouched (audit needs them): amounts, dates, chart-of-accounts numbers (60, 51, 71…), document numbers.
+- Tokens must keep audit-relevant meaning: entity type (`[ФЛ_3]` individual, `[ИП_2]`, `[ЮЛ_7]` company), ИНН length (10 vs 12 digits), and **the first 5 digits of bank accounts** (40817 private person, 40802 ИП, 40702 company — key cash-out signal); only the remainder is coded.
+
+**Detection:**
+- Regex + checksums for fixed-format identifiers (ИНН, ОГРН, КПП, СНИЛС, р/с, БИК, cards, phones, emails) — inside the Next.js app (TypeScript).
+- Column-based for tables/1C exports: every value in known columns (Контрагент, Плательщик, Получатель, ФИО…) is coded.
+- Names in free text (e.g. "Назначение платежа: под отчёт Иванову И.И.") need Russian NER → small **Python service with Natasha** on the same Coolify server (or GigaChat as NER). Must handle Russian cases (Иванов / Иванову / Иванова → same token).
+
+**Consistency / storage:**
+- One token map per audit session, stored in our Supabase (Russia), encrypted. Same entity → same token across all files and all chat turns (the chat route re-reads every document each turn).
+- The client's own chat messages are coded too (users type names).
+
+**Restoration:**
+- Stream-safe: buffer when a token is split across chunks (`[ФЛ_` … `3]`).
+- Applied to `record_findings` tool input before `saveFindings()`.
+- Unknown/hallucinated tokens are flagged, not silently passed through.
+- Restored names may be in the wrong grammatical case — accepted as cosmetic.
+
+**Safety:** fail closed (coding error → request blocked, nothing sent to DeepSeek). Detection recall is never 100% — residual risk needs sign-off from whoever advises on 152-FZ, including whether a reversible map kept in Russia means DeepSeek receives "personal data" at all.
+
+**Related:** counterparty ЕГРЮЛ checks need real ИНН — they must run on our side, never through DeepSeek.
+
+### Open decision
+- **Scope of coding:** under 152-FZ, legal entities (ООО, АО) are not personal data; individuals (people, ИП, employees, directors) are. Option A: code individuals only — simpler, better audit quality (the model can follow "ООО Ромашка" across payments). Option B: also code company names — for commercial confidentiality, at some cost to analysis quality. **Not yet decided.**
 
 ---
 
@@ -891,6 +979,22 @@ PM2 keeps Next.js running as background process, auto-restarts on crash. Cost: f
 
 **P3 — Cleanup / deferred**
 - [ ] Chat page's own attachment-button accept attribute still missing `.txt`/`.doc` (only `.xls,.pdf` currently) — left unpatched on purpose, decide if it should match the other two upload surfaces
+
+---
+
+## Session Log — LLM Provider Switch Planned: DeepSeek V4 Pro + GigaChat + Pseudonymization (November 2, 2026)
+
+Discussion/design session only — no code changed.
+
+- **Trigger:** Anthropic is banned in Russia; the audit LLM must move off Claude Sonnet 5. User chose **DeepSeek V4 Pro**.
+- **Code review of what the switch touches:** only one LLM call site — `anthropic.messages.stream()` in `app/api/chat/route.ts` (streaming, `record_findings` tool, `tool_choice: auto`), plus vision input for scanned PDFs via `renderPDFPagesAsImages()`. Client config lives in `lib/anthropic.ts`.
+- **Decision 1 — Anthropic-compatible endpoint** (`https://api.deepseek.com/anthropic`) instead of rewriting for the OpenAI-style API. Minimal change; existing SDK/streaming/tool code kept.
+- **Decision 2 — GigaChat for images**, since DeepSeek V4 Pro image input could not be confirmed. Raw images only go to a Russia-hosted model.
+- **Decision 3 — pseudonymization first.** No client data goes to DeepSeek until the reversible coding program (code → DeepSeek → restore) is built. Sending personal data to China would otherwise be a cross-border transfer under 152-FZ.
+- **Conflict identified and resolved:** text pseudonymization can't clean scanned images, so images must not go to DeepSeek — resolved by Decision 2 (GigaChat OCR first, then the extracted text is pseudonymized).
+- **Open:** code individuals only vs also company names (see "Planned Change" section → Open decision).
+- **Unverified facts to check during the build:** DeepSeek image support, tool calling in thinking vs non-thinking mode, official pricing (third-party figures conflict), direct reachability from the Coolify VPS.
+- Full design: "Planned Change: LLM Provider Switch" section above. Build checklist: `PUNCH_LIST.md` → "NEXT SESSION".
 
 ---
 
