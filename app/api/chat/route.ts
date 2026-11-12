@@ -32,10 +32,24 @@ function UNREADABLE_IMAGE_NOTE(fileName: string, kind: string): string {
     `(PDF с текстовым слоем, XLSX, DOCX, выгрузка 1С).]`;
 }
 
+// Live progress (Nov 2026, same idea as Car-Parts session 29): each real
+// step of the pipeline is sent to the chat as {type:"step", text} so the
+// client sees what is actually happening instead of rotating fixed lines.
+type StepFn = (text: string) => void;
+
+// Russian plural for "операция" (1 операция, 2 операции, 5 операций).
+function pluralOps(n: number): string {
+  const n10 = n % 10, n100 = n % 100;
+  if (n10 === 1 && n100 !== 11) return `${n} операция`;
+  if (n10 >= 2 && n10 <= 4 && (n100 < 12 || n100 > 14)) return `${n} операции`;
+  return `${n} операций`;
+}
+
 async function getAllDocumentsContent(
   supabase: ReturnType<typeof createAdminClient>,
   sessionId: string,
-  period?: DateRange
+  period: DateRange | undefined,
+  step: StepFn
 ): Promise<DocumentsResult> {
   const images: DocumentsResult["images"] = [];
 
@@ -58,6 +72,7 @@ async function getAllDocumentsContent(
     }
 
     console.log(`[chat] Found ${docs.length} document(s) for session`);
+    step(docs.length === 1 ? "Найден 1 документ сессии" : `Найдено документов сессии: ${docs.length}`);
 
     const sections: string[] = [];
 
@@ -65,6 +80,7 @@ async function getAllDocumentsContent(
       if (!doc.storage_path) continue;
 
       console.log("[chat] Downloading:", doc.file_name, "— file_type:", doc.file_type);
+      step(`Читаю «${doc.file_name}»`);
 
       const { data: blob, error: dlErr } = await supabase
         .storage
@@ -91,6 +107,7 @@ async function getAllDocumentsContent(
         // NOT analyzed so it says so instead of guessing. Server-side OCR
         // (PUNCH_LIST Step B) will turn these into text.
         if (!LLM_SUPPORTS_IMAGES) {
+          step(`«${doc.file_name}» — изображение, пропущено: распознавание сканов ещё не подключено`);
           sections.push(UNREADABLE_IMAGE_NOTE(doc.file_name, "изображение"));
           continue;
         }
@@ -136,6 +153,7 @@ async function getAllDocumentsContent(
       if (doc.file_type === "pdf" && parsed.likelyScanned) {
         if (!LLM_SUPPORTS_IMAGES) {
           console.log("[chat]", doc.file_name, "— scanned PDF detected, OCR not available yet — not sent");
+          step(`«${doc.file_name}» — скан без текста, пропущен: распознавание сканов ещё не подключено`);
           sections.push(UNREADABLE_IMAGE_NOTE(doc.file_name, "отсканированный PDF без текстового слоя"));
           continue;
         }
@@ -160,6 +178,10 @@ async function getAllDocumentsContent(
         }
         continue;
       }
+
+      step(parsed.rowCount > 0
+        ? `«${doc.file_name}»: ${pluralOps(parsed.rowCount)}${period?.dateFrom || period?.dateTo ? " за период аудита" : ""}`
+        : `«${doc.file_name}» прочитан`);
 
       const header = [
         `Файл: ${doc.file_name}`,
@@ -246,9 +268,10 @@ async function saveFindings(
   clientId: string,
   findings: any[],
   existingTitles: string[]
-): Promise<void> {
+): Promise<{ saved: number; skipped: number }> {
+  const none = { saved: 0, skipped: 0 };
   try {
-    if (!Array.isArray(findings) || findings.length === 0) return;
+    if (!Array.isArray(findings) || findings.length === 0) return none;
 
     const validRiskLevels      = new Set(["КРИТИЧНО", "СУЩЕСТВЕННО", "НЕСУЩЕСТВЕННО"]);
     const validEvidenceStatuses = new Set(["confirmed", "risk_flag", "indirect"]);
@@ -286,11 +309,12 @@ async function saveFindings(
       acceptedTitles.push(title); // also guards against dupes within this same batch
     }
 
-    if (rows.length === 0) return;
+    if (rows.length === 0) return { saved: 0, skipped: findings.length };
 
     const { error } = await supabase.from("findings").insert(rows);
     if (error) {
       console.error("[chat] Failed to save findings:", error.message);
+      return none;
     } else {
       console.log(`[chat] Saved ${rows.length} finding(s) to DB (${findings.length - rows.length} skipped as duplicates)`);
 
@@ -305,10 +329,12 @@ async function saveFindings(
         .from("audit_sessions")
         .update({ findings_ct: (sess?.findings_ct || 0) + rows.length })
         .eq("id", sessionId);
+      return { saved: rows.length, skipped: findings.length - rows.length };
     }
   } catch (err) {
     console.error("[chat] saveFindings error:", err);
     // Never throw — findings persistence is non-critical to the chat response
+    return none;
   }
 }
 
@@ -342,71 +368,6 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // Fetch and parse ALL uploaded documents for this session.
-    // Images are handled separately — on the legacy Anthropic setup they go to Claude's native vision as
-    // image content blocks on the user message, not as text in the prompt.
-    let fileSection = "";
-    let images: { fileName: string; mediaType: string; base64: string }[] = [];
-    if (sessionId) {
-      // Look up the audit's selected period so document parsing only
-      // includes rows inside it — same period_from/period_to written by
-      // create_audit_session and read by /api/upload and
-      // /api/audit/calculate-price, so pricing and analysis always agree
-      // on which rows count (see PROJECT_STATUS.md period-filtering fix).
-      const { data: periodRow } = await supabase
-        .from("audit_sessions")
-        .select("period_from, period_to")
-        .eq("id", sessionId)
-        .single();
-
-      const period: DateRange | undefined = periodRow
-        ? { dateFrom: periodRow.period_from ?? undefined, dateTo: periodRow.period_to ?? undefined }
-        : undefined;
-
-      const docsResult = await getAllDocumentsContent(supabase, sessionId, period);
-      images = docsResult.images;
-      if (docsResult.textContent) {
-        fileSection = `\n\n=== ЗАГРУЖЕННЫЕ ФИНАНСОВЫЕ ДОКУМЕНТЫ ===\n${docsResult.textContent}\n=== КОНЕЦ ДОКУМЕНТОВ ===`;
-        console.log("[chat] File section length:", fileSection.length);
-      } else {
-        console.warn("[chat] No file content for session:", sessionId);
-      }
-      if (images.length > 0) {
-        console.log("[chat] Attaching", images.length, "image(s) for vision analysis");
-      }
-    }
-
-    // Fetch findings already saved in this session (July 2026, duplicate-
-    // findings fix). Used two ways below: (1) passed into buildAuditContext
-    // so Sonnet sees what's already been reported and can avoid re-emitting
-    // it via record_findings; (2) passed into saveFindings as a second,
-    // app-level dedup check after the response comes back — the prompt
-    // instruction alone is a request, not an enforced constraint.
-    let existingFindings: { title: string; risk_level: string; evidence_status: string }[] = [];
-    if (sessionId) {
-      const { data: existingRows, error: existingErr } = await supabase
-        .from("findings")
-        .select("title, risk_level, evidence_status")
-        .eq("session_id", sessionId)
-        .eq("status", "open");
-
-      if (existingErr) {
-        console.error("[chat] Failed to fetch existing findings for dedup:", existingErr.message);
-      } else {
-        existingFindings = existingRows || [];
-        console.log("[chat] Existing open findings in session:", existingFindings.length);
-      }
-    }
-
-    // Build system prompt: base + audit context + all file contents
-    const systemPrompt = context
-      ? `${AUDIT_SYSTEM_PROMPT}\n\n${buildAuditContext({ ...context, existingFindings })}${fileSection}`
-      : `${AUDIT_SYSTEM_PROMPT}${fileSection}`;
-
-    console.log("[chat] System prompt length:", systemPrompt.length,
-      "| Model:", AUDIT_MODEL,
-      "| Has files:", fileSection.length > 0);
-
     // ─── Streaming response ─────────────────────────────────────────────────
     // Was: buffer the full response (potentially 6 sequential Anthropic calls
     // + parsing) then return one NextResponse.json(). That meant the HTTP
@@ -427,6 +388,8 @@ export async function POST(req: NextRequest) {
     // arbitrarily long audit run forever. See PROJECT_STATUS.md.
     //
     // Event shapes sent, one per line:
+    //   { type: "step", text: string }         — a real pipeline step (checklist line)
+    //   { type: "thinking", text: string }     — a chunk of the model's real thinking
     //   { type: "delta", text: string }        — a chunk of report text
     //   { type: "done", message: string }       — final full text, stream ends
     //   { type: "error", error: string }        — something failed mid-stream
@@ -437,6 +400,18 @@ export async function POST(req: NextRequest) {
         function send(obj: Record<string, unknown>) {
           controller.enqueue(encoder.encode(JSON.stringify(obj) + "\n"));
         }
+        // A real pipeline step, shown as a checklist line in the chat.
+        const step: StepFn = (text) => send({ type: "step", text });
+
+        // The model's real thinking, streamed to the chat's collapsible
+        // «Ход рассуждений» panel. Deltas are small and frequent, so they're
+        // batched and flushed every ~300 ms. ⚠️ Once pseudonymization is
+        // built (Step C), the restorer must run on this text too.
+        let thinkingBuffer = "";
+        const flushThinking = () => {
+          if (thinkingBuffer) { send({ type: "thinking", text: thinkingBuffer }); thinkingBuffer = ""; }
+        };
+        const thinkingFlush = setInterval(flushThinking, 300);
 
         // ─── Heartbeat ──────────────────────────────────────────────────────
         // Real-world case that motivated this: a request where Claude took
@@ -466,6 +441,73 @@ export async function POST(req: NextRequest) {
         }, HEARTBEAT_INTERVAL_MS);
 
         try {
+          step("Читаю документы аудита");
+          // Fetch and parse ALL uploaded documents for this session.
+          // Images are handled separately — on the legacy Anthropic setup they go to Claude's native vision as
+          // image content blocks on the user message, not as text in the prompt.
+          let fileSection = "";
+          let images: { fileName: string; mediaType: string; base64: string }[] = [];
+          if (sessionId) {
+            // Look up the audit's selected period so document parsing only
+            // includes rows inside it — same period_from/period_to written by
+            // create_audit_session and read by /api/upload and
+            // /api/audit/calculate-price, so pricing and analysis always agree
+            // on which rows count (see PROJECT_STATUS.md period-filtering fix).
+            const { data: periodRow } = await supabase
+              .from("audit_sessions")
+              .select("period_from, period_to")
+              .eq("id", sessionId)
+              .single();
+
+            const period: DateRange | undefined = periodRow
+              ? { dateFrom: periodRow.period_from ?? undefined, dateTo: periodRow.period_to ?? undefined }
+              : undefined;
+
+            const docsResult = await getAllDocumentsContent(supabase, sessionId, period, step);
+            images = docsResult.images;
+            if (docsResult.textContent) {
+              fileSection = `\n\n=== ЗАГРУЖЕННЫЕ ФИНАНСОВЫЕ ДОКУМЕНТЫ ===\n${docsResult.textContent}\n=== КОНЕЦ ДОКУМЕНТОВ ===`;
+              console.log("[chat] File section length:", fileSection.length);
+            } else {
+              console.warn("[chat] No file content for session:", sessionId);
+            }
+            if (images.length > 0) {
+              console.log("[chat] Attaching", images.length, "image(s) for vision analysis");
+            }
+          }
+
+          // Fetch findings already saved in this session (July 2026, duplicate-
+          // findings fix). Used two ways below: (1) passed into buildAuditContext
+          // so Sonnet sees what's already been reported and can avoid re-emitting
+          // it via record_findings; (2) passed into saveFindings as a second,
+          // app-level dedup check after the response comes back — the prompt
+          // instruction alone is a request, not an enforced constraint.
+          let existingFindings: { title: string; risk_level: string; evidence_status: string }[] = [];
+          if (sessionId) {
+            const { data: existingRows, error: existingErr } = await supabase
+              .from("findings")
+              .select("title, risk_level, evidence_status")
+              .eq("session_id", sessionId)
+              .eq("status", "open");
+
+            if (existingErr) {
+              console.error("[chat] Failed to fetch existing findings for dedup:", existingErr.message);
+            } else {
+              existingFindings = existingRows || [];
+              console.log("[chat] Existing open findings in session:", existingFindings.length);
+              if (existingFindings.length > 0) step(`Учитываю ранее выявленные нарушения: ${existingFindings.length}`);
+            }
+          }
+
+          // Build system prompt: base + audit context + all file contents
+          const systemPrompt = context
+            ? `${AUDIT_SYSTEM_PROMPT}\n\n${buildAuditContext({ ...context, existingFindings })}${fileSection}`
+            : `${AUDIT_SYSTEM_PROMPT}${fileSection}`;
+
+          console.log("[chat] System prompt length:", systemPrompt.length,
+            "| Model:", AUDIT_MODEL,
+            "| Has files:", fileSection.length > 0);
+
           const MAX_OUTPUT_TOKENS = AUDIT_MAX_OUTPUT_TOKENS; // per-call cap, see lib/llm.ts (larger when thinking is enabled)
           const MAX_CONTINUATIONS = 5;     // hard safety limit on auto-continue loops
 
@@ -494,6 +536,12 @@ export async function POST(req: NextRequest) {
             }
           }
 
+          step(LLM_THINKING_ENABLED
+            ? `Передаю данные ИИ-аудитору (${AUDIT_MODEL}, глубокий анализ)`
+            : `Передаю данные ИИ-аудитору (${AUDIT_MODEL})`);
+
+          let thinkingStarted = false;
+          let textStarted = false;
           let continuations = 0;
           let stopReason: string | null = null;
           let toolFindings: any[] = [];
@@ -516,7 +564,20 @@ export async function POST(req: NextRequest) {
               ...LLM_EXTRA_PARAMS, // DeepSeek: thinking on + effort max by default — see lib/llm.ts
             });
 
+            messageStream.on("thinking", (thinkingDelta: string) => {
+              if (!thinkingStarted) {
+                thinkingStarted = true;
+                step("ИИ анализирует данные — ход рассуждений можно открыть ниже");
+              }
+              thinkingBuffer += thinkingDelta;
+            });
+
             messageStream.on("text", (textDelta: string) => {
+              if (!textStarted) {
+                textStarted = true;
+                flushThinking();
+                step("Пишу отчёт");
+              }
               chunk += textDelta;
               fullText += textDelta;
               send({ type: "delta", text: textDelta });
@@ -565,6 +626,7 @@ export async function POST(req: NextRequest) {
                 ? (finalMessage.content
                     .filter(b => b.type === "thinking" || b.type === "text") as unknown as Anthropic.Messages.ContentBlockParam[])
                 : chunk;
+              step("Отчёт длинный — продолжаю");
               workingMessages = [
                 ...workingMessages,
                 { role: "assistant", content: assistantContent },
@@ -584,7 +646,10 @@ export async function POST(req: NextRequest) {
           // Save message and persist any findings captured via tool_use, in
           // parallel — same as before, just now happens after the stream's
           // content has already reached the client instead of before.
-          await Promise.all([
+          flushThinking();
+          if (toolFindings.length > 0) step(`Фиксирую выявленные нарушения: ${toolFindings.length}`);
+
+          const [, savedResult] = await Promise.all([
             supabase.from("audit_messages").insert({
               session_id: sessionId,
               client_id:  clientId,
@@ -594,15 +659,21 @@ export async function POST(req: NextRequest) {
 
             saveFindings(supabase, sessionId, clientId, toolFindings, existingFindings.map(f => f.title)),
           ]);
+          if (savedResult.saved > 0 || savedResult.skipped > 0) {
+            step(`Сохранено новых нарушений: ${savedResult.saved}` +
+              (savedResult.skipped > 0 ? ` (повторов пропущено: ${savedResult.skipped})` : ""));
+          }
 
           send({ type: "done", message: fullText });
           clearInterval(heartbeat);
+          clearInterval(thinkingFlush);
           controller.close();
 
         } catch (err) {
           console.error("[chat] stream error:", err);
           send({ type: "error", error: "Внутренняя ошибка сервера во время генерации ответа" });
           clearInterval(heartbeat);
+          clearInterval(thinkingFlush);
           controller.close();
         }
       },

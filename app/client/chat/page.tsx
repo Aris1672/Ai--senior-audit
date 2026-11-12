@@ -4,7 +4,47 @@ import { useEffect, useRef, useState } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import ReactMarkdown from "react-markdown";
 
-interface Message { role: "user" | "assistant"; content: string; costRub?: number; fileNames?: string[]; }
+interface Message { role: "user" | "assistant"; content: string; costRub?: number; fileNames?: string[]; thinking?: string; }
+
+// One real pipeline step reported by /api/chat ({type:"step"}), shown as a
+// checklist line while the audit runs (same idea as Car-Parts session 29).
+interface ProgressStep { text: string; startedAt: number; }
+
+// Look of the live checklist: how many finished steps stay visible, and from
+// how many seconds the current step shows its own timer.
+const STEP_DONE_MAX        = 4;
+const STEP_ELAPSED_FROM_S  = 8;
+
+// Collapsible panel with the model's real thinking ({type:"thinking"}).
+// Used live under the checklist and, after the reply, under the message
+// (kept in page state only — not saved to the DB, gone after reload).
+function ThinkingPanel({ text, live }: { text: string; live: boolean }) {
+  const [open, setOpen] = useState(false);
+  const boxRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (open && live && boxRef.current) boxRef.current.scrollTop = boxRef.current.scrollHeight;
+  }, [text, open, live]);
+  if (!text) return null;
+  return (
+    <div style={{ marginTop: "8px" }}>
+      <button
+        onClick={() => setOpen(o => !o)}
+        style={{ background: "none", border: "none", padding: 0, cursor: "pointer", color: "#4d91ff", fontSize: "12px" }}
+      >
+        {open ? "▾" : "▸"} Ход рассуждений ИИ{live ? " (в реальном времени)" : ""} · {text.length.toLocaleString("ru-RU")} симв.
+      </button>
+      {open && (
+        <div ref={boxRef} style={{
+          marginTop: "6px", maxHeight: "260px", overflowY: "auto",
+          padding: "10px 12px", background: "#0a0f1c", border: "1px solid #1e2d55", borderRadius: "8px",
+          color: "#7a90c0", fontSize: "12px", lineHeight: "1.5", whiteSpace: "pre-wrap", fontFamily: "ui-monospace, monospace",
+        }}>
+          {text}
+        </div>
+      )}
+    </div>
+  );
+}
 
 // ── Markdown rendering for assistant messages ──────────────────────────────
 // Added to fix the "flat" chat feel: report headers (## Резюме аудитора),
@@ -84,9 +124,15 @@ const markdownComponents = {
 // forever, with no visible error. Every failure path here instead throws a
 // normal Error with a real message, which callers catch and always resolve
 // (loading/uploading state is guaranteed to reset — see finally blocks below).
+interface StreamHandlers {
+  onDelta:    (fullTextSoFar: string) => void;
+  onStep?:    (text: string) => void;   // real pipeline step
+  onThinking?: (delta: string) => void; // chunk of the model's real thinking
+}
+
 async function streamChat(
   payload: Record<string, unknown>,
-  onDelta: (fullTextSoFar: string) => void
+  { onDelta, onStep, onThinking }: StreamHandlers
 ): Promise<string> {
   const res = await fetch("/api/chat", {
     method: "POST",
@@ -131,7 +177,11 @@ async function streamChat(
         continue;
       }
 
-      if (evt.type === "delta") {
+      if (evt.type === "step") {
+        onStep?.(String(evt.text || ""));
+      } else if (evt.type === "thinking") {
+        onThinking?.(String(evt.text || ""));
+      } else if (evt.type === "delta") {
         fullText += evt.text;
         onDelta(fullText);
       } else if (evt.type === "done") {
@@ -160,6 +210,11 @@ export default function ChatPage() {
   // by a local timer in runStreamedReply, not tied to actual pipeline stages.
   const [statusText,     setStatusText]     = useState("");
   const [elapsedSeconds, setElapsedSeconds]  = useState(0);
+  // Real progress from the server (replaces the rotating lines once the
+  // first step arrives; the rotating lines remain only as a fallback).
+  const [steps,          setSteps]          = useState<ProgressStep[]>([]);
+  const [liveThinking,   setLiveThinking]   = useState("");
+  const [nowMs,          setNowMs]          = useState(0); // ticks every second during a reply, for per-step timers
   const [sessionId,      setSessionId]      = useState<string | null>(null);
   const [clientId,       setClientId]       = useState<string | null>(null);
   const [totalCost,      setTotalCost]      = useState(0);
@@ -315,6 +370,9 @@ export default function ChatPage() {
     let statusIdx = 0;
     setStatusText(STATUS_MESSAGES[0]);
     setElapsedSeconds(0);
+    setSteps([]);
+    setLiveThinking("");
+    let thinkingText = "";
 
     const statusInterval = setInterval(() => {
       statusIdx = (statusIdx + 1) % STATUS_MESSAGES.length;
@@ -323,6 +381,7 @@ export default function ChatPage() {
 
     const timerInterval = setInterval(() => {
       setElapsedSeconds(s => s + 1);
+      setNowMs(Date.now());
     }, 1000);
 
     let target = "";      // latest text actually received from the server
@@ -357,8 +416,17 @@ export default function ChatPage() {
     rafId = requestAnimationFrame(tick);
 
     try {
-      const finalText = await streamChat(payload, (partial) => {
-        target = partial; // tick() above picks this up on its own schedule
+      const finalText = await streamChat(payload, {
+        onDelta: (partial) => {
+          target = partial; // tick() above picks this up on its own schedule
+        },
+        onStep: (text) => {
+          setSteps(prev => [...prev, { text, startedAt: Date.now() }]);
+        },
+        onThinking: (delta) => {
+          thinkingText += delta;
+          setLiveThinking(thinkingText);
+        },
       });
       target = finalText; // authoritative final text, in case of any drift
       serverDone = true;
@@ -376,7 +444,7 @@ export default function ChatPage() {
 
       setMessages(prev => {
         const next = [...prev];
-        if (next[msgIndex]) next[msgIndex] = { ...next[msgIndex], content: finalText };
+        if (next[msgIndex]) next[msgIndex] = { ...next[msgIndex], content: finalText, thinking: thinkingText || undefined };
         return next;
       });
       return true;
@@ -401,6 +469,8 @@ export default function ChatPage() {
       cancelAnimationFrame(rafId); // safety net — normal paths above already stop ticking on their own
       clearInterval(statusInterval);
       clearInterval(timerInterval);
+      setSteps([]);
+      setLiveThinking("");
       setTypingIndex(-1); // always release — this is what previously never ran on the error path
     }
   }
@@ -638,34 +708,58 @@ export default function ChatPage() {
                     ? <ReactMarkdown components={markdownComponents}>{msg.content}</ReactMarkdown>
                     : msg.content
                 }
+                {msg.role === "assistant" && !isTyping && msg.thinking && (
+                  <ThinkingPanel text={msg.thinking} live={false} />
+                )}
               </div>
             </div>
           );
         })}
 
-        {(loading || uploading) && (
-          <div style={{ display: "flex", alignItems: "center", gap: "10px", padding: "8px 0" }}>
+        {(loading || uploading) && (() => {
+          const now      = nowMs;
+          const done     = steps.slice(0, -1).slice(-STEP_DONE_MAX);
+          const current  = steps[steps.length - 1];
+          const stepSecs = current && now > current.startedAt ? Math.floor((now - current.startedAt) / 1000) : 0;
+          const dots = (
             <div style={{ display: "flex", gap: "6px" }}>
               {[0, 1, 2].map(i => (
                 <div key={i} style={{ width: "8px", height: "8px", borderRadius: "50%", background: "#1565e8", animation: `pulse 1.2s ${i * 0.2}s infinite` }} />
               ))}
             </div>
-            {uploading && <span style={{ fontSize: "12px", color: "#7a90c0" }}>Загрузка файла...</span>}
-            {/* Rotating status + elapsed timer — only during the actual chat
-                request (not file upload), and only before real content has
-                started streaming in (once text appears, that IS the status). */}
-            {loading && !uploading && (
-              <span style={{ fontSize: "12px", color: "#7a90c0" }}>
-                {statusText}
-                {elapsedSeconds > 0 && (
-                  <span style={{ marginLeft: "8px", color: "#4d6a9e" }}>
-                    {Math.floor(elapsedSeconds / 60)}:{String(elapsedSeconds % 60).padStart(2, "0")}
+          );
+          const clock = elapsedSeconds > 0 && (
+            <span style={{ marginLeft: "8px", color: "#4d6a9e" }}>
+              {Math.floor(elapsedSeconds / 60)}:{String(elapsedSeconds % 60).padStart(2, "0")}
+            </span>
+          );
+          return (
+            <div style={{ padding: "8px 0" }}>
+              {/* Finished real steps (last few), each with a green ✓ */}
+              {loading && !uploading && done.map((st, idx) => (
+                <div key={idx} style={{ fontSize: "12px", color: "#5f7aa8", marginBottom: "4px", display: "flex", gap: "8px" }}>
+                  <span style={{ color: "#2fbf71" }}>✓</span><span>{st.text}</span>
+                </div>
+              ))}
+              <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+                {dots}
+                {uploading && <span style={{ fontSize: "12px", color: "#7a90c0" }}>Загрузка файла...</span>}
+                {/* Current real step (or the old rotating lines as a fallback
+                    until the server reports its first step) + total timer. */}
+                {loading && !uploading && (
+                  <span style={{ fontSize: "12px", color: "#7a90c0" }}>
+                    {current ? current.text : statusText}
+                    {current && stepSecs >= STEP_ELAPSED_FROM_S && (
+                      <span style={{ color: "#4d6a9e" }}> · {stepSecs} с</span>
+                    )}
+                    {clock}
                   </span>
                 )}
-              </span>
-            )}
-          </div>
-        )}
+              </div>
+              {loading && !uploading && <ThinkingPanel text={liveThinking} live={true} />}
+            </div>
+          );
+        })()}
         <div ref={bottomRef} />
       </div>
 
