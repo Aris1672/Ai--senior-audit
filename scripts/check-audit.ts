@@ -103,6 +103,8 @@ const CHECKS: { id: string; label: string; required: boolean; test: (r: RunResul
   { id: "no-injury", required: false, label: "injury-insurance (травматизм) contribution not presented as owed / to be checked for an ИП without employees",
     // A sentence saying it is NOT owed is correct and allowed.
     test: r => !r.text.split(/[\n.;]/).some(line => /травматизм/i.test(line) && !/не (уплачива|плат|возника|начисля|примен)|отсутству/i.test(line)) },
+  { id: "tax-date", required: false, label: "АУСН payment deadline not given as the 28th (it is the 25th)",
+    test: r => !/28\.(12\.2025|01\.2026)|до 28[\s-]?(го)? (числа|декабря|января)/i.test(r.text) },
   { id: "no-greeting", required: false, label: "no greeting / self-introduction",
     test: r => !/^\s*(здравствуйте|добрый день|привет|меня зовут)/i.test(r.text) },
   { id: "size", required: false, label: "3–7 findings (no padding)",
