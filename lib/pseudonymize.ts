@@ -148,8 +148,8 @@ export class Pseudonymizer {
       .replace(/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g, m => this.idToken("EMAIL", m, m.toLowerCase()))
       // 20-digit accounts of individuals / ИП (keep the 5-digit type prefix)
       .replace(/(?<!\d)\d{20}(?!\d)/g, m => PERSON_ACCOUNT.test(m) ? this.idToken("СЧЕТ", m, m, `:${m.slice(0, 5)}`) : m)
-      // masked cards: 2204********1234, 427638******1234
-      .replace(/(?<!\d)\d{4,6}\*{4,12}\d{4}(?!\d)/g, m => this.idToken("КАРТА", m))
+      // masked cards: 2204********1234, 427638******1234, 220015++++++0023, 4276XXXXXXXX1234
+      .replace(/(?<!\d)\d{4,6}[*+xXхХ•.]{4,12}\d{4}(?!\d)/g, m => this.idToken("КАРТА", m))
       // full card numbers (16 digits, optional separators)
       .replace(/(?<!\d)(?:\d{4}[ -]?){3}\d{4}(?!\d)/g, m => this.idToken("КАРТА", m, digits(m)))
       // ОГРНИП (15 digits, starts with 3)
@@ -218,6 +218,11 @@ export class Pseudonymizer {
       else if (!STOP.has(low(w))) surname ??= w;
     }
     if (!surname) return;   // a lone first name / patronymic is not coded
+    // The service also returns ordinary words now and then ("Контрагент",
+    // "Верификационный" on a real bank report). A word on its own is taken as
+    // a surname only if it has a surname shape; with a first name, patronymic
+    // or initials beside it, any word is accepted.
+    if (!name && !patr && initials.length === 0 && !looksLikeSurname(surname)) return;
     const cap = (w: string) => (w === w.toUpperCase() ? w : w[0].toUpperCase() + w.slice(1));
     this.addPerson(cap(surname), name && cap(name), patr && cap(patr), initials[0], initials[1]);
   }
@@ -271,8 +276,13 @@ export class Pseudonymizer {
       let out = "", pos = 0, m: RegExpExecArray | null;
       while ((m = re.exec(text))) {
         if (!/^[А-ЯЁ]/.test(m[0])) continue;                       // names are capitalised
-        const lb = text.lastIndexOf("[", m.index);                 // never touch an existing token
-        if (lb !== -1 && m.index - lb < 24 && text.indexOf("]", lb) >= m.index) continue;
+        // Never touch the inside of one of OUR codes — but ordinary brackets
+        // in the source text ("[Иванова Анна +7…]") are not codes.
+        const lb = text.lastIndexOf("[", m.index);
+        if (lb !== -1 && m.index - lb < 24) {
+          const own = /^\[(?:ФЛ|ИНН_ФЛ|ОГРНИП|СЧЕТ|КАРТА|СНИЛС|ПАСПОРТ|ТЕЛ|EMAIL)_\d+(?::\d{5})?\]/.exec(text.slice(lb, lb + 24));
+          if (own && m.index < lb + own[0].length) continue;
+        }
         let start = m.index, end = m.index + m[0].length, initial: string | undefined;
         const before = text.slice(Math.max(pos, start - 60), start);
         const rest = text.slice(end, end + 80);

@@ -136,7 +136,8 @@ async function main() {
   // ── 3. Names from the name-detection service (Natasha) ─────────────────────
   // Spans exactly as the service returns them (roles are assigned by our code).
   const pn = new Pseudonymizer();
-  for (const span of ["Сидоров", "Кузнецова", "Кот В.П.", "Шевчук", "Гусь Марине", "Сидоров Петр", "Марина", "Сергеевна"]) pn.learnDetectedName(span);
+  // "Контрагент" / "Верификационный" are real false positives the service returned on a bank report.
+  for (const span of ["Сидоров", "Кузнецова", "Кот В.П.", "Шевчук", "Гусь Марине", "Сидоров Петр", "Марина", "Сергеевна", "Контрагент", "Верификационный"]) pn.learnDetectedName(span);
   const free = [
     'debit;01.02.2025;50000;ООО "Ромашка";7701234567;40702810900000012345;возврат займа Сидорову по договору 5',
     "debit;02.02.2025;30000;ВЫПЛАТА КУЗНЕЦОВОЙ ПОД ОТЧЕТ БЕЗ НДС",
@@ -147,6 +148,12 @@ async function main() {
   assert.equal(freeCoded[1], "debit;02.02.2025;30000;ВЫПЛАТА [ФЛ_2] ПОД ОТЧЕТ БЕЗ НДС");
   assert.equal(freeCoded[2], "Аванс [ФЛ_3]; дивиденды учредителю [ФЛ_4]; оплата [ФЛ_5]; позже [ФЛ_1] вернул 100, а [ФЛ_2] отчиталась.");
   assert.equal(pn.stats.persons, 5, "a lone first name / patronymic is not a person; Кот = Коту");
+
+  // Shapes found in a real ООО bank report (Nov 12, 2026): a name inside the
+  // source text's own square brackets, and a card masked with plus signs.
+  const pb = new Pseudonymizer();
+  const [bracketed] = pb.encodeRequest(["Верификационный платеж legium.io/terms [ПЕТРОВА АННА СЕРГЕЕВНА +79650001122]. Перевод с карты 220015++++++0023 157710 RU\\CARD2CARD;Контрагент"]);
+  assert.equal(bracketed, "Верификационный платеж legium.io/terms [[ФЛ_1] [ТЕЛ_1]]. Перевод с карты [КАРТА_1] 157710 RU\\CARD2CARD;Контрагент");
   assert.equal(pn.restore("Заём [ФЛ_1], аванс [ФЛ_3]"), "Заём Сидоров Петр, аванс Кот В.П.", "restored in the nominative form the service gave");
 
   // Service configured but unreachable → the audit is blocked, nothing is sent
