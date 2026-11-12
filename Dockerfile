@@ -37,6 +37,12 @@ COPY --from=builder /app/package.json ./package.json
 COPY --from=builder /app/.next ./.next
 COPY --from=builder /app/node_modules ./node_modules
 
+# Maintenance scripts (npm run check:llm) need their TypeScript sources at
+# runtime — run from the Coolify terminal, so they're tested from the same
+# server/network the app uses. Not used by `next start`.
+COPY --from=builder /app/lib ./lib
+COPY --from=builder /app/scripts ./scripts
+
 USER nextjs
 
 EXPOSE 3000
