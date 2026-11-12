@@ -47,7 +47,8 @@ Decided November 2, 2026. Build in this order. **Rule: no real client data is se
 - [x] ~~Update pricing constants.~~ **Done Nov 12** — $1.32 / $3.96 per 1M (peak). Re-check the official page once before billing clients on token cost.
 - [x] **Images never sent to DeepSeek** (no image input on `deepseek-v4-pro`) — done Nov 12; model gets a "not analyzed" note instead.
 - [ ] **Run `npm run check:llm`** locally (key in `.env.local`) — real prompt + tool + streaming on synthetic data. Covers the two items below.
-- [ ] Verify `record_findings` tool calling works while streaming through the compat endpoint. Thinking is **disabled by default** (DeepSeek docs: thinking-mode tool continuations need thinking blocks passed back) — optionally try `LLM_THINKING=enabled` in the check script and compare report quality.
+- [x] **Thinking ON at effort `max` by default (Nov 12, user decision — max quality).** Continuation passes thinking blocks back.
+- [ ] Verify `record_findings` tool calling works while streaming through the compat endpoint. **Now with thinking on** — test in a fresh session (old sessions already hold their findings). Thinking is **disabled by default** (DeepSeek docs: thinking-mode tool continuations need thinking blocks passed back) — optionally try `LLM_THINKING=enabled` in the check script and compare report quality.
 - [ ] Verify context window / rate limits fit current usage (`max_tokens` 16000 + auto-continue).
 - [ ] Prompt regression test with fake data shaped like real client files: audit-purpose question first, evidence tiers, risk levels, no greetings, one `record_findings` call at the end. Tune `AUDIT_SYSTEM_PROMPT` if needed.
 - [ ] Re-check duplicate-findings dedup threshold (`titleSimilarity()` in `/api/chat`) against DeepSeek's wording.

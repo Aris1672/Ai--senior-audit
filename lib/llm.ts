@@ -14,7 +14,8 @@ import { VAT_STATUS_LABELS } from "./audit-constants";
 //   LLM_API_KEY set     → DeepSeek
 //     LLM_BASE_URL       default https://api.deepseek.com/anthropic
 //     LLM_MODEL          default deepseek-v4-pro
-//     LLM_THINKING       "enabled" | "disabled" (default disabled, see below)
+//     LLM_THINKING       "enabled" | "disabled" (default enabled, see below)
+//     LLM_EFFORT         "low" | "high" | "max" (default max)
 //
 //   LLM_API_KEY not set → legacy Anthropic setup, unchanged
 //     ANTHROPIC_API_KEY, ANTHROPIC_BASE_URL (Kazakhstan proxy), claude-sonnet-5
@@ -50,26 +51,38 @@ export const AUDIT_MODEL = LLM_PROVIDER === "deepseek"
 // to DeepSeek at all; they wait for the server-side OCR service (Step B).
 export const LLM_SUPPORTS_IMAGES = LLM_PROVIDER === "anthropic";
 
-// Thinking mode. DeepSeek's compat endpoint accepts thinking enabled/disabled.
-// Default is DISABLED: in thinking mode, DeepSeek requires the assistant's
-// thinking blocks to be passed back on tool-call continuations, and
-// tool_choice {type:"tool"} returns 400 — non-thinking is the documented-safe
-// mode for our record_findings flow. Set LLM_THINKING=enabled to try
-// deeper reasoning (budget_tokens is ignored by DeepSeek; thinking tokens are
-// billed as output and count against max_tokens, hence the larger cap).
+// Thinking mode + effort — ON at MAXIMUM by default (decided Nov 12, 2026:
+// audit quality comes first). DeepSeek's thinking-mode guide: effort is set
+// via output_config.effort ("low" | "high" | "max"); for deepseek-v4-pro,
+// "max" maps to max. budget_tokens is ignored by DeepSeek (the SDK type just
+// requires it). Thinking tokens are billed as output and count against
+// max_tokens, hence the larger cap below.
+//   LLM_THINKING=disabled → turn thinking off (faster/cheaper, weaker)
+//   LLM_EFFORT=high       → lower effort (default max)
+// Thinking-mode rules that the chat route follows: tool_choice must stay
+// "auto" (type:"tool" returns 400), and when continuing a cut-off answer the
+// assistant's full content incl. thinking blocks must be passed back.
 export const LLM_THINKING_ENABLED =
-  LLM_PROVIDER === "deepseek" && process.env.LLM_THINKING === "enabled";
+  LLM_PROVIDER === "deepseek" && process.env.LLM_THINKING !== "disabled";
 
-export const LLM_EXTRA_PARAMS: { thinking?: Anthropic.Messages.ThinkingConfigParam } =
+const effortEnv = process.env.LLM_EFFORT;
+export const LLM_EFFORT: "low" | "high" | "max" =
+  effortEnv === "low" || effortEnv === "high" ? effortEnv : "max";
+
+export const LLM_EXTRA_PARAMS: {
+  thinking?: Anthropic.Messages.ThinkingConfigParam;
+  output_config?: Anthropic.Messages.OutputConfig;
+} =
   LLM_PROVIDER === "deepseek"
-    ? {
-        thinking: LLM_THINKING_ENABLED
-          ? { type: "enabled", budget_tokens: 8000 }
-          : { type: "disabled" },
-      }
+    ? LLM_THINKING_ENABLED
+      ? { thinking: { type: "enabled", budget_tokens: 32000 }, output_config: { effort: LLM_EFFORT } }
+      : { thinking: { type: "disabled" } }
     : {};
 
-export const AUDIT_MAX_OUTPUT_TOKENS = LLM_THINKING_ENABLED ? 32000 : 16000;
+// Per-call output cap. With thinking at max effort DeepSeek V4 Pro can spend
+// tens of thousands of tokens reasoning before writing the report (max
+// output is 384K); the route auto-continues on max_tokens anyway.
+export const AUDIT_MAX_OUTPUT_TOKENS = LLM_THINKING_ENABLED ? 64000 : 16000;
 
 // ─── Token cost constants (per 1K tokens, USD) ───────────────────────────────
 // DeepSeek V4 Pro: $1.32 / 1M input (cache miss), $3.96 / 1M output at PEAK
@@ -80,7 +93,7 @@ export const AUDIT_MODEL_PRICING = LLM_PROVIDER === "deepseek"
   ? { inputPer1K: 0.00132, outputPer1K: 0.00396 }
   : { inputPer1K: 0.003,   outputPer1K: 0.015 };   // Claude Sonnet 5, $3 / $15 per 1M
 
-console.log(`[llm] provider=${LLM_PROVIDER} model=${AUDIT_MODEL} thinking=${LLM_THINKING_ENABLED ? "enabled" : "disabled"}`);
+console.log(`[llm] provider=${LLM_PROVIDER} model=${AUDIT_MODEL} thinking=${LLM_THINKING_ENABLED ? `enabled effort=${LLM_EFFORT}` : "disabled"}`);
 
 // ─── System prompt ────────────────────────────────────────────────────────────
 export const AUDIT_SYSTEM_PROMPT = `

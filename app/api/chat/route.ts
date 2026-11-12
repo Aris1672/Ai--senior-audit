@@ -1,7 +1,8 @@
 import {
   llm, AUDIT_SYSTEM_PROMPT, buildAuditContext, AUDIT_MODEL, FINDINGS_TOOL,
-  LLM_SUPPORTS_IMAGES, LLM_EXTRA_PARAMS, AUDIT_MAX_OUTPUT_TOKENS,
+  LLM_SUPPORTS_IMAGES, LLM_EXTRA_PARAMS, AUDIT_MAX_OUTPUT_TOKENS, LLM_THINKING_ENABLED,
 } from "@/lib/llm";
+import type Anthropic from "@anthropic-ai/sdk";
 import { createAdminClient } from "@/lib/supabase-server";
 import { parseFile, renderPDFPagesAsImages, type DateRange } from "@/lib/file-parser";
 import { NextRequest, NextResponse } from "next/server";
@@ -512,7 +513,7 @@ export async function POST(req: NextRequest) {
               messages:    workingMessages,
               tools:       [FINDINGS_TOOL],
               tool_choice: { type: "auto" },
-              ...LLM_EXTRA_PARAMS, // DeepSeek: thinking enabled/disabled — see lib/llm.ts
+              ...LLM_EXTRA_PARAMS, // DeepSeek: thinking on + effort max by default — see lib/llm.ts
             });
 
             messageStream.on("text", (textDelta: string) => {
@@ -555,9 +556,18 @@ export async function POST(req: NextRequest) {
             if (stopReason === "max_tokens" && continuations < MAX_CONTINUATIONS) {
               // Feed the partial response back as assistant history and ask
               // the model to continue exactly where it left off.
+              // With thinking enabled (DeepSeek), the assistant's FULL content
+              // must be passed back — thinking blocks included — or DeepSeek
+              // may reject the next call. tool_use blocks are dropped: an
+              // unanswered tool_use without a matching tool_result is a 400,
+              // and findings were already captured above.
+              const assistantContent = LLM_THINKING_ENABLED
+                ? (finalMessage.content
+                    .filter(b => b.type === "thinking" || b.type === "text") as unknown as Anthropic.Messages.ContentBlockParam[])
+                : chunk;
               workingMessages = [
                 ...workingMessages,
-                { role: "assistant", content: chunk },
+                { role: "assistant", content: assistantContent },
                 { role: "user", content: "Продолжи с того места, где остановился. Не повторяй уже написанное." },
               ];
               continuations++;
