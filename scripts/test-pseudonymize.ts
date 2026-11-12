@@ -7,6 +7,10 @@
  * would have been sent, and that payload is searched for personal values.
  */
 process.env.LLM_API_KEY ??= "test-key-not-used";
+// The test exercises the full draft + review flow with coding on, whatever
+// the server's own settings are (e.g. LLM_REVIEW=disabled in Coolify).
+delete process.env.LLM_REVIEW;
+delete process.env.LLM_PSEUDONYMIZE;
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
