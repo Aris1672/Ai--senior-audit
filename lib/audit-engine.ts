@@ -25,8 +25,9 @@
 import type Anthropic from "@anthropic-ai/sdk";
 import {
   llm, AUDIT_MODEL, FINDINGS_TOOL, LLM_EXTRA_PARAMS, AUDIT_MAX_OUTPUT_TOKENS,
-  LLM_THINKING_ENABLED, AUDIT_REVIEW_ENABLED, buildReviewRequest,
+  LLM_THINKING_ENABLED, AUDIT_REVIEW_ENABLED, buildReviewRequest, AUDIT_SYSTEM_PROMPT,
 } from "./llm";
+import { Pseudonymizer, PseudonymizationError, PSEUDONYM_NOTE } from "./pseudonymize";
 
 type Msg = Anthropic.Messages.MessageParam;
 
@@ -151,8 +152,62 @@ function withReviewRequest(messages: Msg[], request: string): Msg[] {
   return out;
 }
 
-// ── One audit turn ───────────────────────────────────────────────────────────
+// ── One audit turn, with pseudonymization at the boundary ────────────────────
+// With a Pseudonymizer, the system prompt's dynamic part (audit context +
+// documents) and every message text are coded BEFORE any call; both passes
+// work entirely on coded text; everything coming back (answer text, thinking,
+// draft, findings) is restored before it reaches the caller. If coding fails
+// or a known personal value is still present, PseudonymizationError is thrown
+// and nothing is sent (fail closed).
 export async function runAuditTurn(
+  system: string,
+  messages: Msg[],
+  cb: AuditCallbacks,
+  pz?: Pseudonymizer,
+): Promise<AuditTurnResult> {
+  if (!pz) return runAuditTurnRaw(system, messages, cb);
+
+  // The static prompt is ours and has no personal data — it is not coded
+  // (coding it could replace ordinary words that look like a client's surname).
+  const hasStatic = system.startsWith(AUDIT_SYSTEM_PROMPT);
+  const dynamic = hasStatic ? system.slice(AUDIT_SYSTEM_PROMPT.length) : system;
+  const texts: string[] = [dynamic];
+  const slots: { m: number; b: number | null }[] = [];
+  messages.forEach((msg, m) => {
+    if (typeof msg.content === "string") { texts.push(msg.content); slots.push({ m, b: null }); }
+    else msg.content.forEach((block, b) => {
+      if (block.type === "text") { texts.push(block.text); slots.push({ m, b }); }
+      // Anything else (images, files) cannot be coded — never send it coded-mode.
+      else throw new PseudonymizationError(`content block "${block.type}" cannot be pseudonymized`);
+    });
+  });
+
+  const coded = pz.encodeRequest(texts);   // throws PseudonymizationError → nothing sent
+  const codedSystem = `${hasStatic ? AUDIT_SYSTEM_PROMPT : ""}${PSEUDONYM_NOTE}${coded[0]}`;
+  const codedMessages: Msg[] = messages.map(msg => ({ ...msg, content: typeof msg.content === "string" ? msg.content : [...msg.content] })) as Msg[];
+  slots.forEach((slot, i) => {
+    const text = coded[i + 1];
+    if (slot.b === null) codedMessages[slot.m] = { ...codedMessages[slot.m], content: text };
+    else (codedMessages[slot.m].content as Anthropic.Messages.TextBlockParam[])[slot.b] = { type: "text", text };
+  });
+  console.log(`[audit] pseudonymized — persons: ${pz.stats.persons}, identifiers: ${pz.stats.identifiers}`);
+
+  const textOut = pz.stream(cb.text), thinkOut = pz.stream(cb.thinking);
+  const res = await runAuditTurnRaw(codedSystem, codedMessages, {
+    step:     t => { thinkOut.flush(); cb.step(t); },
+    thinking: d => thinkOut.push(d),
+    text:     d => textOut.push(d),
+    reset:    () => { textOut.clear(); cb.reset(); },
+  });
+  textOut.flush(); thinkOut.flush();
+  if (pz.unknownTokens > 0) console.warn(`[audit] model used ${pz.unknownTokens} unknown code(s) — left as is`);
+
+  const restorePass = (p: PassResult): PassResult => ({ ...p, text: pz.restore(p.text), findings: pz.restoreDeep(p.findings) });
+  return { ...res, text: pz.restore(res.text), findings: pz.restoreDeep(res.findings),
+    draft: res.draft ? restorePass(res.draft) : undefined };
+}
+
+async function runAuditTurnRaw(
   system: string,
   messages: Msg[],
   cb: AuditCallbacks,

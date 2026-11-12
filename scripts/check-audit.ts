@@ -61,7 +61,8 @@ const blob = (f: Finding) => `${f.title ?? ""} ${f.description ?? ""} ${f.recomm
 // required: false → reported, but only as a warning (style / softer signals)
 const CHECKS: { id: string; label: string; required: boolean; test: (r: RunResult) => boolean }[] = [
   { id: "review", required: true, label: "quality review completed (final report is the reviewed one)",
-    test: r => r.reviewed === "done" },
+    // when the review is switched off (LLM_REVIEW=disabled) "skipped" is the expected result
+    test: r => r.reviewed === (process.env.LLM_REVIEW === "disabled" ? "skipped" : "done") },
   { id: "enums", required: true, label: "all findings have valid risk level and status",
     test: r => r.findings.length > 0 && r.findings.every(f =>
       ["КРИТИЧНО", "СУЩЕСТВЕННО", "НЕСУЩЕСТВЕННО"].includes(String(f.risk_level)) &&
@@ -92,6 +93,9 @@ const CHECKS: { id: string; label: string; required: boolean; test: (r: RunResul
     test: r => hasNumber(r.text, "54171", "37") || hasNumber(r.text, "54133", "04") },
   { id: "ledger", required: true, label: "tax-account ledger used: net 1 607,64 or full return of 2 376 stated in the report",
     test: r => hasNumber(r.text, "1607", "64") || hasNumber(r.text, "2376") },
+  { id: "restored", required: true, label: "no codes left in the report or findings; the client's name is restored",
+    test: r => process.env.LLM_PSEUDONYMIZE === "disabled" ||
+      (!/\[(ФЛ|ИНН_ФЛ|СЧ[ЕЁ]Т|КАРТА|ОГРНИП|ТЕЛ|EMAIL)_\d/.test(r.text + JSON.stringify(r.findings)) && /Тестов/.test(r.text)) },
   { id: "sections", required: true, label: "report has «Резюме», «Проверено без замечаний», «Границы проверки»",
     test: r => /резюме/i.test(r.text) && /проверено без замечаний/i.test(r.text) && /границы проверки/i.test(r.text) },
   { id: "reserve-seen", required: false, label: "the 1 137 reserve transfer is mentioned (reconciliation shown)",
@@ -117,7 +121,8 @@ async function main() {
     process.exit(1);
   }
   const { AUDIT_MODEL, AUDIT_SYSTEM_PROMPT, buildAuditContext, LLM_EXTRA_PARAMS,
-          AUDIT_MODEL_PRICING, AUDIT_REVIEW_ENABLED } = await import("../lib/llm");
+          AUDIT_MODEL_PRICING, AUDIT_REVIEW_ENABLED, LLM_PSEUDONYMIZE_ENABLED } = await import("../lib/llm");
+  const { Pseudonymizer } = await import("../lib/pseudonymize");
   const { runAuditTurn } = await import("../lib/audit-engine");
   const { parseFile } = await import("../lib/file-parser");
 
@@ -142,7 +147,7 @@ async function main() {
     { role: "user" as const, content: "Налоговые риски и подготовка к банковской проверке." },
   ];
 
-  console.log(`Model: ${AUDIT_MODEL} | params: ${JSON.stringify(LLM_EXTRA_PARAMS)} | review: ${AUDIT_REVIEW_ENABLED ? "on" : "off"} | operations: ${parsed.rowCount} | runs: ${RUNS}\n`);
+  console.log(`Model: ${AUDIT_MODEL} | params: ${JSON.stringify(LLM_EXTRA_PARAMS)} | review: ${AUDIT_REVIEW_ENABLED ? "on" : "off"} | pseudonymize: ${LLM_PSEUDONYMIZE_ENABLED ? "on" : "off"} | operations: ${parsed.rowCount} | runs: ${RUNS}\n`);
   const outDir = fs.mkdtempSync(path.join(os.tmpdir(), "check-audit-"));
   const passed: Record<string, number> = Object.fromEntries(CHECKS.map(c => [c.id, 0]));
   let completed = 0, totalCost = 0;
@@ -158,7 +163,7 @@ async function main() {
       const res = await runAuditTurn(system, messages, {
         step: () => {}, text: () => {}, reset: () => {},
         thinking: (d: string) => { thinkingChars += d.length; },
-      });
+      }, LLM_PSEUDONYMIZE_ENABLED ? new Pseudonymizer() : undefined);
       r = { text: res.text, findings: res.findings as Finding[], reviewed: res.reviewed,
             draftFindings: (res.draft?.findings ?? []) as Finding[], thinkingChars,
             seconds: Math.round((Date.now() - t0) / 1000), tokensIn: res.tokensIn, tokensOut: res.tokensOut };

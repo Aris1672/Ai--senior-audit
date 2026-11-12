@@ -61,6 +61,7 @@ Decided November 2, 2026. Build in this order. **Rule: no real client data is se
 - [ ] Test OCR accuracy on real scans (bank statements, invoices, acts), especially tables.
 
 **Step C — Pseudonymizer / Restorer (blocks real client use)**
+> **v1 built Nov 12, 2026** (`lib/pseudonymize.ts`, `npm run test:pii`) — see PROJECT_STATUS top entry. Done: fixed-format identifiers, names by shape rules, chat messages coded, stream-safe restorer incl. findings and thinking, fail-closed, outbound leak-scan test. **Changed:** no DB token map (per-request coding instead — nothing reversible stored). **Still open from the list below:** Natasha NER service for bare surnames in free text; column-based coding for xlsx/csv; real-data test on Coolify (`check:audit` coded run first); legal sign-off.
 - [ ] DB: per-session token map table (encrypted), new tracked migration file.
 - [ ] Coder for fixed-format identifiers (TypeScript, regex + checksums): ИНН, ОГРН, КПП, СНИЛС, passport, р/с, БИК, card numbers, phones, emails. Keep the first 5 digits of bank accounts (40817 / 40802 / 40702 — audit signal) and keep ИНН length type (10 vs 12).
 - [ ] Column-based coding for tables / 1C exports (Контрагент, Плательщик, Получатель, ФИО… columns).

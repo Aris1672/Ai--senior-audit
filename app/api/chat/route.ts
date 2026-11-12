@@ -1,7 +1,8 @@
 import {
-  AUDIT_SYSTEM_PROMPT, buildAuditContext, AUDIT_MODEL, LLM_SUPPORTS_IMAGES,
+  AUDIT_SYSTEM_PROMPT, buildAuditContext, AUDIT_MODEL, LLM_SUPPORTS_IMAGES, LLM_PSEUDONYMIZE_ENABLED,
 } from "@/lib/llm";
 import { runAuditTurn } from "@/lib/audit-engine";
+import { Pseudonymizer, PseudonymizationError } from "@/lib/pseudonymize";
 import { createAdminClient } from "@/lib/supabase-server";
 import { parseFile, renderPDFPagesAsImages, type DateRange } from "@/lib/file-parser";
 import { NextRequest, NextResponse } from "next/server";
@@ -536,12 +537,13 @@ export async function POST(req: NextRequest) {
           // Draft pass + quality-review pass — see lib/audit-engine.ts. Only
           // the final (reviewed) text reaches the client as the answer; the
           // draft and all reasoning go to the «Ход рассуждений» panel.
+          if (LLM_PSEUDONYMIZE_ENABLED) step("Обезличиваю персональные данные перед отправкой");
           const result = await runAuditTurn(systemPrompt, workingMessages, {
             step,
             thinking: d => { thinkingBuffer += d; },
             text:     d => { flushThinking(); fullText += d; send({ type: "delta", text: d }); },
             reset:    () => { fullText = ""; send({ type: "reset" }); },
-          });
+          }, LLM_PSEUDONYMIZE_ENABLED ? new Pseudonymizer() : undefined);
           fullText = result.text; // authoritative
           const toolFindings = result.findings as any[];
           console.log("[chat] audit turn done — reviewed:", result.reviewed,
@@ -571,8 +573,15 @@ export async function POST(req: NextRequest) {
           controller.close();
 
         } catch (err) {
-          console.error("[chat] stream error:", err);
-          send({ type: "error", error: "Внутренняя ошибка сервера во время генерации ответа" });
+          if (err instanceof PseudonymizationError) {
+            // Fail closed: nothing was sent to the LLM. The message never
+            // contains personal data (see lib/pseudonymize.ts).
+            console.error("[chat] pseudonymization failed — request NOT sent:", err.message);
+            send({ type: "error", error: "Не удалось обезличить персональные данные в документах, поэтому запрос не был отправлен на анализ. Данные никуда не переданы. Обратитесь в поддержку." });
+          } else {
+            console.error("[chat] stream error:", err);
+            send({ type: "error", error: "Внутренняя ошибка сервера во время генерации ответа" });
+          }
           clearInterval(heartbeat);
           clearInterval(thinkingFlush);
           controller.close();

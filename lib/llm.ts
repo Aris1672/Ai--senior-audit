@@ -90,6 +90,14 @@ export const AUDIT_MAX_OUTPUT_TOKENS = LLM_THINKING_ENABLED ? 64000 : 16000;
 // cost per audit). LLM_REVIEW=disabled turns it off.
 export const AUDIT_REVIEW_ENABLED = process.env.LLM_REVIEW !== "disabled";
 
+// Pseudonymization at the LLM boundary (lib/pseudonymize.ts, Step C): personal
+// data of individuals is replaced by codes before anything is sent to
+// DeepSeek and put back in the reply. ON by default for DeepSeek and
+// fail-closed. LLM_PSEUDONYMIZE=disabled turns it off — only for tests with
+// synthetic data.
+export const LLM_PSEUDONYMIZE_ENABLED =
+  LLM_PROVIDER === "deepseek" && process.env.LLM_PSEUDONYMIZE !== "disabled";
+
 // ─── Token cost constants (per 1K tokens, USD) ───────────────────────────────
 // DeepSeek V4 Pro: $1.32 / 1M input (cache miss), $3.96 / 1M output at PEAK
 // rates; off-peak is half. Peak is used here as the conservative figure.
@@ -99,7 +107,7 @@ export const AUDIT_MODEL_PRICING = LLM_PROVIDER === "deepseek"
   ? { inputPer1K: 0.00132, outputPer1K: 0.00396 }
   : { inputPer1K: 0.003,   outputPer1K: 0.015 };   // Claude Sonnet 5, $3 / $15 per 1M
 
-console.log(`[llm] provider=${LLM_PROVIDER} model=${AUDIT_MODEL} thinking=${LLM_THINKING_ENABLED ? `enabled effort=${LLM_EFFORT}` : "disabled"} review=${AUDIT_REVIEW_ENABLED ? "on" : "off"}`);
+console.log(`[llm] provider=${LLM_PROVIDER} model=${AUDIT_MODEL} thinking=${LLM_THINKING_ENABLED ? `enabled effort=${LLM_EFFORT}` : "disabled"} review=${AUDIT_REVIEW_ENABLED ? "on" : "off"} pseudonymize=${LLM_PSEUDONYMIZE_ENABLED ? "on" : "off"}`);
 
 // ─── System prompt ───
 // Revised Nov 12, 2026 after comparing Sonnet 5 vs DeepSeek V4 Pro on the same
