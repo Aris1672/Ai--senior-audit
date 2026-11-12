@@ -13,7 +13,9 @@
     "test:pii": "tsx scripts/test-pseudonymize.ts",
     "test:volume": "tsx scripts/test-volume.ts",
     "test:billing": "tsx scripts/test-billing.ts",
-    "test:xlsx": "tsx scripts/test-xlsx.ts"
+    "test:xlsx": "tsx scripts/test-xlsx.ts",
+    "mock:1c": "tsx services/mock-1c/server.ts",
+    "test:mock1c": "tsx scripts/test-mock-1c.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.96.0",

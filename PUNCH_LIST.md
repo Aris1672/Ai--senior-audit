@@ -6,7 +6,8 @@ Prioritized by what it blocks. Derived from full source review (see PROJECT_STAT
 > - [x] **1. Decisions written down** — two stages (analysis 12.5 ₽/operation; correction 20 ₽/page), page definition, charging rules, overlap rule, volume rule.
 > - [x] **2. Volume** — 500-row / 500-operation / 50 000-character caps removed; request over the model's limit (1 648 800 characters) is refused with a clear message; `npm run test:volume`. *To verify after deploy: one large file end to end (Natasha speed, DeepSeek accepting it).*
 > - [x] **3. Billing** — built: server-side quote per document, cost card + confirmation before analysis (wizard and chat), each operation charged once across files, totals recorded on accept and frozen at completion, price endpoint and upload behind an ownership check; `npm run test:billing`. **⚠ To switch it on: run `supabase/migrations/005_document_billing.sql` in the Supabase SQL editor**, then check one audit end to end in the browser. Open decision: bank statements uploaded as PDF/Word are priced per page.
-> - [ ] **4. 1C mock server + reader** — from the real `$metadata` exported from the 1С:Фреш trial; then one run against Фреш.
+> - [x] **3 verified live** (Nov 13) — cost cards, overlap, pages, unreadable image, repeated file.
+> - [ ] **4. 1C** — [x] 4a mock server (`services/mock-1c`, 8 planted errors, `npm run test:mock1c`); [ ] 4b reader in the app (queries + server-side operation count for pricing + computed facts from the ledger + coding of individuals by field); [ ] 4c one run against the 1С:Фреш trial base.
 > - [ ] **5. OCR, then stage 2** (documents linked to findings, closing a finding, before/after report).
 > - [ ] Also open: computed facts for Excel/CSV; token usage and cost recorded per turn; background jobs for long audits; server-side access checks on all API routes; anonymised ООО file as a second regression fixture; redeploy + re-run of the ООО file for commits `10d5045` / `133424b`.
 

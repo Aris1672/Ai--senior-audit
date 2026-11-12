@@ -42,6 +42,7 @@ COPY --from=builder /app/node_modules ./node_modules
 # server/network the app uses. Not used by `next start`.
 COPY --from=builder /app/lib ./lib
 COPY --from=builder /app/scripts ./scripts
+COPY --from=builder /app/services/mock-1c ./services/mock-1c
 
 USER nextjs
 
