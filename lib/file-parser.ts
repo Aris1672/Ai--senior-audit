@@ -171,6 +171,71 @@ function dateInRange(cellValue: string, range?: DateRange): boolean {
   return true;
 }
 
+// ─── xlsx cell helpers ────────────────────────────────────────────────────────
+function xmlText(s: string): string {
+  return s
+    .replace(/&#x([0-9a-f]+);/gi, (_, h) => String.fromCodePoint(parseInt(h, 16)))
+    .replace(/&#(\d+);/g, (_, d) => String.fromCodePoint(parseInt(d, 10)))
+    .replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&apos;/g, "'")
+    .replace(/&amp;/g, "&");
+}
+
+/** Text of every <t> run inside a shared-string or inline-string element, joined. */
+function xmlRunsText(xml: string): string {
+  const runs = xml.match(/<t\b[^>]*>[\s\S]*?<\/t>/g) || [];
+  return runs.map(r => xmlText(r.replace(/^<t\b[^>]*>/, "").replace(/<\/t>$/, ""))).join("");
+}
+
+/** "A" → 0, "Z" → 25, "AA" → 26. */
+function columnIndex(letters: string): number {
+  let n = 0;
+  for (const ch of letters.toUpperCase()) n = n * 26 + (ch.charCodeAt(0) - 64);
+  return n - 1;
+}
+
+/** Indices of cell styles whose number format is a date. */
+function xlsxDateStyles(stylesXml: string): Set<number> {
+  const out = new Set<number>();
+  if (!stylesXml) return out;
+  const custom = new Map<number, string>();
+  for (const m of stylesXml.matchAll(/<numFmt\b[^>]*\bnumFmtId="(\d+)"[^>]*\bformatCode="([^"]*)"/g)) {
+    custom.set(Number(m[1]), xmlText(m[2]));
+  }
+  const isDateFormat = (id: number): boolean => {
+    if ((id >= 14 && id <= 22) || (id >= 27 && id <= 36) || (id >= 45 && id <= 47) || (id >= 50 && id <= 58)) return true;
+    const code = custom.get(id);
+    if (!code) return false;
+    // Drop quoted text, [colour]/[locale] parts and escaped characters, then look for date letters.
+    const bare = code.replace(/"[^"]*"/g, "").replace(/\[[^\]]*\]/g, "").replace(/\\./g, "");
+    return /[dyДГ]|m{1,5}|М/i.test(bare) && !/^[#0?.,% Ee+\-]*$/.test(bare);
+  };
+  const xfs = stylesXml.match(/<cellXfs\b[\s\S]*?<\/cellXfs>/)?.[0] ?? "";
+  (xfs.match(/<xf\b[^>]*>/g) || []).forEach((xf, i) => {
+    const id = Number(xf.match(/\bnumFmtId="(\d+)"/)?.[1] ?? 0);
+    if (isDateFormat(id)) out.add(i);
+  });
+  return out;
+}
+
+/** Excel day number → "dd.mm.yyyy" (with "hh:mm" when there is a time part). */
+function excelSerialToDate(raw: string): string {
+  const n = Number(raw);
+  if (!raw || !Number.isFinite(n) || n < 1 || n > 2_958_465) return raw;
+  const ms = Math.round(n * 86_400_000);
+  const d  = new Date(Date.UTC(1899, 11, 30) + ms);
+  const p  = (x: number) => String(x).padStart(2, "0");
+  const date = `${p(d.getUTCDate())}.${p(d.getUTCMonth() + 1)}.${d.getUTCFullYear()}`;
+  const hasTime = Math.abs(n - Math.round(n)) > 1e-9;
+  return hasTime ? `${date} ${p(d.getUTCHours())}:${p(d.getUTCMinutes())}` : date;
+}
+
+/** Removes binary floating-point noise: "1234.5600000000001" → "1234.56". */
+function tidyNumber(raw: string): string {
+  if (!/^-?\d+\.\d{10,}$/.test(raw) && !/e/i.test(raw)) return raw;
+  const n = Number(raw);
+  return Number.isFinite(n) ? String(Number(n.toPrecision(15))) : raw;
+}
+
 // ─── XML candidate tags (1C-first, then generic) ─────────────────────────────
 
 const XML_TRANSACTION_TAGS = [
@@ -396,14 +461,21 @@ export async function parseXLSX(buffer: ArrayBuffer, range?: DateRange): Promise
       console.warn("[file-parser] Could not resolve real sheet names, falling back to sheetN:", nameErr);
     }
 
+    // Shared strings: one entry per <si>. A string with mixed formatting is
+    // stored as several <t> runs inside one <si> — they are joined; counting
+    // every <t> as its own entry would shift every later string to the wrong
+    // cell. Phonetic runs (<rPh>) are not part of the text.
     const sharedStrings: string[] = [];
     if (unzipped["xl/sharedStrings.xml"]) {
-      const ssXml   = new TextDecoder("utf-8").decode(unzipped["xl/sharedStrings.xml"]);
-      const matches = ssXml.match(/<t[^>]*>([^<]*)<\/t>/g) || [];
-      for (const m of matches) {
-        sharedStrings.push(m.replace(/<t[^>]*>/, "").replace(/<\/t>/, "").trim());
+      const ssXml = new TextDecoder("utf-8").decode(unzipped["xl/sharedStrings.xml"]);
+      for (const si of ssXml.match(/<si\b[^>]*\/>|<si\b[\s\S]*?<\/si>/g) || []) {
+        sharedStrings.push(xmlRunsText(si.replace(/<rPh\b[\s\S]*?<\/rPh>/g, "")).trim());
       }
     }
+
+    // Which cell styles are dates (Excel stores a date as a day number).
+    const dateStyles = xlsxDateStyles(unzipped["xl/styles.xml"]
+      ? new TextDecoder("utf-8").decode(unzipped["xl/styles.xml"]) : "");
 
     // ── Parse every sheet, not just the first ─────────────────────────────────
     let totalRowCount = 0;
@@ -423,14 +495,30 @@ export async function parseXLSX(buffer: ArrayBuffer, range?: DateRange): Promise
       // Decode every row to a values[] array up front (needed both to find
       // the date column via the header row and to filter data rows below).
       const allRowValues: string[][] = rowMatches.map(rowXml => {
-        const cells  = rowXml.match(/<c[\s\S]*?<\/c>/gi) || [];
+        // Cells are placed by their column reference (r="C5"): Excel leaves
+        // empty cells out of the file, and filling the row left to right
+        // would shift every later value into the wrong column.
+        const cells  = rowXml.match(/<c\b[^>]*\/>|<c\b[^>]*>[\s\S]*?<\/c>/gi) || [];
         const values: string[] = [];
+        let next = 0;
         for (const cell of cells) {
-          const typeMatch = cell.match(/\bt="([^"]+)"/);
-          const valMatch  = cell.match(/<v>([^<]*)<\/v>/);
-          const val       = valMatch ? valMatch[1] : "";
-          values.push(typeMatch?.[1] === "s" ? (sharedStrings[parseInt(val, 10)] ?? "") : val);
+          const open = cell.match(/^<c\b[^>]*>/i)![0];
+          const ref  = open.match(/\br="([A-Z]+)\d+"/i);
+          const col  = ref ? columnIndex(ref[1]) : next;
+          next = col + 1;
+          const type  = open.match(/\bt="([^"]+)"/)?.[1];
+          const style = Number(open.match(/\bs="(\d+)"/)?.[1] ?? -1);
+          const raw   = cell.match(/<v\b[^>]*>([\s\S]*?)<\/v>/)?.[1] ?? "";
+          let value: string;
+          if (type === "s")              value = sharedStrings[parseInt(raw, 10)] ?? "";
+          else if (type === "inlineStr") value = xmlRunsText(cell).trim();
+          else if (type === "b")         value = raw === "1" ? "ИСТИНА" : raw === "0" ? "ЛОЖЬ" : raw;
+          else if (type === "str" || type === "e" || type === "d") value = xmlText(raw).trim();
+          else value = dateStyles.has(style) ? excelSerialToDate(raw) : tidyNumber(raw);
+          while (values.length < col) values.push("");
+          values[col] = value.replace(/[\r\n]+/g, " ");
         }
+        while (values.length > 0 && values[values.length - 1] === "") values.pop();
         return values;
       });
 
