@@ -1,4 +1,7 @@
-import { anthropic, AUDIT_SYSTEM_PROMPT, buildAuditContext, SONNET_MODEL, FINDINGS_TOOL } from "@/lib/anthropic";
+import {
+  llm, AUDIT_SYSTEM_PROMPT, buildAuditContext, AUDIT_MODEL, FINDINGS_TOOL,
+  LLM_SUPPORTS_IMAGES, LLM_EXTRA_PARAMS, AUDIT_MAX_OUTPUT_TOKENS,
+} from "@/lib/llm";
 import { createAdminClient } from "@/lib/supabase-server";
 import { parseFile, renderPDFPagesAsImages, type DateRange } from "@/lib/file-parser";
 import { NextRequest, NextResponse } from "next/server";
@@ -11,10 +14,21 @@ export const maxDuration = 300;
 
 // ─── Fetch + parse ALL documents linked to this session ───────────────────────
 // Returns text content for the system prompt PLUS a separate list of images
-// (for native vision, not text extraction — Claude reads images directly).
+// (native vision — legacy Anthropic setup only; DeepSeek gets a
+// "not analyzed" note instead, see UNREADABLE_IMAGE_NOTE).
 interface DocumentsResult {
   textContent: string | null;
   images: { fileName: string; mediaType: string; base64: string }[];
+}
+
+// Placeholder text for images / scanned PDFs while the audit model can't
+// read them (DeepSeek). The instruction makes the model tell the client
+// plainly which documents were skipped, rather than silently ignoring them.
+function UNREADABLE_IMAGE_NOTE(fileName: string, kind: string): string {
+  return `[Документ: ${fileName} — ${kind}. Распознавание изображений пока не подключено, ` +
+    `содержимое этого документа НЕ передано на анализ. Обязательно сообщи пользователю, ` +
+    `что этот документ не проанализирован, и предложи загрузить его в текстовом формате ` +
+    `(PDF с текстовым слоем, XLSX, DOCX, выгрузка 1С).]`;
 }
 
 async function getAllDocumentsContent(
@@ -66,11 +80,19 @@ async function getAllDocumentsContent(
 
       const arrayBuffer = await blob.arrayBuffer();
 
-      // ── Images go to Claude's native vision, not text extraction ─────────
+      // ── Images: Claude vision (legacy) or a "not analyzed" note (DeepSeek) ─
       // doc.file_type === "image" covers both JPG and PNG (see upload route's
       // ALLOWED_TYPES mapping). Claude Sonnet 5 reads images directly —
       // there is no OCR step here, the model itself does the reading.
       if (doc.file_type === "image") {
+        // DeepSeek V4 Pro has no image input, and image bytes must never be
+        // uploaded to DeepSeek (152-FZ) — tell the model the document was
+        // NOT analyzed so it says so instead of guessing. Server-side OCR
+        // (PUNCH_LIST Step B) will turn these into text.
+        if (!LLM_SUPPORTS_IMAGES) {
+          sections.push(UNREADABLE_IMAGE_NOTE(doc.file_name, "изображение"));
+          continue;
+        }
         const ext       = doc.file_name?.split(".").pop()?.toLowerCase();
         const mediaType = ext === "png" ? "image/png" : "image/jpeg";
         const base64    = Buffer.from(arrayBuffer).toString("base64");
@@ -111,6 +133,11 @@ async function getAllDocumentsContent(
       // Instead of sending the AI an empty document, render each page to a
       // PNG and attach it the same way as a directly-uploaded JPG/PNG.
       if (doc.file_type === "pdf" && parsed.likelyScanned) {
+        if (!LLM_SUPPORTS_IMAGES) {
+          console.log("[chat]", doc.file_name, "— scanned PDF detected, OCR not available yet — not sent");
+          sections.push(UNREADABLE_IMAGE_NOTE(doc.file_name, "отсканированный PDF без текстового слоя"));
+          continue;
+        }
         console.log("[chat]", doc.file_name, "— scanned PDF detected, rendering pages as images");
         const pageImages = await renderPDFPagesAsImages(arrayBuffer, 10);
 
@@ -315,7 +342,7 @@ export async function POST(req: NextRequest) {
     }
 
     // Fetch and parse ALL uploaded documents for this session.
-    // Images are handled separately — they go to Claude's native vision as
+    // Images are handled separately — on the legacy Anthropic setup they go to Claude's native vision as
     // image content blocks on the user message, not as text in the prompt.
     let fileSection = "";
     let images: { fileName: string; mediaType: string; base64: string }[] = [];
@@ -376,7 +403,7 @@ export async function POST(req: NextRequest) {
       : `${AUDIT_SYSTEM_PROMPT}${fileSection}`;
 
     console.log("[chat] System prompt length:", systemPrompt.length,
-      "| Model:", SONNET_MODEL,
+      "| Model:", AUDIT_MODEL,
       "| Has files:", fileSection.length > 0);
 
     // ─── Streaming response ─────────────────────────────────────────────────
@@ -438,7 +465,7 @@ export async function POST(req: NextRequest) {
         }, HEARTBEAT_INTERVAL_MS);
 
         try {
-          const MAX_OUTPUT_TOKENS = 16000; // per-call cap (well under Sonnet 5's 128K ceiling — raise if reports need more headroom)
+          const MAX_OUTPUT_TOKENS = AUDIT_MAX_OUTPUT_TOKENS; // per-call cap, see lib/llm.ts (larger when thinking is enabled)
           const MAX_CONTINUATIONS = 5;     // hard safety limit on auto-continue loops
 
           let fullText = "";
@@ -447,7 +474,7 @@ export async function POST(req: NextRequest) {
           // Attach any images to the last user message as vision content blocks.
           // Images are only attached on this first call, not on continuation
           // calls, since Claude already has them in context once seen.
-          if (images.length > 0) {
+          if (images.length > 0 && LLM_SUPPORTS_IMAGES) {
             const lastIdx = workingMessages.length - 1;
             if (lastIdx >= 0 && workingMessages[lastIdx].role === "user") {
               const existingText = typeof workingMessages[lastIdx].content === "string"
@@ -478,13 +505,14 @@ export async function POST(req: NextRequest) {
             // original non-streaming loop.
             let chunk = "";
 
-            const messageStream = anthropic.messages.stream({
-              model:       SONNET_MODEL,
+            const messageStream = llm.messages.stream({
+              model:       AUDIT_MODEL,
               max_tokens:  MAX_OUTPUT_TOKENS,
               system:      systemPrompt,
               messages:    workingMessages,
               tools:       [FINDINGS_TOOL],
               tool_choice: { type: "auto" },
+              ...LLM_EXTRA_PARAMS, // DeepSeek: thinking enabled/disabled — see lib/llm.ts
             });
 
             messageStream.on("text", (textDelta: string) => {
@@ -520,7 +548,7 @@ export async function POST(req: NextRequest) {
 
             stopReason = finalMessage.stop_reason;
 
-            console.log("[chat] Sonnet call — stop_reason:", stopReason,
+            console.log("[chat] LLM call — stop_reason:", stopReason,
               "| chunk length:", chunk.length, "| total so far:", fullText.length,
               "| findings captured:", toolFindings.length);
 

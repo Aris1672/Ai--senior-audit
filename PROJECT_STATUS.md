@@ -1,5 +1,14 @@
 # AI Senior Auditor — Project Status
 
+> Last updated: November 12, 2026. **DeepSeek V4 Pro switch built in code (Step A) — not yet live.** Production keeps running on the old Anthropic setup until `LLM_API_KEY` is set in Coolify; setting it switches to DeepSeek, removing it rolls back. Details in the new Session Log entry below. Summary:
+> - `lib/anthropic.ts` → **`lib/llm.ts`**, provider-neutral exports (`llm`, `AUDIT_MODEL`, `AUDIT_MODEL_PRICING`, `LLM_PROVIDER`, `LLM_SUPPORTS_IMAGES`, `LLM_EXTRA_PARAMS`, `AUDIT_MAX_OUTPUT_TOKENS`). New env vars: `LLM_API_KEY` (required to enable DeepSeek), optional `LLM_BASE_URL` (default `https://api.deepseek.com/anthropic`), `LLM_MODEL` (default `deepseek-v4-pro`), `LLM_THINKING` (`enabled`/`disabled`, default disabled). Diagnostic `console.log` removed.
+> - **Confirmed from DeepSeek's Anthropic-API docs:** `deepseek-v4-pro` does **not** read images (replaces them with "[Unsupported Image]" — but the bytes would still be uploaded). So on DeepSeek, images and scanned PDFs are **never sent**; the model gets a note saying the document wasn't analyzed and must tell the client. Tool calling works with `tool_choice: auto`; `tool_choice: {type:"tool"}` fails in thinking mode, and thinking-mode tool continuations need thinking blocks passed back → thinking **disabled by default**.
+> - Pricing constant: $1.32 / $3.96 per 1M (peak; off-peak is half), as reported Nov 2026 — official page couldn't be opened from the build workspace, re-check before billing on it.
+> - New `npm run check:llm` (`scripts/check-llm.ts`): runs the real prompt + tool + streaming against a synthetic statement and checks purpose-question-first, no greeting, one valid `record_findings` call. **Not yet run** — the build workspace can't reach api.deepseek.com; run it locally with the key in `.env.local`.
+> - **Decided: pseudonymize individuals only** (people, ИП, employees, directors). Company names (ООО, АО…) stay readable. Closes the open decision below.
+> - **Under consideration (not decided):** a self-hosted OCR service on our own Coolify server (e.g. PaddleOCR, CPU) instead of GigaChat for scans/images — keeps scans on our servers; could share one Python service with the Natasha name detector. GigaChat stays as a possible fallback.
+> - Car-Parts repo's `lib/pii.js` reviewed as a reference: one-way masking of phones/emails only — the pattern (mask before every LLM call, narrow regexes, `test-pii`) carries over, but this app needs reversible tokens + restore (Step C).
+
 > Last updated: November 2, 2026. **Decided: switch the audit LLM from Anthropic (Claude Sonnet 5) to DeepSeek V4 Pro — Anthropic is banned in Russia.** Planning/design session only — **no code changed yet; building starts next session.** Decisions made with the user:
 > 1. **Integration route: DeepSeek's Anthropic-compatible endpoint** (`https://api.deepseek.com/anthropic`, model `deepseek-v4-pro`). Keeps the existing `@anthropic-ai/sdk` code path (streaming, NDJSON heartbeat, `record_findings` tool) — mostly a config change (`ANTHROPIC_BASE_URL`, `ANTHROPIC_API_KEY`, model id). Rename `anthropic`/`SONNET_*` to provider-neutral names while doing it. User has a DeepSeek API key (goes into Coolify env, never the repo).
 > 2. **Scanned PDFs / images → GigaChat** (Sber, hosted in Russia) for vision/OCR, since DeepSeek V4 Pro image input could not be confirmed. GigaChat returns text, which then goes through the same pseudonymization path as every other document.
@@ -44,7 +53,7 @@
 | Database | **Self-hosted Supabase, Stack 3 on `assistant_vps_3` (77.222.47.140:8002/5434/6545)** — live as of Sep 22 2026, full data parity with Cloud verified | — |
 | Database (superseded, not yet decommissioned) | Supabase Cloud | — |
 | Outbound proxy (Anthropic only) | nginx on existing Kazakhstan VPS (`audit.assistant24info.ru`) — unchanged, shared with other apps on this infra | — |
-| AI — audit reasoning + findings extraction | Claude Sonnet 5 (**to be replaced by DeepSeek V4 Pro via Anthropic-compatible endpoint — decided Nov 2 2026, not built yet**) | @anthropic-ai/sdk 0.96.0 |
+| AI — audit reasoning + findings extraction | DeepSeek V4 Pro via Anthropic-compatible endpoint (**built Nov 12 2026, `lib/llm.ts`; active only when `LLM_API_KEY` is set**) — legacy fallback: Claude Sonnet 5 | @anthropic-ai/sdk 0.96.0 |
 | AI — scanned PDF / image reading (planned) | GigaChat (Russia-hosted) — replaces Claude vision input | not built yet |
 | Pseudonymization (planned) | Own reversible coder/restorer (TS regex + Python/Natasha NER service) | not built yet |
 | XLSX parsing | fflate (hand-rolled) + xlsx (legacy .xls only) | 0.8.3 / 0.18.5 |
@@ -172,7 +181,7 @@ Client upload
 
 **Related:** counterparty ЕГРЮЛ checks need real ИНН — they must run on our side, never through DeepSeek.
 
-### Open decision
+### Open decision — ✅ RESOLVED November 12, 2026: individuals only (Option A)
 - **Scope of coding:** under 152-FZ, legal entities (ООО, АО) are not personal data; individuals (people, ИП, employees, directors) are. Option A: code individuals only — simpler, better audit quality (the model can follow "ООО Ромашка" across payments). Option B: also code company names — for commercial confidentiality, at some cost to analysis quality. **Not yet decided.**
 
 ---
@@ -979,6 +988,17 @@ PM2 keeps Next.js running as background process, auto-restarts on crash. Cost: f
 
 **P3 — Cleanup / deferred**
 - [ ] Chat page's own attachment-button accept attribute still missing `.txt`/`.doc` (only `.xls,.pdf` currently) — left unpatched on purpose, decide if it should match the other two upload surfaces
+
+---
+
+## Session Log — DeepSeek V4 Pro Switch Built (Step A) (November 12, 2026)
+
+- **Code:** `lib/anthropic.ts` renamed to `lib/llm.ts`. Provider chosen by env: `LLM_API_KEY` set → DeepSeek (`LLM_BASE_URL` default `https://api.deepseek.com/anthropic`, `LLM_MODEL` default `deepseek-v4-pro`, `LLM_THINKING` default disabled); not set → the old `ANTHROPIC_*` + `claude-sonnet-5` setup, unchanged. This makes pushing safe (production unchanged until the env var is added) and gives a one-step rollback.
+- **`app/api/chat/route.ts`:** uses `llm` / `AUDIT_MODEL` / `AUDIT_MAX_OUTPUT_TOKENS` and spreads `LLM_EXTRA_PARAMS` (DeepSeek `thinking` setting) into the stream call. When the provider can't read images (DeepSeek), image uploads and scanned PDFs are not sent at all — the prompt gets `UNREADABLE_IMAGE_NOTE` telling the model to say the document wasn't analyzed and to ask for a text format. Scanned PDFs are no longer rendered to PNG in that mode.
+- **Facts confirmed from DeepSeek's Anthropic-API guide** (api-docs.deepseek.com/guides/anthropic_api): base URL `https://api.deepseek.com/anthropic`; `deepseek-v4-pro` doesn't process images; `tool_choice` auto/none supported, `any` = auto, `tool` → 400 in thinking mode; thinking-mode tool continuations require the full assistant content incl. thinking blocks; `budget_tokens` ignored; `cache_control` ignored; streaming SSE fully supported; total input = `input_tokens + cache_read_input_tokens + cache_creation_input_tokens`.
+- **Pricing:** third-party sources (Nov 2026) agree on $1.32 in / $3.96 out per 1M at peak, half off-peak, cache hit $0.044. Peak used in `AUDIT_MODEL_PRICING`. Official pricing page not reachable from the build workspace.
+- **Verified here:** `tsc --noEmit` clean; `next build` succeeds (Google Fonts stubbed only for the offline build, not committed). **Not verified:** any real DeepSeek call — the build workspace can't reach api.deepseek.com. `npm run check:llm` is the next thing to run.
+- **Decision:** pseudonymize individuals only. **Discussed, not decided:** self-hosted OCR service instead of GigaChat.
 
 ---
 

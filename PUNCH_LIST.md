@@ -2,6 +2,8 @@
 
 Prioritized by what it blocks. Derived from full source review (see PROJECT_STATUS.md for details on each item).
 
+> **Updated November 12, 2026** — **Step A (DeepSeek integration) built in code**, safe to deploy: production stays on Anthropic until `LLM_API_KEY` is added in Coolify. **Next: run `npm run check:llm` locally with the DeepSeek key**, then decide when to set the Coolify env. Decided: **pseudonymize individuals only.** DeepSeek V4 Pro confirmed to have no image input → images/scans are not sent to it (model is told they weren't analyzed) until Step B. Step B approach under discussion: self-hosted OCR service vs GigaChat.
+
 > **Updated November 2, 2026** — **Decided to switch the audit LLM from Anthropic (Claude Sonnet 5) to DeepSeek V4 Pro**, because Anthropic is banned in Russia. Planning session only, no code changed. Three decisions: (1) use DeepSeek's **Anthropic-compatible endpoint** (minimal code change); (2) **GigaChat** reads scanned PDFs/images (Russia-hosted); (3) **pseudonymization must be built before any client data goes to DeepSeek** (code personal data → DeepSeek → restore). Full design in `PROJECT_STATUS.md` → "Planned Change: LLM Provider Switch". **Build checklist in the new "NEXT SESSION" section below — start there next time.**
 
 > **Updated September 22, 2026** — **Self-host migration (Coolify + self-hosted Supabase) completed and verified end-to-end**, closing out the item opened September 7. Live at `https://auditor.assistant24info.ru`. Full detail in `PROJECT_STATUS.md`'s top entry and in `Self-Host-Migration.md` (three new gotchas added there: GoTrue NULL-token-column crash, unverified JWT key generation, `confirmed_at` generated column). Also fixed in passing: `app/page.tsx` was the unedited `create-next-app` scaffold on every prior deployment — replaced with a redirect to `/login`. **New P2/P3 items below** from this session's "not yet done" list.
@@ -35,15 +37,17 @@ Prioritized by what it blocks. Derived from full source review (see PROJECT_STAT
 Decided November 2, 2026. Build in this order. **Rule: no real client data is sent to DeepSeek until Step C is done and working (fail-closed).** Until then, test DeepSeek only with synthetic/fake data.
 
 **Open decision to settle first (affects Step C):**
-- [ ] **Pseudonymize individuals only, or also company names?** Under 152-FZ, legal entities (ООО, АО) are not personal data; individuals (people, ИП, employees, directors) are. Individuals-only = simpler + better audit quality. Also coding companies = commercial confidentiality, weaker analysis.
+- [x] **Pseudonymize individuals only, or also company names?** **Decided Nov 12, 2026: individuals only.** Under 152-FZ, legal entities (ООО, АО) are not personal data; individuals (people, ИП, employees, directors) are. Individuals-only = simpler + better audit quality. Also coding companies = commercial confidentiality, weaker analysis.
 - [ ] **Legal sign-off** (152-FZ advisor): is reversible pseudonymization with the map kept in Russia enough to send audit text to DeepSeek (China)? What residual detection-miss risk is acceptable?
 
 **Step A — DeepSeek integration (Anthropic-compatible endpoint)**
 - [ ] Check DeepSeek API reachability directly from the Coolify VPS (168.222.202.222). If reachable, this app no longer needs the Kazakhstan proxy (`audit.assistant24info.ru` stays up — it's shared with other apps).
-- [ ] Coolify env: `ANTHROPIC_BASE_URL=https://api.deepseek.com/anthropic`, `ANTHROPIC_API_KEY=<DeepSeek key>` (key in Coolify only, never in the repo).
-- [ ] `lib/anthropic.ts`: model id `deepseek-v4-pro`; rename to provider-neutral names (`llm`, `AUDIT_MODEL`, `AUDIT_MODEL_PRICING`, optionally `LLM_*` env vars); remove the leftover diagnostic `console.log`.
-- [ ] Update pricing constants from DeepSeek's **official** pricing page (third-party figures conflict).
-- [ ] Verify `record_findings` tool calling works while streaming through the compat endpoint; check whether thinking mode must be disabled for tool calls.
+- [ ] Coolify env: **`LLM_API_KEY=<DeepSeek key>`** (key in Coolify only, never in the repo). Optional: `LLM_THINKING=enabled`, `LLM_MODEL`, `LLM_BASE_URL`. Setting `LLM_API_KEY` is the cut-over; removing it rolls back to Anthropic. *(Changed from the original plan of reusing `ANTHROPIC_*` vars.)*
+- [x] ~~`lib/anthropic.ts`: model id, provider-neutral names, remove diagnostic `console.log`.~~ **Done Nov 12** — now `lib/llm.ts` (`llm`, `AUDIT_MODEL`, `AUDIT_MODEL_PRICING`, `LLM_*` env vars).
+- [x] ~~Update pricing constants.~~ **Done Nov 12** — $1.32 / $3.96 per 1M (peak). Re-check the official page once before billing clients on token cost.
+- [x] **Images never sent to DeepSeek** (no image input on `deepseek-v4-pro`) — done Nov 12; model gets a "not analyzed" note instead.
+- [ ] **Run `npm run check:llm`** locally (key in `.env.local`) — real prompt + tool + streaming on synthetic data. Covers the two items below.
+- [ ] Verify `record_findings` tool calling works while streaming through the compat endpoint. Thinking is **disabled by default** (DeepSeek docs: thinking-mode tool continuations need thinking blocks passed back) — optionally try `LLM_THINKING=enabled` in the check script and compare report quality.
 - [ ] Verify context window / rate limits fit current usage (`max_tokens` 16000 + auto-continue).
 - [ ] Prompt regression test with fake data shaped like real client files: audit-purpose question first, evidence tiers, risk levels, no greetings, one `record_findings` call at the end. Tune `AUDIT_SYSTEM_PROMPT` if needed.
 - [ ] Re-check duplicate-findings dedup threshold (`titleSimilarity()` in `/api/chat`) against DeepSeek's wording.
