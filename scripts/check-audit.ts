@@ -75,9 +75,13 @@ const CHECKS: { id: string; label: string; required: boolean; test: (r: RunResul
     test: r => r.findings.some(f => !/факторинг|резервир/i.test(f.title ?? "") && (
       hasNumber(blob(f), "31700") ||
       (/поступлен|пополнен/i.test(f.title ?? "") && /карт|card2card|sbol|p2p/i.test(blob(f))))) },
-  { id: "reserve", required: true, label: "November tax reserve NOT recorded above НЕСУЩЕСТВЕННО (it reconciles: 1 137 = 8% of 14 212,09)",
-    test: r => !r.findings.some(f => f.risk_level !== "НЕСУЩЕСТВЕННО" && /резерв/i.test(blob(f)) &&
-      (hasNumber(blob(f), "14212", "09") || /13\s?[.–—-]\s?19\.11|ноябрьск/i.test(f.title ?? ""))) },
+  // Decision Nov 12, 2026: how the bank marked revenue for АУСН is never a
+  // finding at any level — only a «Границы проверки» item.
+  { id: "reserve", required: true, label: "November revenue reserve/marking NOT recorded as a finding at any level (limits only)",
+    test: r => !r.findings.some(f => /резерв|разметк|размечен/i.test(blob(f)) &&
+      (hasNumber(blob(f), "14212", "09") || /13\s?[.–—-]\s?19\.11|ноябрьск|факторинг/i.test(f.title ?? ""))) },
+  { id: "marking-limits", required: false, label: "«Границы проверки» tells the client to check the bank's АУСН marking",
+    test: r => /разметк/i.test(r.text.slice(Math.max(0, r.text.search(/границы проверки/i)))) },
   { id: "no-docs", required: true, label: "\"no primary documents\" NOT recorded as a violation",
     test: r => !r.findings.some(f => /(отсутств|непредставлен|не представлен)\S*\s+(первичн|подтверждающ)/i.test(f.title ?? "")) },
   { id: "no-402", required: true, label: "402-ФЗ / ПБУ not cited as legal basis against an ИП",
