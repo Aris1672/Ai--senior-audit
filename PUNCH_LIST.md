@@ -41,7 +41,7 @@ Decided November 2, 2026. Build in this order. **Rule: no real client data is se
 - [ ] **Legal sign-off** (152-FZ advisor): is reversible pseudonymization with the map kept in Russia enough to send audit text to DeepSeek (China)? What residual detection-miss risk is acceptable?
 
 **Step A — DeepSeek integration (Anthropic-compatible endpoint)**
-- [ ] Check DeepSeek API reachability directly from the Coolify VPS (168.222.202.222). If reachable, this app no longer needs the Kazakhstan proxy (`audit.assistant24info.ru` stays up — it's shared with other apps).
+- [x] **Confirmed Nov 12, 2026: DeepSeek is reachable directly from the Coolify VPS** (first live call from production returned `end_turn`). ~~Check DeepSeek API reachability directly from the Coolify VPS (168.222.202.222).~~ If reachable, this app no longer needs the Kazakhstan proxy (`audit.assistant24info.ru` stays up — it's shared with other apps).
 - [ ] Coolify env: **`LLM_API_KEY=<DeepSeek key>`** (key in Coolify only, never in the repo). Optional: `LLM_THINKING=enabled`, `LLM_MODEL`, `LLM_BASE_URL`. Setting `LLM_API_KEY` is the cut-over; removing it rolls back to Anthropic. *(Changed from the original plan of reusing `ANTHROPIC_*` vars.)*
 - [x] ~~`lib/anthropic.ts`: model id, provider-neutral names, remove diagnostic `console.log`.~~ **Done Nov 12** — now `lib/llm.ts` (`llm`, `AUDIT_MODEL`, `AUDIT_MODEL_PRICING`, `LLM_*` env vars).
 - [x] ~~Update pricing constants.~~ **Done Nov 12** — $1.32 / $3.96 per 1M (peak). Re-check the official page once before billing clients on token cost.
