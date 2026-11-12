@@ -67,11 +67,16 @@ const CHECKS: { id: string; label: string; required: boolean; test: (r: RunResul
       ["confirmed", "risk_flag", "indirect"].includes(String(f.evidence_status))) },
   { id: "duplicate", required: true, label: "double payment of invoice 83973/007 recorded",
     test: r => r.findings.some(f => /83973/.test(blob(f))) },
-  { id: "topups", required: true, label: "own-card top-ups flagged (finding + 31 700 in the report)",
-    test: r => hasNumber(r.text, "31700") &&
-      r.findings.some(f => /пополнен|собственн\S*\s+(средств|карт)|личн\S*\s+карт|топ-?ап/i.test(blob(f))) },
-  { id: "reserve", required: true, label: "tax reserve NOT reported as missing (it reconciles: 1 137 = 8%)",
-    test: r => !r.findings.some(f => /резерв|фонд\S*\s*«?налог/i.test(f.title ?? "") && f.risk_level !== "НЕСУЩЕСТВЕННО") },
+  // Findings are matched by the AMOUNTS / operations they cite, not by title
+  // wording — titles vary a lot between runs (first version of these two
+  // checks matched on words and gave one false pass and two false fails).
+  { id: "topups", required: true, label: "card inflows of unidentified origin (31 700) recorded as a finding",
+    test: r => r.findings.some(f => !/факторинг|резервир/i.test(f.title ?? "") && (
+      hasNumber(blob(f), "31700") ||
+      (/поступлен|пополнен/i.test(f.title ?? "") && /карт|card2card|sbol|p2p/i.test(blob(f))))) },
+  { id: "reserve", required: true, label: "November tax reserve NOT recorded above НЕСУЩЕСТВЕННО (it reconciles: 1 137 = 8% of 14 212,09)",
+    test: r => !r.findings.some(f => f.risk_level !== "НЕСУЩЕСТВЕННО" && /резерв/i.test(blob(f)) &&
+      (hasNumber(blob(f), "14212", "09") || /13\s?[.–—-]\s?19\.11|ноябрьск/i.test(f.title ?? ""))) },
   { id: "no-docs", required: true, label: "\"no primary documents\" NOT recorded as a violation",
     test: r => !r.findings.some(f => /(отсутств|непредставлен|не представлен)\S*\s+(первичн|подтверждающ)/i.test(f.title ?? "")) },
   { id: "no-402", required: true, label: "402-ФЗ / ПБУ not cited as legal basis against an ИП",
