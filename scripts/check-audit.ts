@@ -88,6 +88,8 @@ const CHECKS: { id: string; label: string; required: boolean; test: (r: RunResul
     test: r => !r.findings.some(f => /концентрац/i.test(f.title ?? "") && f.risk_level !== "НЕСУЩЕСТВЕННО") },
   { id: "personal", required: false, label: "ИП personal spending not rated above НЕСУЩЕСТВЕННО",
     test: r => !r.findings.some(f => /личн\S*\s+(расход|трат|покуп)/i.test(f.title ?? "") && f.risk_level !== "НЕСУЩЕСТВЕННО") },
+  { id: "no-injury", required: false, label: "no injury-insurance (травматизм) contribution mentioned for an ИП without employees",
+    test: r => !/травматизм/i.test(r.text) },
   { id: "no-greeting", required: false, label: "no greeting / self-introduction",
     test: r => !/^\s*(здравствуйте|добрый день|привет|меня зовут)/i.test(r.text) },
   { id: "size", required: false, label: "3–7 findings (no padding)",
