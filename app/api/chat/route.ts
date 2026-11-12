@@ -1,8 +1,7 @@
 import {
-  llm, AUDIT_SYSTEM_PROMPT, buildAuditContext, AUDIT_MODEL, FINDINGS_TOOL,
-  LLM_SUPPORTS_IMAGES, LLM_EXTRA_PARAMS, AUDIT_MAX_OUTPUT_TOKENS, LLM_THINKING_ENABLED,
+  AUDIT_SYSTEM_PROMPT, buildAuditContext, AUDIT_MODEL, LLM_SUPPORTS_IMAGES,
 } from "@/lib/llm";
-import type Anthropic from "@anthropic-ai/sdk";
+import { runAuditTurn } from "@/lib/audit-engine";
 import { createAdminClient } from "@/lib/supabase-server";
 import { parseFile, renderPDFPagesAsImages, type DateRange } from "@/lib/file-parser";
 import { NextRequest, NextResponse } from "next/server";
@@ -391,6 +390,7 @@ export async function POST(req: NextRequest) {
     //   { type: "step", text: string }         — a real pipeline step (checklist line)
     //   { type: "thinking", text: string }     — a chunk of the model's real thinking
     //   { type: "delta", text: string }        — a chunk of report text
+    //   { type: "reset" }                      — discard answer text sent so far
     //   { type: "done", message: string }       — final full text, stream ends
     //   { type: "error", error: string }        — something failed mid-stream
     const encoder = new TextEncoder();
@@ -508,9 +508,6 @@ export async function POST(req: NextRequest) {
             "| Model:", AUDIT_MODEL,
             "| Has files:", fileSection.length > 0);
 
-          const MAX_OUTPUT_TOKENS = AUDIT_MAX_OUTPUT_TOKENS; // per-call cap, see lib/llm.ts (larger when thinking is enabled)
-          const MAX_CONTINUATIONS = 5;     // hard safety limit on auto-continue loops
-
           let fullText = "";
           let workingMessages = [...messages];
 
@@ -536,116 +533,20 @@ export async function POST(req: NextRequest) {
             }
           }
 
-          step(LLM_THINKING_ENABLED
-            ? `Передаю данные ИИ-аудитору (${AUDIT_MODEL}, глубокий анализ)`
-            : `Передаю данные ИИ-аудитору (${AUDIT_MODEL})`);
+          // Draft pass + quality-review pass — see lib/audit-engine.ts. Only
+          // the final (reviewed) text reaches the client as the answer; the
+          // draft and all reasoning go to the «Ход рассуждений» panel.
+          const result = await runAuditTurn(systemPrompt, workingMessages, {
+            step,
+            thinking: d => { thinkingBuffer += d; },
+            text:     d => { flushThinking(); fullText += d; send({ type: "delta", text: d }); },
+            reset:    () => { fullText = ""; send({ type: "reset" }); },
+          });
+          fullText = result.text; // authoritative
+          const toolFindings = result.findings as any[];
+          console.log("[chat] audit turn done — reviewed:", result.reviewed,
+            "| findings:", toolFindings.length, "| tokens in/out:", result.tokensIn, "/", result.tokensOut);
 
-          let thinkingStarted = false;
-          let textStarted = false;
-          let continuations = 0;
-          let stopReason: string | null = null;
-          let toolFindings: any[] = [];
-          let toolCallSeen = false; // true once record_findings has fired — see guard below
-
-          do {
-            // chunk = text produced in THIS iteration only (not cumulative) —
-            // needed below to feed continuation turns exactly what was
-            // written since the last "continue" prompt, same as the
-            // original non-streaming loop.
-            let chunk = "";
-
-            const messageStream = llm.messages.stream({
-              model:       AUDIT_MODEL,
-              max_tokens:  MAX_OUTPUT_TOKENS,
-              system:      systemPrompt,
-              messages:    workingMessages,
-              tools:       [FINDINGS_TOOL],
-              tool_choice: { type: "auto" },
-              ...LLM_EXTRA_PARAMS, // DeepSeek: thinking on + effort max by default — see lib/llm.ts
-            });
-
-            messageStream.on("thinking", (thinkingDelta: string) => {
-              if (!thinkingStarted) {
-                thinkingStarted = true;
-                step("ИИ анализирует данные — ход рассуждений можно открыть ниже");
-              }
-              thinkingBuffer += thinkingDelta;
-            });
-
-            messageStream.on("text", (textDelta: string) => {
-              if (!textStarted) {
-                textStarted = true;
-                flushThinking();
-                step("Пишу отчёт");
-              }
-              chunk += textDelta;
-              fullText += textDelta;
-              send({ type: "delta", text: textDelta });
-            });
-
-            const finalMessage = await messageStream.finalMessage();
-
-            // GUARD: record_findings must fire at most once across the ENTIRE
-            // do/while loop, not once per iteration — see original comment
-            // this was ported from; unchanged reasoning, just re-homed here
-            // since blocks now come from finalMessage.content instead of a
-            // buffered response.content.
-            for (const block of finalMessage.content) {
-              if (block.type === "tool_use" && block.name === "record_findings") {
-                if (toolCallSeen) {
-                  console.warn(
-                    "[chat] record_findings called again after an earlier call in this turn — " +
-                    "ignoring this second call to prevent duplicate/conflicting findings. " +
-                    "This should not happen per AUDIT_SYSTEM_PROMPT; investigate if seen repeatedly."
-                  );
-                  continue;
-                }
-                const input = block.input as { findings?: any[] };
-                if (Array.isArray(input?.findings)) {
-                  toolFindings = input.findings;
-                  toolCallSeen = true;
-                }
-              }
-            }
-
-            stopReason = finalMessage.stop_reason;
-
-            console.log("[chat] LLM call — stop_reason:", stopReason,
-              "| chunk length:", chunk.length, "| total so far:", fullText.length,
-              "| findings captured:", toolFindings.length);
-
-            if (stopReason === "max_tokens" && continuations < MAX_CONTINUATIONS) {
-              // Feed the partial response back as assistant history and ask
-              // the model to continue exactly where it left off.
-              // With thinking enabled (DeepSeek), the assistant's FULL content
-              // must be passed back — thinking blocks included — or DeepSeek
-              // may reject the next call. tool_use blocks are dropped: an
-              // unanswered tool_use without a matching tool_result is a 400,
-              // and findings were already captured above.
-              const assistantContent = LLM_THINKING_ENABLED
-                ? (finalMessage.content
-                    .filter(b => b.type === "thinking" || b.type === "text") as unknown as Anthropic.Messages.ContentBlockParam[])
-                : chunk;
-              step("Отчёт длинный — продолжаю");
-              workingMessages = [
-                ...workingMessages,
-                { role: "assistant", content: assistantContent },
-                { role: "user", content: "Продолжи с того места, где остановился. Не повторяй уже написанное." },
-              ];
-              continuations++;
-            }
-            // stop_reason === "tool_use" means the model finished its report
-            // text and made its one record_findings call — normal completion,
-            // not truncation, so the loop ends here.
-          } while (stopReason === "max_tokens" && continuations <= MAX_CONTINUATIONS);
-
-          if (stopReason === "max_tokens") {
-            console.warn("[chat] Hit MAX_CONTINUATIONS limit — response may still be truncated");
-          }
-
-          // Save message and persist any findings captured via tool_use, in
-          // parallel — same as before, just now happens after the stream's
-          // content has already reached the client instead of before.
           flushThinking();
           if (toolFindings.length > 0) step(`Фиксирую выявленные нарушения: ${toolFindings.length}`);
 

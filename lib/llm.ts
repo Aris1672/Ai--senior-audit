@@ -84,6 +84,12 @@ export const LLM_EXTRA_PARAMS: {
 // output is 384K); the route auto-continues on max_tokens anyway.
 export const AUDIT_MAX_OUTPUT_TOKENS = LLM_THINKING_ENABLED ? 64000 : 16000;
 
+// Quality-review pass (see lib/audit-engine.ts): every full report is
+// re-checked by a second, fresh call before the client sees it. ON by default
+// (user decision Nov 12, 2026: quality over time; roughly doubles time and
+// cost per audit). LLM_REVIEW=disabled turns it off.
+export const AUDIT_REVIEW_ENABLED = process.env.LLM_REVIEW !== "disabled";
+
 // ─── Token cost constants (per 1K tokens, USD) ───────────────────────────────
 // DeepSeek V4 Pro: $1.32 / 1M input (cache miss), $3.96 / 1M output at PEAK
 // rates; off-peak is half. Peak is used here as the conservative figure.
@@ -93,7 +99,7 @@ export const AUDIT_MODEL_PRICING = LLM_PROVIDER === "deepseek"
   ? { inputPer1K: 0.00132, outputPer1K: 0.00396 }
   : { inputPer1K: 0.003,   outputPer1K: 0.015 };   // Claude Sonnet 5, $3 / $15 per 1M
 
-console.log(`[llm] provider=${LLM_PROVIDER} model=${AUDIT_MODEL} thinking=${LLM_THINKING_ENABLED ? `enabled effort=${LLM_EFFORT}` : "disabled"}`);
+console.log(`[llm] provider=${LLM_PROVIDER} model=${AUDIT_MODEL} thinking=${LLM_THINKING_ENABLED ? `enabled effort=${LLM_EFFORT}` : "disabled"} review=${AUDIT_REVIEW_ENABLED ? "on" : "off"}`);
 
 // ─── System prompt ───
 // Revised Nov 12, 2026 after comparing Sonnet 5 vs DeepSeek V4 Pro on the same
@@ -497,6 +503,66 @@ export const AUDIT_SYSTEM_PROMPT = `
 Если новых или существенно изменившихся нарушений не найдено — НЕ вызывай
 инструмент, просто заверши текстовый ответ.
 `.trim();
+
+// ─── Quality-review request (pass 2) ──────────────────────────────────────────
+// Appended to the client's last message in a FRESH call (same system prompt
+// and documents, none of the first pass's reasoning). See lib/audit-engine.ts.
+export function buildReviewRequest(draftText: string, draftFindings: unknown[]): string {
+  return `
+=== КОНТРОЛЬ КАЧЕСТВА: ПРОВЕРКА ЧЕРНОВИКА ОТЧЁТА ===
+Ниже — черновик аудиторского отчёта и список нарушений, подготовленные
+другим аудитором по этим же документам. Черновик клиенту не показан и в базу
+не сохранён. Ты — проверяющий аудитор. Не доверяй черновику: всё, что в нём
+утверждается, проверь заново по данным документов.
+
+ШАГ 1. Сначала сам выполни "ПОДГОТОВИТЕЛЬНЫЙ РАСЧЁТ И СВЕРКУ" по данным
+(итоги, классификация операций, сверки) — независимо от черновика.
+
+ШАГ 2. Проверь КАЖДЫЙ вывод черновика и прими по нему одно решение —
+оставить / исправить / понизить уровень или статус / перенести в "Границы
+проверки" / удалить:
+1. Факты. Суммы, даты, номера документов, количества и проценты совпадают
+   с данными? Каждый процент посчитан от названной базы?
+2. Сверка. Нет ли в данных операции, которая объясняет «отсутствующее»
+   (та же сумма; сумма, равная расчётной величине; тот же счёт; иная
+   формулировка назначения)? Если итог сходится — это не нарушение.
+3. Применимость. Норма и сама проверка применимы к организационно-правовой
+   форме и системе налогообложения клиента?
+4. Доказанность. Вывод опирается на факт из данных или только на
+   предположение о том, чего в документе не видно? Второе — в "Границы
+   проверки".
+5. Уровень риска и статус соответствуют "КРИТЕРИЯМ УРОВНЕЙ РИСКА" и
+   "СТАНДАРТАМ ДОКАЗАТЕЛЬНОЙ БАЗЫ"? Сумма под риском и её доля указаны?
+6. Непротиворечивость. Тема не стоит одновременно в "Проверено без
+   замечаний" и в нарушениях/признаках риска? Нет двух выводов об одном и
+   том же?
+Удаляй вывод только если данные его опровергают или он нарушает правила
+выше. Не удаляй обоснованные выводы ради краткости и не смягчай их без
+причины.
+
+ШАГ 3. Проверь, не пропущено ли существенное: пройди по "МЕТОДОЛОГИИ АНАЛИЗА
+ТРАНЗАКЦИЙ" (дубли по номеру документа, поступления неустановленного
+происхождения, налоговые платежи и резервы, признаки 115-ФЗ, полнота
+периода) и добавь обоснованные выводы, которых в черновике нет.
+
+РЕЗУЛЬТАТ. Напиши ИТОГОВЫЙ отчёт для клиента — полностью, в обязательном
+формате ("СТРУКТУРА ИТОГОВОГО ОТЧЁТА", формат каждого нарушения). Это
+самостоятельный документ: НЕ упоминай черновик, проверку, «другого
+аудитора» и НЕ перечисляй внесённые правки — клиент видит только итоговый
+отчёт. После текста вызови record_findings РОВНО ОДИН РАЗ с итоговым списком
+(с учётом правила об уже зафиксированных нарушениях); в базу попадёт только
+этот вызов. Если после проверки не осталось ни одного нового вывода —
+инструмент не вызывай.
+
+=== ЧЕРНОВИК ОТЧЁТА ===
+${draftText}
+=== КОНЕЦ ЧЕРНОВИКА ===
+
+=== СПИСОК НАРУШЕНИЙ ЧЕРНОВИКА (JSON) ===
+${JSON.stringify(draftFindings, null, 2)}
+=== КОНЕЦ СПИСКА ===
+`.trim();
+}
 
 // ─── Findings extraction tool ─────────────────────────────────────────────────
 // Replaces the old Haiku extraction pass (removed July 2026). The audit model calls

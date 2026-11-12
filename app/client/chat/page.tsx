@@ -181,6 +181,11 @@ async function streamChat(
         onStep?.(String(evt.text || ""));
       } else if (evt.type === "thinking") {
         onThinking?.(String(evt.text || ""));
+      } else if (evt.type === "reset") {
+        // Server took back the answer text sent so far (a draft that is
+        // being replaced by its quality-reviewed version — see audit-engine).
+        fullText = "";
+        onDelta(fullText);
       } else if (evt.type === "delta") {
         fullText += evt.text;
         onDelta(fullText);
@@ -396,6 +401,15 @@ export default function ChatPage() {
     function tick(ts: number) {
       if (ts - lastTick >= INTERVAL_MS) {
         lastTick = ts;
+        if (displayed.length > target.length) {
+          // target shrank (server "reset") — clear what was revealed so far
+          displayed = "";
+          setMessages(prev => {
+            const next = [...prev];
+            if (next[msgIndex]) next[msgIndex] = { ...next[msgIndex], content: "" };
+            return next;
+          });
+        }
         if (displayed.length < target.length) {
           displayed = target.slice(0, Math.min(displayed.length + CHARS_PER_TICK, target.length));
           setMessages(prev => {

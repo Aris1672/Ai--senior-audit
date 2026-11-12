@@ -23,7 +23,8 @@
  * Usage (Coolify terminal, or locally with the key in .env.local):
  *   read -s LLM_API_KEY && export LLM_API_KEY && npm run check:audit
  *   RUNS=5 npm run check:audit        # default 3 runs
- * Each run is a full audit with thinking — expect a few minutes per run.
+ * Each run = draft pass + quality-review pass (lib/audit-engine.ts), both with
+ * thinking — expect 10–20 minutes per run. Draft and final reports are saved.
  * Full reports are saved to the temp folder printed at the end.
  * Exit code 0 = every required check passed in every run.
  */
@@ -45,7 +46,7 @@ const RUNS = Math.max(1, parseInt(process.env.RUNS || "3", 10) || 3);
 
 interface Finding { title?: string; risk_level?: string; evidence_status?: string;
   description?: string; legal_basis?: string; recommendation?: string; }
-interface RunResult { text: string; findings: Finding[]; toolCalls: number; stopReason: string | null;
+interface RunResult { text: string; findings: Finding[]; reviewed: string; draftFindings: Finding[];
   thinkingChars: number; seconds: number; tokensIn: number; tokensOut: number; }
 
 // Matches a number however the model formats it: "31 700", "31 700,00", "31700.00".
@@ -59,8 +60,8 @@ const blob = (f: Finding) => `${f.title ?? ""} ${f.description ?? ""} ${f.recomm
 // required: true  → a failure fails the test (known right/wrong answers)
 // required: false → reported, but only as a warning (style / softer signals)
 const CHECKS: { id: string; label: string; required: boolean; test: (r: RunResult) => boolean }[] = [
-  { id: "tool", required: true, label: "record_findings called exactly once, reply not cut off",
-    test: r => r.toolCalls === 1 && r.stopReason !== "max_tokens" },
+  { id: "review", required: true, label: "quality review completed (final report is the reviewed one)",
+    test: r => r.reviewed === "done" },
   { id: "enums", required: true, label: "all findings have valid risk level and status",
     test: r => r.findings.length > 0 && r.findings.every(f =>
       ["КРИТИЧНО", "СУЩЕСТВЕННО", "НЕСУЩЕСТВЕННО"].includes(String(f.risk_level)) &&
@@ -106,10 +107,10 @@ async function main() {
     console.error("LLM_API_KEY is not set. Aborting — this test runs against DeepSeek.");
     process.exit(1);
   }
-  const llmMod = await import("../lib/llm");
+  const { AUDIT_MODEL, AUDIT_SYSTEM_PROMPT, buildAuditContext, LLM_EXTRA_PARAMS,
+          AUDIT_MODEL_PRICING, AUDIT_REVIEW_ENABLED } = await import("../lib/llm");
+  const { runAuditTurn } = await import("../lib/audit-engine");
   const { parseFile } = await import("../lib/file-parser");
-  const { llm, AUDIT_MODEL, AUDIT_SYSTEM_PROMPT, buildAuditContext, FINDINGS_TOOL,
-          LLM_EXTRA_PARAMS, AUDIT_MAX_OUTPUT_TOKENS, AUDIT_MODEL_PRICING } = llmMod;
 
   // Same path as /api/chat: real parser → same document block in the system prompt.
   const buf = fs.readFileSync(FIXTURE);
@@ -132,7 +133,7 @@ async function main() {
     { role: "user" as const, content: "Налоговые риски и подготовка к банковской проверке." },
   ];
 
-  console.log(`Model: ${AUDIT_MODEL} | params: ${JSON.stringify(LLM_EXTRA_PARAMS)} | operations: ${parsed.rowCount} | runs: ${RUNS}\n`);
+  console.log(`Model: ${AUDIT_MODEL} | params: ${JSON.stringify(LLM_EXTRA_PARAMS)} | review: ${AUDIT_REVIEW_ENABLED ? "on" : "off"} | operations: ${parsed.rowCount} | runs: ${RUNS}\n`);
   const outDir = fs.mkdtempSync(path.join(os.tmpdir(), "check-audit-"));
   const passed: Record<string, number> = Object.fromEntries(CHECKS.map(c => [c.id, 0]));
   let completed = 0, totalCost = 0;
@@ -140,22 +141,20 @@ async function main() {
   for (let i = 1; i <= RUNS; i++) {
     process.stdout.write(`Run ${i}/${RUNS} `);
     const t0 = Date.now();
-    let thinkingChars = 0, text = "";
+    let thinkingChars = 0;
     const dots = setInterval(() => process.stdout.write("."), 10000);
     let r: RunResult;
     try {
-      const stream = llm.messages.stream({
-        model: AUDIT_MODEL, max_tokens: AUDIT_MAX_OUTPUT_TOKENS, system, messages,
-        tools: [FINDINGS_TOOL], tool_choice: { type: "auto" }, ...LLM_EXTRA_PARAMS,
+      // Same engine as /api/chat: draft pass + quality-review pass.
+      const res = await runAuditTurn(system, messages, {
+        step: () => {}, text: () => {}, reset: () => {},
+        thinking: (d: string) => { thinkingChars += d.length; },
       });
-      stream.on("thinking", (d: string) => { thinkingChars += d.length; });
-      stream.on("text", (d: string) => { text += d; });
-      const final = await stream.finalMessage();
-      const calls = final.content.filter(b => b.type === "tool_use" && (b as { name: string }).name === "record_findings");
-      const input = (calls[0] as { input?: { findings?: Finding[] } } | undefined)?.input;
-      r = { text, findings: Array.isArray(input?.findings) ? input!.findings! : [], toolCalls: calls.length,
-            stopReason: final.stop_reason, thinkingChars, seconds: Math.round((Date.now() - t0) / 1000),
-            tokensIn: final.usage.input_tokens ?? 0, tokensOut: final.usage.output_tokens ?? 0 };
+      r = { text: res.text, findings: res.findings as Finding[], reviewed: res.reviewed,
+            draftFindings: (res.draft?.findings ?? []) as Finding[], thinkingChars,
+            seconds: Math.round((Date.now() - t0) / 1000), tokensIn: res.tokensIn, tokensOut: res.tokensOut };
+      if (res.draft) fs.writeFileSync(path.join(outDir, `run-${i}-draft.md`),
+        `${res.draft.text}\n\n---\nrecord_findings (draft):\n${JSON.stringify(res.draft.findings, null, 2)}\n`);
     } catch (err) {
       clearInterval(dots);
       const e = err as { status?: number; message?: string };
@@ -166,7 +165,9 @@ async function main() {
     completed++;
     const cost = (r.tokensIn / 1000) * AUDIT_MODEL_PRICING.inputPer1K + (r.tokensOut / 1000) * AUDIT_MODEL_PRICING.outputPer1K;
     totalCost += cost;
-    console.log(` ${r.seconds}s | thinking ${r.thinkingChars} chars | tokens ${r.tokensIn}/${r.tokensOut} | ≈$${cost.toFixed(3)} | findings ${r.findings.length}`);
+    console.log(` ${r.seconds}s | thinking ${r.thinkingChars} chars | tokens ${r.tokensIn}/${r.tokensOut} | ≈$${cost.toFixed(3)} | review: ${r.reviewed} | findings: draft ${r.draftFindings.length} → final ${r.findings.length}`);
+    const finalTitles = new Set(r.findings.map(f => f.title));
+    for (const f of r.draftFindings) if (!finalTitles.has(f.title)) console.log(`     (draft only) [${f.risk_level} / ${f.evidence_status}] ${f.title}`);
     for (const f of r.findings) console.log(`     • [${f.risk_level} / ${f.evidence_status}] ${f.title}`);
     for (const c of CHECKS) {
       const ok = c.test(r);
