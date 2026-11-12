@@ -39,6 +39,7 @@ export interface PDFPageImage {
 
 /** Summary section from the СекцияРасчСчет block of a 1CClientBankExchange file. */
 import { buildStatementFacts } from "./statement-facts";
+import { describeSheetOverlap, type SheetData } from "./sheet-overlap";
 
 export interface C1AccountSummary {
   account: string;          // РасчСчет
@@ -400,6 +401,7 @@ export async function parseXLSX(buffer: ArrayBuffer, range?: DateRange): Promise
     let totalRowCount = 0;
     const sheetBlocks: string[] = [];
     const sheetNamesUsed: string[] = [];
+    const sheetData: SheetData[] = [];   // for the repeated-sheet check below
 
     for (const sheetKey of sheetKeys) {
       const sheetName = sheetNameByKey[sheetKey]
@@ -433,6 +435,7 @@ export async function parseXLSX(buffer: ArrayBuffer, range?: DateRange): Promise
 
       const sheetRowCount = dataRowValues.length;
       totalRowCount += sheetRowCount;
+      sheetData.push({ name: sheetName, headers: headerValues, rows: dataRowValues });
 
       const maxRows = Math.min(dataRowValues.length, ROWS_PER_SHEET_CAP);
       const csvLines: string[] = [headerValues.join(";")];
@@ -449,8 +452,15 @@ export async function parseXLSX(buffer: ArrayBuffer, range?: DateRange): Promise
       );
     }
 
+    // Sheets that repeat another sheet's rows (e.g. a "without documents"
+      // subset next to the full list): tell the model, and do not count —
+      // or bill — the same operations twice.
+    const overlap = describeSheetOverlap(sheetData);
+    totalRowCount -= overlap.duplicateRows;
+
     const multiSheetHeader = sheetKeys.length > 1
-      ? `[Файл содержит ${sheetKeys.length} листов: ${sheetNamesUsed.join(", ")}]\n\n`
+      ? `[Файл содержит ${sheetKeys.length} листов: ${sheetNamesUsed.join(", ")}]\n` +
+        (overlap.notes.length ? overlap.notes.join("\n") + "\n" : "") + "\n"
       : "";
 
     const textContent = (multiSheetHeader + sheetBlocks.join("\n\n")).slice(0, MAX_CONTENT_CHARS);

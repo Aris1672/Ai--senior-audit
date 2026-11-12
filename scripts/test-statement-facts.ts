@@ -69,6 +69,23 @@ async function main() {
   assert.equal(mismatch.totalsMatch, false, "missing operations are detected");
   assert.equal(buildStatementFacts([]), "", "no operations → no block");
 
+  // ── 3. Sheets that repeat each other (lib/sheet-overlap.ts) ─────────────────
+  const { describeSheetOverlap } = await import("../lib/sheet-overlap");
+  const fullSheet = { name: "Полный список", headers: ["Дата", "Номер", "Контрагент", "Назначение", "Сумма"], rows: [
+    ["01.02.2024", "1", "ООО А", "Счёт 1", "100.00"], ["02.02.2024", "2", "ООО Б", "Счёт 2", "200.00"],
+    ["12.08.2024", "3", "ИП В", "Счёт № 22", "35000.00"], ["12.08.2024", "4", "ИП В", "Счёт № 22", "35000.00"],   // two identical payments
+    ["15.08.2024", "5", "ООО А", "Счёт 9", "50.00"] ] };
+  const subset = { name: "Без документов", headers: ["Дата", "Контрагент", "Назначение", "Сумма", "Резерв"], rows: [
+    ["02.02.2024", "ООО Б", "Счёт 2", "200.00", "0"], ["12.08.2024", "ИП В", "Счёт № 22", "35000.00", "0"], ["12.08.2024", "ИП В", "Счёт № 22", "35000.00", "0"] ] };
+  const other = { name: "Сотрудники", headers: ["ФИО", "Должность", "Оклад"], rows: [["x", "y", "1"]] };
+  const ov = describeSheetOverlap([subset, fullSheet, other]);
+  assert.equal(ov.duplicateRows, 3, "all three subset rows are repeats (both identical payments matched once each)");
+  assert.equal(ov.notes.length, 1);
+  assert.ok(ov.notes[0].includes("«Без документов» повторяет строки листа «Полный список»") && ov.notes[0].includes("(5 строк)"));
+  assert.equal(describeSheetOverlap([fullSheet, other]).duplicateRows, 0, "unrelated sheets are left alone");
+  const partial = { ...subset, rows: [subset.rows[0], ["03.03.2024", "ООО Г", "другое", "1.00", "0"], ["04.03.2024", "ООО Д", "другое", "2.00", "0"]] };
+  assert.equal(describeSheetOverlap([partial, fullSheet]).duplicateRows, 0, "a sheet that only partly overlaps is not treated as a repeat");
+
   console.log("✅ statement-facts: all checks passed");
 }
 main().catch(e => { console.error("❌", e.message ?? e); process.exit(1); });
