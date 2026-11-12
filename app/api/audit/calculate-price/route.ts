@@ -15,7 +15,7 @@
  */
 
 import { createAdminClient } from "@/lib/supabase-server";
-import { parseFile } from "@/lib/file-parser";
+import { parseFile, toParsedSummary } from "@/lib/file-parser";
 import { calcAuditPrice } from "@/lib/billing";
 import { NextRequest, NextResponse } from "next/server";
 
@@ -116,7 +116,7 @@ export async function POST(req: NextRequest) {
         // Cache the result
         await supabase
           .from("documents")
-          .update({ parsed_data: result, status: "ready" })
+          .update({ parsed_data: toParsedSummary(result), status: "ready" })
           .eq("id", documentId);
       }
     }

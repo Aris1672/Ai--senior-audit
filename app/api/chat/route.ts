@@ -5,6 +5,7 @@ import { runAuditTurn } from "@/lib/audit-engine";
 import { Pseudonymizer, PseudonymizationError } from "@/lib/pseudonymize";
 import { createAdminClient } from "@/lib/supabase-server";
 import { parseFile, renderPDFPagesAsImages, type DateRange } from "@/lib/file-parser";
+import { checkRequestVolume, isContextLimitError, CONTEXT_LIMIT_MESSAGE, type VolumePart } from "@/lib/volume";
 import { NextRequest, NextResponse } from "next/server";
 
 // Pro plan: up to 300s by default (800s with Fluid Compute enabled).
@@ -20,6 +21,8 @@ export const maxDuration = 300;
 interface DocumentsResult {
   textContent: string | null;
   images: { fileName: string; mediaType: string; base64: string }[];
+  /** Text size of each document, for the request volume check. */
+  sizes: VolumePart[];
 }
 
 // Placeholder text for images / scanned PDFs while the audit model can't
@@ -52,6 +55,7 @@ async function getAllDocumentsContent(
   step: StepFn
 ): Promise<DocumentsResult> {
   const images: DocumentsResult["images"] = [];
+  const sizes: VolumePart[] = [];
 
   try {
     console.log("[chat] Looking up all documents for sessionId:", sessionId);
@@ -64,11 +68,11 @@ async function getAllDocumentsContent(
 
     if (docErr) {
       console.error("[chat] Document lookup error:", docErr.message);
-      return { textContent: null, images };
+      return { textContent: null, images, sizes };
     }
     if (!docs || docs.length === 0) {
       console.warn("[chat] No documents found for session:", sessionId);
-      return { textContent: null, images };
+      return { textContent: null, images, sizes };
     }
 
     console.log(`[chat] Found ${docs.length} document(s) for session`);
@@ -198,19 +202,20 @@ async function getAllDocumentsContent(
       const content = parsed.textContent
         || `[Содержимое не извлечено. Строк: ${parsed.rowCount}]`;
 
+      sizes.push({ name: doc.file_name, chars: content.length });
       sections.push(
         `=== ДОКУМЕНТ: ${doc.file_name} ===\n${header}\n\n${content}\n=== КОНЕЦ: ${doc.file_name} ===`
       );
     }
 
-    if (sections.length === 0) return { textContent: null, images };
+    if (sections.length === 0) return { textContent: null, images, sizes };
 
     const intro = docs.length > 1 ? `Загружено документов: ${docs.length}\n\n` : "";
-    return { textContent: intro + sections.join("\n\n"), images };
+    return { textContent: intro + sections.join("\n\n"), images, sizes };
 
   } catch (err) {
     console.error("[chat] getAllDocumentsContent exception:", err);
-    return { textContent: null, images };
+    return { textContent: null, images, sizes };
   }
 }
 
@@ -448,6 +453,7 @@ export async function POST(req: NextRequest) {
           // image content blocks on the user message, not as text in the prompt.
           let fileSection = "";
           let images: { fileName: string; mediaType: string; base64: string }[] = [];
+          let docSizes: VolumePart[] = [];
           if (sessionId) {
             // Look up the audit's selected period so document parsing only
             // includes rows inside it — same period_from/period_to written by
@@ -466,6 +472,7 @@ export async function POST(req: NextRequest) {
 
             const docsResult = await getAllDocumentsContent(supabase, sessionId, period, step);
             images = docsResult.images;
+            docSizes = docsResult.sizes;
             if (docsResult.textContent) {
               fileSection = `\n\n=== ЗАГРУЖЕННЫЕ ФИНАНСОВЫЕ ДОКУМЕНТЫ ===\n${docsResult.textContent}\n=== КОНЕЦ ДОКУМЕНТОВ ===`;
               console.log("[chat] File section length:", fileSection.length);
@@ -508,6 +515,25 @@ export async function POST(req: NextRequest) {
           console.log("[chat] System prompt length:", systemPrompt.length,
             "| Model:", AUDIT_MODEL,
             "| Has files:", fileSection.length > 0);
+
+          // ── Volume check: refuse, never cut ───────────────────────────────
+          // The parsers pass every row through. If the whole request is more
+          // than the model can take in one call, stop here with a clear
+          // message — no model call, nothing shortened. See lib/volume.ts.
+          const historyChars = (messages as { content?: unknown }[]).reduce(
+            (sum, m) => sum + (typeof m.content === "string" ? m.content.length : 0), 0);
+          const docChars = docSizes.reduce((sum, d) => sum + d.chars, 0);
+          const volume = checkRequestVolume(systemPrompt.length - docChars + historyChars, docSizes);
+          console.log("[chat] request volume:", volume.totalChars, "chars | limit:", volume.limitChars);
+          if (!volume.ok) {
+            console.warn("[chat] request over the model limit — NOT sent");
+            step("Объём документов превышает предел одного запроса — анализ не запущен");
+            send({ type: "error", error: volume.message });
+            clearInterval(heartbeat);
+            clearInterval(thinkingFlush);
+            controller.close();
+            return;
+          }
 
           let fullText = "";
           let workingMessages = [...messages];
@@ -580,6 +606,9 @@ export async function POST(req: NextRequest) {
             send({ type: "error", error: /service unavailable/.test(err.message)
               ? "Сервис обезличивания персональных данных временно недоступен, поэтому запрос не был отправлен на анализ. Данные никуда не переданы. Повторите попытку позже или обратитесь в поддержку."
               : "Не удалось обезличить персональные данные в документах, поэтому запрос не был отправлен на анализ. Данные никуда не переданы. Обратитесь в поддержку." });
+          } else if (isContextLimitError(err)) {
+            console.error("[chat] model rejected the request size:", (err as Error)?.message);
+            send({ type: "error", error: CONTEXT_LIMIT_MESSAGE });
           } else {
             console.error("[chat] stream error:", err);
             send({ type: "error", error: "Внутренняя ошибка сервера во время генерации ответа" });

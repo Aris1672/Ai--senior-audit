@@ -2,6 +2,14 @@
 
 Prioritized by what it blocks. Derived from full source review (see PROJECT_STATUS.md for details on each item).
 
+> **Updated November 12, 2026 (work order agreed)** — details in `PROJECT_STATUS.md` top entries.
+> - [x] **1. Decisions written down** — two stages (analysis 12.5 ₽/operation; correction 20 ₽/page), page definition, charging rules, overlap rule, volume rule.
+> - [x] **2. Volume** — 500-row / 500-operation / 50 000-character caps removed; request over the model's limit (1 648 800 characters) is refused with a clear message; `npm run test:volume`. *To verify after deploy: one large file end to end (Natasha speed, DeepSeek accepting it).*
+> - [ ] **3. Billing** — server-side counting per document; cost shown and confirmed before a file is analysed (chat uploads too); each operation charged once across overlapping files; amount recorded per audit and frozen at completion; `/api/audit/calculate-price` protected.
+> - [ ] **4. 1C mock server + reader** — from the real `$metadata` exported from the 1С:Фреш trial; then one run against Фреш.
+> - [ ] **5. OCR, then stage 2** (documents linked to findings, closing a finding, before/after report).
+> - [ ] Also open: computed facts for Excel/CSV; token usage and cost recorded per turn; background jobs for long audits; server-side access checks on all API routes; anonymised ООО file as a second regression fixture; redeploy + re-run of the ООО file for commits `10d5045` / `133424b`.
+
 > **Updated November 12, 2026** — **Step A (DeepSeek integration) built in code**, safe to deploy: production stays on Anthropic until `LLM_API_KEY` is added in Coolify. **Next: run `npm run check:llm` locally with the DeepSeek key**, then decide when to set the Coolify env. Decided: **pseudonymize individuals only.** DeepSeek V4 Pro confirmed to have no image input → images/scans are not sent to it (model is told they weren't analyzed) until Step B. Step B approach under discussion: self-hosted OCR service vs GigaChat.
 
 > **Updated November 2, 2026** — **Decided to switch the audit LLM from Anthropic (Claude Sonnet 5) to DeepSeek V4 Pro**, because Anthropic is banned in Russia. Planning session only, no code changed. Three decisions: (1) use DeepSeek's **Anthropic-compatible endpoint** (minimal code change); (2) **GigaChat** reads scanned PDFs/images (Russia-hosted); (3) **pseudonymization must be built before any client data goes to DeepSeek** (code personal data → DeepSeek → restore). Full design in `PROJECT_STATUS.md` → "Planned Change: LLM Provider Switch". **Build checklist in the new "NEXT SESSION" section below — start there next time.**

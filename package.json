@@ -10,7 +10,8 @@
     "check:llm": "tsx scripts/check-llm.ts",
     "check:audit": "tsx scripts/check-audit.ts",
     "test:facts": "tsx scripts/test-statement-facts.ts",
-    "test:pii": "tsx scripts/test-pseudonymize.ts"
+    "test:pii": "tsx scripts/test-pseudonymize.ts",
+    "test:volume": "tsx scripts/test-volume.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.96.0",

@@ -8,7 +8,7 @@
  */
 
 import { createAdminClient } from "@/lib/supabase-server";
-import { parseFile, is1CClientBankExchange } from "@/lib/file-parser";
+import { parseFile, is1CClientBankExchange, toParsedSummary } from "@/lib/file-parser";
 import { NextRequest, NextResponse } from "next/server";
 
 const ALLOWED_TYPES: Record<string, string> = {
@@ -161,7 +161,7 @@ export async function POST(req: NextRequest) {
         .then((result) =>
           supabase
             .from("documents")
-            .update({ parsed_data: result, status: "ready" })
+            .update({ parsed_data: toParsedSummary(result), status: "ready" })
             .eq("id", doc.id)
         )
         .catch((err) => console.error("[upload] background parse error:", err));

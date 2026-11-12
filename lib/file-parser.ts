@@ -73,7 +73,10 @@ export interface C1Transaction {
   paymentType?: string;     // ВидОплаты
 }
 
-const MAX_CONTENT_CHARS = 50_000;
+// No volume caps (Nov 2026, user decision): every row and every character of
+// a document is passed on. The only ceiling is the audit model's own limit,
+// checked per request in lib/volume.ts — where an oversized request is
+// refused with a clear message instead of being cut here without notice.
 
 // ─── Date-range filtering (audit period) ─────────────────────────────────────
 // Optional filter applied to tabular formats (xlsx/xls/csv) so a document
@@ -191,11 +194,8 @@ export function parseCSV(buffer: ArrayBuffer, range?: DateRange): ParseResult {
     });
   }
 
-  const maxRows   = Math.min(dataLines.length, 500);
   const totalRows = dataLines.length;
-  const textContent =
-    [headers.join(delimiter), ...dataLines.slice(0, maxRows)].join("\n").slice(0, MAX_CONTENT_CHARS) +
-    (totalRows > 500 ? `\n\n[Показаны первые 500 из ${totalRows} строк]` : "");
+  const textContent = [headers.join(delimiter), ...dataLines].join("\n");
 
   return { rowCount: totalRows, parseMethod: "csv", detectedColumns: headers.filter(Boolean).slice(0, 10), textContent, parsedAt: now() };
 }
@@ -208,7 +208,7 @@ export function parseXML(buffer: ArrayBuffer): ParseResult {
   for (const tag of XML_TRANSACTION_TAGS) {
     const matches = text.match(new RegExp(`<${tag}[\\s>]`, "gi"));
     if (matches && matches.length > 0) {
-      return { rowCount: matches.length, parseMethod: "xml", xmlElement: tag, textContent: text.slice(0, MAX_CONTENT_CHARS), parsedAt: now() };
+      return { rowCount: matches.length, parseMethod: "xml", xmlElement: tag, textContent: text, parsedAt: now() };
     }
   }
 
@@ -220,7 +220,7 @@ export function parseXML(buffer: ArrayBuffer): ParseResult {
   }
   const candidate = Object.entries(freq).sort((a, b) => b[1] - a[1]).find(([, c]) => c > 1);
 
-  return { rowCount: candidate ? candidate[1] : 0, parseMethod: "xml", xmlElement: candidate?.[0], textContent: text.slice(0, MAX_CONTENT_CHARS), parsedAt: now() };
+  return { rowCount: candidate ? candidate[1] : 0, parseMethod: "xml", xmlElement: candidate?.[0], textContent: text, parsedAt: now() };
 }
 
 // ─── DOCX ─────────────────────────────────────────────────────────────────────
@@ -241,8 +241,7 @@ export async function parseDOCX(buffer: ArrayBuffer): Promise<ParseResult> {
       .trim();
 
     const paragraphs  = (docXml.match(/<w:p[\s>]/g) || []).length;
-    const textContent = rawText.slice(0, MAX_CONTENT_CHARS) +
-      (rawText.length > MAX_CONTENT_CHARS ? "\n\n[Текст обрезан]" : "");
+    const textContent = rawText;
 
     return { rowCount: paragraphs, parseMethod: "docx", textContent, parsedAt: now() };
   } catch (err) {
@@ -262,7 +261,6 @@ export async function parseXLS(buffer: ArrayBuffer, range?: DateRange): Promise<
     const workbook = XLSX.read(new Uint8Array(buffer), { type: "array" });
     if (workbook.SheetNames.length === 0) throw new Error("No sheets found in XLS");
 
-    const ROWS_PER_SHEET_CAP = 500;
     let totalRowCount = 0;
     const sheetBlocks: string[] = [];
     const allHeaders: string[] = [];
@@ -290,21 +288,16 @@ export async function parseXLS(buffer: ArrayBuffer, range?: DateRange): Promise<
 
       const totalRows = dataRows.length;
       totalRowCount  += totalRows;
-      const maxRows   = Math.min(dataRows.length, ROWS_PER_SHEET_CAP);
 
       const lines = [
         headersRaw.join(";"),
-        ...dataRows.slice(0, maxRows).map(row =>
+        ...dataRows.map(row =>
           (row as any[]).map(cell => String(cell ?? "").trim()).join(";")
         ),
       ];
 
-      const sheetTruncationNote = totalRows > ROWS_PER_SHEET_CAP
-        ? `\n[Лист "${sheetName}": показаны первые ${ROWS_PER_SHEET_CAP} из ${totalRows} строк]`
-        : "";
-
       sheetBlocks.push(
-        `--- ЛИСТ: ${sheetName} (${totalRows} строк) ---\n${lines.join("\n")}${sheetTruncationNote}`
+        `--- ЛИСТ: ${sheetName} (${totalRows} строк) ---\n${lines.join("\n")}`
       );
     }
 
@@ -312,7 +305,7 @@ export async function parseXLS(buffer: ArrayBuffer, range?: DateRange): Promise<
       ? `[Файл содержит ${workbook.SheetNames.length} листов: ${workbook.SheetNames.join(", ")}]\n\n`
       : "";
 
-    const textContent = (multiSheetHeader + sheetBlocks.join("\n\n")).slice(0, MAX_CONTENT_CHARS);
+    const textContent = multiSheetHeader + sheetBlocks.join("\n\n");
 
     return {
       rowCount:        totalRowCount,
@@ -397,7 +390,6 @@ export async function parseXLSX(buffer: ArrayBuffer, range?: DateRange): Promise
     }
 
     // ── Parse every sheet, not just the first ─────────────────────────────────
-    const ROWS_PER_SHEET_CAP = 500;
     let totalRowCount = 0;
     const sheetBlocks: string[] = [];
     const sheetNamesUsed: string[] = [];
@@ -437,18 +429,11 @@ export async function parseXLSX(buffer: ArrayBuffer, range?: DateRange): Promise
       totalRowCount += sheetRowCount;
       sheetData.push({ name: sheetName, headers: headerValues, rows: dataRowValues });
 
-      const maxRows = Math.min(dataRowValues.length, ROWS_PER_SHEET_CAP);
       const csvLines: string[] = [headerValues.join(";")];
-      for (let i = 0; i < maxRows; i++) {
-        csvLines.push(dataRowValues[i].join(";"));
-      }
-
-      const sheetTruncationNote = sheetRowCount > ROWS_PER_SHEET_CAP
-        ? `\n[Лист "${sheetName}": показаны первые ${ROWS_PER_SHEET_CAP} из ${sheetRowCount} строк]`
-        : "";
+      for (const values of dataRowValues) csvLines.push(values.join(";"));
 
       sheetBlocks.push(
-        `--- ЛИСТ: ${sheetName} (${sheetRowCount} строк) ---\n${csvLines.join("\n")}${sheetTruncationNote}`
+        `--- ЛИСТ: ${sheetName} (${sheetRowCount} строк) ---\n${csvLines.join("\n")}`
       );
     }
 
@@ -463,7 +448,7 @@ export async function parseXLSX(buffer: ArrayBuffer, range?: DateRange): Promise
         (overlap.notes.length ? overlap.notes.join("\n") + "\n" : "") + "\n"
       : "";
 
-    const textContent = (multiSheetHeader + sheetBlocks.join("\n\n")).slice(0, MAX_CONTENT_CHARS);
+    const textContent = multiSheetHeader + sheetBlocks.join("\n\n");
 
     return {
       rowCount:        totalRowCount,
@@ -495,8 +480,7 @@ export async function parseDOC(buffer: ArrayBuffer): Promise<ParseResult> {
     const lines    = rawText.split(/\n/).filter(l => l.trim().length > 0);
     const rowCount = lines.length;
 
-    const textContent = rawText.slice(0, MAX_CONTENT_CHARS) +
-      (rawText.length > MAX_CONTENT_CHARS ? "\n\n[Текст обрезан]" : "");
+    const textContent = rawText;
 
     return { rowCount, parseMethod: "doc", textContent, parsedAt: now() };
   } catch (err) {
@@ -583,9 +567,7 @@ export async function parsePDF(buffer: ArrayBuffer): Promise<ParseResult> {
     const lines    = rawText.split(/\n/).filter(l => l.trim().length > 0);
     const rowCount = lines.length;
 
-    const truncated    = rawText.length > MAX_CONTENT_CHARS;
-    const textContent  = rawText.slice(0, MAX_CONTENT_CHARS) +
-      (truncated ? "\n\n[Текст обрезан]" : "");
+    const textContent  = rawText;
 
     return {
       rowCount,
@@ -847,21 +829,15 @@ export function parse1CTxt(buffer: ArrayBuffer): ParseResult {
     "",
   ] : [];
 
-  const maxRows   = Math.min(csvRows.length, 500);
-  const truncNote = transactions.length > 500
-    ? `\n[Показаны первые 500 из ${transactions.length} транзакций]`
-    : "";
-
-  // Facts computed in code over ALL transactions (also beyond the 500-row
-  // cap) — placed before the operation list so they are never truncated.
+  // Facts computed in code over all transactions, placed before the list.
   const facts = buildStatementFacts(transactions, accountSummary);
 
   const textContent = [
     ...summaryLines,
     ...(facts ? [facts, "", "=== СПИСОК ОПЕРАЦИЙ ==="] : []),
     CSV_HEADERS,
-    ...csvRows.slice(0, maxRows),
-  ].join("\n").slice(0, MAX_CONTENT_CHARS) + truncNote;
+    ...csvRows,
+  ].join("\n");
 
   return {
     rowCount:         transactions.length,
@@ -892,3 +868,14 @@ export async function parseFile(
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 function now() { return new Date().toISOString(); }
+
+// ─── What is cached in documents.parsed_data ─────────────────────────────────
+// Counts and labels only. The document text is re-read from storage on every
+// audit request, and with no volume caps it can be megabytes — it must not be
+// copied into a database row. `textChars` keeps its size for volume checks.
+export type ParsedSummary = Omit<ParseResult, "textContent"> & { textChars: number };
+
+export function toParsedSummary(result: ParseResult): ParsedSummary {
+  const { textContent, ...rest } = result;
+  return { ...rest, textChars: textContent?.length ?? 0 };
+}

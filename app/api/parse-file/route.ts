@@ -9,7 +9,7 @@
  */
 
 import { createAdminClient } from "@/lib/supabase-server";
-import { parseFile, is1CClientBankExchange, type ParseResult } from "@/lib/file-parser";
+import { parseFile, is1CClientBankExchange, type ParseResult, toParsedSummary } from "@/lib/file-parser";
 import { NextRequest, NextResponse } from "next/server";
 
 const PARSEABLE = new Set(["xlsx", "csv", "xml", "xls", "docx", "doc", "pdf", "1c_txt"]);
@@ -89,7 +89,7 @@ export async function POST(req: NextRequest) {
     // ── Cache result in documents table ───────────────────────────────────
     await supabase
       .from("documents")
-      .update({ parsed_data: result, status: "ready" })
+      .update({ parsed_data: toParsedSummary(result), status: "ready" })
       .eq("id", documentId);
 
     return NextResponse.json({
