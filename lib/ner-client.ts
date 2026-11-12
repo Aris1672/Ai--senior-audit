@@ -7,10 +7,13 @@
  *                 weaker protection).
  * NER_URL unset → the service is not used; names are found by the shape rules
  *                 in lib/pseudonymize.ts only. A warning is logged once.
- * NER_TOKEN     → optional shared secret, sent as X-NER-Token.
+ * NER_TOKEN     → shared secret, sent as X-NER-Token. Required together with
+ *                 NER_URL (the service rejects calls without it).
  *
- * The request carries REAL client text — it must only ever go to our own
- * server over the internal Docker network (http://<alias>:8000).
+ * The request carries REAL client text — NER_URL must point only at our own
+ * service on our own server: either a private Docker network address, or the
+ * service's own HTTPS domain on the Coolify server (see services/ner/README.md).
+ * Plain http:// to anything but a private address is refused.
  */
 import { PseudonymizationError } from "./pseudonymize";
 
@@ -29,6 +32,10 @@ export async function detectNames(texts: string[]): Promise<DetectedName[] | nul
     return null;
   }
   try {
+    if (!process.env.NER_TOKEN) throw new Error("NER_TOKEN is not set");
+    const u = new URL(base);
+    const privateHost = /^(localhost|127\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/.test(u.hostname) || !u.hostname.includes(".");
+    if (u.protocol !== "https:" && !privateHost) throw new Error("NER_URL must be https:// unless it is a private address");
     const res = await fetch(`${base.replace(/\/+$/, "")}/names`, {
       method: "POST",
       headers: { "content-type": "application/json", ...(process.env.NER_TOKEN ? { "x-ner-token": process.env.NER_TOKEN } : {}) },

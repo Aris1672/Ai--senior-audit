@@ -9,14 +9,17 @@ shape rules cannot: a bare surname in free text ("возврат займа Си
             ->  {"names": [{"text": "Сидорову", "normal": "Сидоров"}, ...]}
   GET  /health  -> {"status": "ok"}
 
-Privacy: runs on our own server, reachable only from the auditor app over the
-internal Docker network (no public domain). It receives REAL client text, so it
-never logs request content and keeps nothing after the response.
+Privacy: runs on our own server and receives REAL client text, so it never
+logs request content and keeps nothing after the response. Every /names call
+must carry the shared secret NER_TOKEN (header X-NER-Token) — the service
+refuses to work without one configured, because on this infrastructure it may
+have to be reached through a public domain (see README).
 
 Bank exports are often ALL CAPS, where NER models fail. Such lines are
 "true-cased" first: words that the morphology dictionary knows as a surname,
 first name or patronymic get a capital letter, everything else is lowercased.
 """
+import hmac
 import os
 import re
 from typing import List
@@ -87,7 +90,9 @@ def health() -> dict:
 
 @app.post("/names")
 def names(req: NamesRequest, x_ner_token: str = Header(default="")) -> dict:
-    if TOKEN and x_ner_token != TOKEN:
+    if not TOKEN:
+        raise HTTPException(status_code=503, detail="NER_TOKEN is not configured on the service")
+    if not hmac.compare_digest(x_ner_token.encode(), TOKEN.encode()):
         raise HTTPException(status_code=401, detail="unauthorized")
     if len(req.texts) > MAX_TEXTS or sum(len(t) for t in req.texts) > MAX_TOTAL_CHARS:
         raise HTTPException(status_code=413, detail="request too large")

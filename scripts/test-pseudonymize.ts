@@ -152,13 +152,15 @@ async function main() {
   // Service configured but unreachable → the audit is blocked, nothing is sent
   const { detectNames } = await import("../lib/ner-client");
   assert.equal(await detectNames(["текст"]), null, "service not configured → not used");
+  process.env.NER_URL = "http://ner.example.com"; process.env.NER_TOKEN = "t";
+  await assert.rejects(() => detectNames(["x"]), /https/, "plain http to a public host is refused");
   process.env.NER_URL = "http://127.0.0.1:9";   // nothing listens here
   await assert.rejects(() => detectNames(["оплата Сидорову"]), (e: Error) => e instanceof PseudonymizationError && !/Сидоров/.test(e.message));
   const before = sent.length;
   await assert.rejects(() => runAuditTurn(system, messages, { step: () => {}, text: () => {}, thinking: () => {}, reset: () => {} }, new Pseudonymizer()),
     PseudonymizationError);
   assert.equal(sent.length, before, "name service down → no call to the model at all");
-  delete process.env.NER_URL;
+  delete process.env.NER_URL; delete process.env.NER_TOKEN;
 
   console.log("✅ pseudonymize: all checks passed (coding rules, restore, streaming, fail-closed, leak scan of the outbound payload, name-service integration)");
 }
