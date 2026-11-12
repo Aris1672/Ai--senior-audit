@@ -206,6 +206,13 @@ async function streamChat(
   return fullText;
 }
 
+// Masked card and account numbers ("427638******2966") contain runs of
+// stars that Markdown reads as bold markers and removes. Stars directly
+// between digits are escaped so they are shown as written.
+function keepMaskStars(text: string): string {
+  return text.replace(/(?<=\d)\*+(?=\d)/g, stars => "\\*".repeat(stars.length));
+}
+
 export default function ChatPage() {
   const [messages,       setMessages]       = useState<Message[]>([]);
   const [input,          setInput]          = useState("");
@@ -768,7 +775,7 @@ export default function ChatPage() {
                       }} />
                     </>
                   : renderMarkdown
-                    ? <ReactMarkdown components={markdownComponents}>{msg.content}</ReactMarkdown>
+                    ? <ReactMarkdown components={markdownComponents}>{keepMaskStars(msg.content)}</ReactMarkdown>
                     : msg.content
                 }
                 {msg.role === "assistant" && !isTyping && msg.thinking && (
