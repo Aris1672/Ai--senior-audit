@@ -83,6 +83,10 @@ const CHECKS: { id: string; label: string; required: boolean; test: (r: RunResul
       (hasNumber(blob(f), "14212", "09") || /13\s?[.–—-]\s?19\.11|ноябрьск|факторинг/i.test(f.title ?? ""))) },
   { id: "marking-limits", required: false, label: "«Границы проверки» tells the client to check the bank's АУСН marking",
     test: r => /разметк/i.test(r.text.slice(Math.max(0, r.text.search(/границы проверки/i)))) },
+  // The statement of one account cannot show that tax was not paid: the
+  // client reserves tax on another own account. Limits item, not a finding.
+  { id: "tax-unpaid", required: true, label: "\"tax not paid\" NOT recorded as a finding (payment may go through the tax-reserve account — limits only)",
+    test: r => !r.findings.some(f => /налог\S*[^.]{0,40}не\s?(уплачен|оплачен|перечислен)|неуплат\S+\s+налог|отсутств\S+\s+(уплат|платеж)\S*\s+налог/i.test(f.title ?? "")) },
   { id: "no-docs", required: true, label: "\"no primary documents\" NOT recorded as a violation",
     test: r => !r.findings.some(f => /(отсутств|непредставлен|не представлен)\S*\s+(первичн|подтверждающ)/i.test(f.title ?? "")) },
   { id: "no-402", required: true, label: "402-ФЗ / ПБУ not cited as legal basis against an ИП",
