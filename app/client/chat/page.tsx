@@ -542,6 +542,8 @@ export default function ChatPage() {
   async function uploadFilesAndSend(files: File[], uid: string, sid: string, currentMessages: Message[]) {
     setUploading(true);
     const quoted: { documentId: string; quoteText: string; amountRub: number }[] = [];
+    // Files identical to one already in this audit: not kept, not analysed again.
+    const repeats: { documentId: string; fileName: string }[] = [];
 
     for (const file of files) {
       const formData = new FormData();
@@ -559,12 +561,27 @@ export default function ChatPage() {
         if (quoted.length > 0) await settleQuote(sid, quoted.map(q => q.documentId), false);
         return; // stop on first failure — avoids sending a partial/confusing analysis
       }
-      if (uploadData.quote) {
+      if (uploadData.quote?.kind === "duplicate") {
+        repeats.push({ documentId: uploadData.documentId, fileName: file.name });
+      } else if (uploadData.quote) {
         quoted.push({ documentId: uploadData.documentId, quoteText: uploadData.quoteText, amountRub: Number(uploadData.quote.amountRub) || 0 });
       }
     }
 
     setUploading(false);
+
+    // A repeated file adds nothing: it is removed, and if nothing else was
+    // uploaded the model is not called at all (a full analysis of a file it
+    // has already analysed costs time and money and says nothing new).
+    if (repeats.length > 0) {
+      await settleQuote(sid, repeats.map(r => r.documentId), false);
+      const names = repeats.map(r => `«${r.fileName}»`).join(", ");
+      if (repeats.length === files.length) {
+        pushAssistantReply(`${names}: такой файл уже загружен в этот аудит и проанализирован. Повторно он не анализируется и не оплачивается.`);
+        return;
+      }
+      pushAssistantReply(`${names}: такой файл уже загружен в этот аудит — повторно не анализируется и не оплачивается. Остальные документы приняты в работу.`);
+    }
 
     // ── Cost confirmation ────────────────────────────────────────────────
     // The server has priced each file. The client sees the cost and decides;
