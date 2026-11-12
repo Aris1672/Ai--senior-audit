@@ -171,7 +171,7 @@ async function generatePDF(session: SessionDetail, findings: Finding[]) {
             width: "*"
           },
           { 
-            text: "ОТЧЁТ ОБ АУДИТЕ СИСТЕМЫ", 
+            text: "ОТЧЁТ ОБ АУДИТЕ", 
             fontSize: 10, 
             bold: true, 
             color: colors.textLight, 
@@ -261,22 +261,31 @@ async function generatePDF(session: SessionDetail, findings: Finding[]) {
             stack: [
               { text: "Итоговое заключение", fontSize: 11, bold: true, color: colors.primary, margin: [0, 0, 0, 4] },
               {
+                // The wording must not say more than the findings do: with
+                // material findings on the list it used to read "замечания носят
+                // локальный характер", and with none — "полностью соответствуют".
                 text: criticalCt > 0
-                  ? `Внимание: По результатам автоматизированного анализа financial активности компании выявлено ${criticalCt} критичных нарушений требований законодательства РФ. Рекомендуется инициировать корректирующие мероприятия незамедлительно для минимизации налоговых и административных рисков.`
-                  : allFindings.length > 0
-                    ? "По результатам аудита критических системных несоответствий не обнаружено. Выявленные замечания носят локальный характер и подлежат штатному исправлению."
-                    : "По результатам комплексного аудита нарушений нормативных регламентов не выявлено. Финансовые транзакции полностью соответствуют действующим стандартам бухгалтерского учёта.",
+                  ? `По результатам проверки выявлено критичных нарушений: ${criticalCt}` +
+                    (majorCt > 0 ? `, существенных нарушений и признаков риска: ${majorCt}` : "") +
+                    `. Критичные нарушения требуют незамедлительного исправления — см. реестр ниже.`
+                  : majorCt > 0
+                    ? `Критичных нарушений не выявлено. Выявлено существенных нарушений и признаков риска: ${majorCt}` +
+                      (minorCt > 0 ? `; несущественных замечаний: ${minorCt}` : "") +
+                      `. Существенные нарушения требуют исправления и могут повлечь налоговые доначисления, штрафы и пени — см. реестр ниже.`
+                    : allFindings.length > 0
+                      ? `Критичных и существенных нарушений не выявлено. Несущественных замечаний: ${minorCt} — см. реестр ниже.`
+                      : "В пределах проверенных данных нарушений не выявлено. Вывод относится только к представленным документам и периоду.",
                 fontSize: 10, color: colors.textMain, lineHeight: 1.4
               }
             ],
-            fillColor: criticalCt > 0 ? "#fdf2f2" : "#f0f9f4",
+            fillColor: criticalCt > 0 ? "#fdf2f2" : majorCt > 0 ? "#fff8e6" : "#f0f9f4",
             padding: [12, 12, 12, 12],
             border: [true, true, true, true]
           }]]
         },
         layout: {
-          hLineColor: () => criticalCt > 0 ? "#f5c6cb" : "#c3e6cb",
-          vLineColor: () => criticalCt > 0 ? "#f5c6cb" : "#c3e6cb",
+          hLineColor: () => criticalCt > 0 ? "#f5c6cb" : majorCt > 0 ? "#f3dca0" : "#c3e6cb",
+          vLineColor: () => criticalCt > 0 ? "#f5c6cb" : majorCt > 0 ? "#f3dca0" : "#c3e6cb",
           hLineWidth: () => 1, vLineWidth: () => 1
         },
         margin: [0, 0, 0, 30]

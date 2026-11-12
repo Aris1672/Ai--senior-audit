@@ -52,7 +52,13 @@ export interface C1Snapshot {
 type Row = Record<string, any>;
 const ZERO = "00000000-0000-0000-0000-000000000000";
 const r2 = (n: number) => Math.round(n * 100) / 100;
-const money = (n: number) => r2(n).toFixed(2);
+/** "17 811 995,61" — the way amounts are written in Russian reports (the model copies what it is shown). */
+const money = (n: number) => {
+  const [int, frac] = Math.abs(r2(n)).toFixed(2).split(".");
+  return (r2(n) < 0 ? "-" : "") + int.replace(/\B(?=(\d{3})+(?!\d))/g, " ") + "," + frac;
+};
+/** Calendar day in Moscow of an ISO timestamp. */
+export const moscowDay = (isoTime: string) => new Date(isoTime).toLocaleDateString("ru-RU", { timeZone: "Europe/Moscow" });
 const day = (iso: string) => (iso && !iso.startsWith("0001") ? `${iso.slice(8, 10)}.${iso.slice(5, 7)}.${iso.slice(0, 4)}` : "");
 const cell = (v: unknown) => String(v ?? "").replace(/[\r\n;]+/g, " ").replace(/\s+/g, " ").trim();
 
@@ -253,7 +259,7 @@ export async function readC1Snapshot(config: C1Config, period: C1Period, opts: {
   const L: string[] = [];
   const orgName = cell(org.НаименованиеСокращенное || org.Description);
   const takenAt = new Date().toISOString();
-  L.push(`=== ИСТОЧНИК: БАЗА 1С (интерфейс OData), снимок данных от ${day(takenAt)} ===`);
+  L.push(`=== ИСТОЧНИК: БАЗА 1С (интерфейс OData), снимок данных от ${moscowDay(takenAt)} ===`);
   L.push(`Организация: ${orgName}, ИНН ${cell(org.ИНН)}`);
   L.push(`Период: ${day(period.from)} – ${day(period.to)}`);
   L.push(`Проведённых документов за период: ${operationKeys.length}; проводок: ${active.length}.`);
@@ -261,6 +267,10 @@ export async function readC1Snapshot(config: C1Config, period: C1Period, opts: {
   for (const w of warnings) L.push(`[ВНИМАНИЕ: ${w}]`);
 
   L.push("", "=== РАСЧЁТНЫЕ ФАКТЫ (посчитаны базой 1С и программой, не моделью — используй их как итоги, не пересчитывай по списку) ===");
+  L.push("Что по базе видно и чего не видно. Видно то, что записано в учёте: проводки, сальдо, проведённые и непроведённые документы, " +
+    "начисления и платежи — выводы из этих записей могут быть подтверждёнными. НЕ видно бумажных и электронных первичных документов: " +
+    "если в базе нет документа поступления, акта или договора, это значит только, что он не введён в учёт; есть ли он у организации — " +
+    "по базе установить нельзя. Такой случай — признак риска (документ нужно запросить), а не подтверждённое нарушение.");
 
   // 1. Trial balance by account.
   const byAccount = new Map<string, { open: number; dr: number; cr: number; close: number }>();
@@ -269,7 +279,7 @@ export async function readC1Snapshot(config: C1Config, period: C1Period, opts: {
     a.open += Number(t.СуммаOpeningBalance ?? 0); a.dr += Number(t.СуммаTurnoverDr ?? 0); a.cr += Number(t.СуммаTurnoverCr ?? 0); a.close += Number(t.СуммаClosingBalance ?? 0);
     byAccount.set(t.Account_Key, a);
   }
-  const side = (n: number) => (r2(n) === 0 ? "0.00" : n > 0 ? `Дт ${money(n)}` : `Кт ${money(-n)}`);
+  const side = (n: number) => (r2(n) === 0 ? "0,00" : n > 0 ? `Дт ${money(n)}` : `Кт ${money(-n)}`);
   L.push("", "1. Оборотно-сальдовая ведомость за период (по данным 1С):", "Счет;Наименование;Сальдо на начало;Оборот Дт;Оборот Кт;Сальдо на конец");
   const sortedAccounts = [...byAccount.entries()].sort((x, y) => code(x[0]).localeCompare(code(y[0]), "ru", { numeric: true }));
   let sumDr = 0, sumCr = 0;

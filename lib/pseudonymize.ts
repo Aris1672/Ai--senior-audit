@@ -133,20 +133,37 @@ const stemRe = (stem: string) => esc(stem).replace(/е/g, "[её]");
 // Anything else — and any name not known in full, in the nominative — stays
 // as it is: an undeclined name is clumsy, a wrongly declined one is worse.
 type NameCase = "genitive" | "dative";
-const BEFORE_NAME = `(?:\\s+(?:ИП|индивидуальн\\S+\\s+предпринимател\\S+|гр\\.|гражданин\\S*|участник\\S*|директор\\S*|сотрудник\\S*|работник\\S*))?\\s+$`;
-const GENITIVE_BEFORE = new RegExp(`(?:^|[^А-Яа-яЁё])(?:в пользу|в адрес|на имя|от|у|для|без|в отношении|со стороны|доход(?:а|ы|ов|у)?|статус(?:а|у)?|услуг(?:и|ам)?|задолженност(?:ь|и)|долг(?:а|у)?)${BEFORE_NAME}`, "i");
-const DATIVE_BEFORE = new RegExp(`(?:^|[^А-Яа-яЁё])(?:выдан(?:а|о|ы)?|выплачен(?:а|о|ы)?|перечислен(?:а|о|ы)?|начислен(?:а|о|ы)?|предоставлен(?:а|о|ы)?|уплачен(?:а|о|ы)?|оплачен(?:а|о|ы)?|выплат(?:а|ы|у)?|за[её]м|займ(?:а|ы|у)?|вознаграждени(?:е|я))${BEFORE_NAME}`, "i");
+const LETTER = "А-Яа-яЁё";
+// A role word may stand between the governing word and the name: "в пользу участника [ФЛ_1]".
+const ROLE = `(?:ИП|индивидуальн[${LETTER}]+\\s+предпринимател[${LETTER}]+|гр\\.|граждан[${LETTER}]+|участник[${LETTER}]*|учредител[${LETTER}]+|директор[${LETTER}]*|сотрудник[${LETTER}]*|работник[${LETTER}]*|исполнител[${LETTER}]+|физическ[${LETTER}]+\\s+лиц[${LETTER}]+)`;
+const TO_NAME = `(?:\\s+${ROLE})?\\s+$`;
+const START = `(?:^|[^${LETTER}])`;
+const GENITIVE_BEFORE = new RegExp(`${START}(?:в пользу|в адрес|на имя|от|у|для|без|в отношении|со стороны|доход(?:а|ы|ов|у)?|расход(?:а|ы|ов)?|статус(?:а|у)?|услуг(?:и|ам)?|задолженност(?:ь|и)|долг(?:а|у)?)${TO_NAME}`, "i");
+const DATIVE_BEFORE = new RegExp(`${START}(?:по|выдан(?:а|о|ы)?|выплачен(?:а|о|ы)?|перечислен(?:а|о|ы)?|начислен(?:а|о|ы)?|предоставлен(?:а|о|ы)?|уплачен(?:а|о|ы)?|оплачен(?:а|о|ы)?|выплат(?:а|ы|у)?|за[её]м|займ(?:а|ы|у)?|вознаграждени(?:е|я)|дивиденд(?:ы|ов)?)${TO_NAME}`, "i");
+// "платежей ИП [ФЛ_1]" → dative, but not "получатель платежа [ФЛ_1]" / "назначение платежа …".
+const PAYMENT_BEFORE = new RegExp(`${START}(получател[${LETTER}]+|плательщик[${LETTER}]*|назначени[${LETTER}]+|дат[${LETTER}]+|сумм[${LETTER}]+)?\\s*плат[её]ж(?:а|и|ей|ам)?${TO_NAME}`, "i");
+// The role word itself shows the case when nothing governs it: "участнику [ФЛ_1]", "директора [ФЛ_1]".
+const ROLE_DATIVE = new RegExp(`${START}(?:участнику|учредителю|директору|сотруднику|работнику|исполнителю|гражданину|гражданке|индивидуальному\\s+предпринимателю|физическому\\s+лицу)\\s+$`, "i");
+const ROLE_GENITIVE = new RegExp(`${START}(?:участника|учредителя|директора|сотрудника|работника|исполнителя|гражданина|гражданки|индивидуального\\s+предпринимателя|физического\\s+лица)\\s+$`, "i");
+// "…[ФЛ_1] и [ФЛ_2]", "…[ФЛ_1], [ФЛ_2]": the second name stands in the same case as the first.
+const AFTER_ANOTHER_NAME = /^([\s\S]*)\[ФЛ_\d+\](?:\s*,\s*|\s+(?:и|или|либо)\s+)(?:ИП\s+)?$/;
 
-function caseBefore(context: string): NameCase | null {
+function caseBefore(context: string, depth = 0): NameCase | null {
   // Inside a quotation the text is someone else's wording (a payment purpose,
   // a document title) and is given back exactly as it was.
   const line = context.slice(context.lastIndexOf("\n") + 1);
   const opened = (line.match(/«/g) ?? []).length > (line.match(/»/g) ?? []).length;
   const straight = (line.match(/"/g) ?? []).length % 2 === 1;
   if (opened || straight) return null;
-  const near = context.slice(-60);
+  const near = context.slice(-70);
   if (GENITIVE_BEFORE.test(near)) return "genitive";
   if (DATIVE_BEFORE.test(near)) return "dative";
+  const pay = near.match(PAYMENT_BEFORE);
+  if (pay) return pay[1] ? null : "dative";
+  if (ROLE_DATIVE.test(near)) return "dative";
+  if (ROLE_GENITIVE.test(near)) return "genitive";
+  const chain = depth < 3 ? line.match(AFTER_ANOTHER_NAME) : null;
+  if (chain) return caseBefore(context.slice(0, context.length - line.length) + chain[1], depth + 1);
   return null;
 }
 

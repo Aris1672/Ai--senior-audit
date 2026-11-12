@@ -35,7 +35,7 @@ async function main() {
     const postedDocs = Object.entries(base.sets).filter(([n]) => n.startsWith("Document_"))
       .flatMap(([, rows]) => rows).filter(r => r.Posted && String(r.Date).startsWith("2025"));
     assert.equal(snap.documentCount, postedDocs.length, "one operation per posted document of the period");
-    assert.equal(snap.documentCount, 746);
+    assert.equal(snap.documentCount, 759);
     assert.equal(snap.operationKeys.length, snap.documentCount);
     assert.equal(new Set(snap.operationKeys).size, snap.operationKeys.length, "no two documents share a billing key");
     assert.equal(snap.organisation.inn, "7700123456");
@@ -45,25 +45,29 @@ async function main() {
     const t = snap.text;
     const line = (re: RegExp) => t.split("\n").find(l => re.test(l)) ?? "";
     // Facts computed by 1C / code.
-    assert.match(t, /Итого обороты: Дт [\d.]+, Кт [\d.]+ — РАВНЫ\./);
+    assert.match(t, /Итого обороты: Дт [\d ]+,\d\d, Кт [\d ]+,\d\d — РАВНЫ\./);
     assert.match(line(/^- Оборот Дт 51/), /СОВПАДАЕТ/);
     assert.match(line(/^- Оборот Кт 51/), /СОВПАДАЕТ/);
-    assert.match(line(/^51;/), /^51;Расчетные счета;Дт 2400000\.00;/);
+    assert.match(line(/^51;/), /^51;Расчетные счета;Дт 2 400 000,00;/);
 
     // Every planted error is visible in the snapshot as a FACT (the conclusions are the model's job).
-    assert.match(line(/64380\.50 × 2/), /Бумажный Двор.*14\.05\.2025, 29\.05\.2025.*20781/, "double payment listed among repeated payments");
-    assert.match(line(/^- ООО "Меридиан-Сервис"; ИНН/), /оплачено 480000\.00/, "paid supplier with no incoming documents");
-    assert.match(line(/^60\.01;ООО "Меридиан-Сервис"/), /Дт 480000\.00$/, "…and its debit balance on 60.01");
-    assert.match(line(/^ИП Глебов Арсений Маркович;да;6;600000\.00/), /ОплатаПоставщику/);
-    assert.match(line(/^Сафонова Милена Робертовна;нет;6;240000\.00/), /ПрочееСписание/);
-    assert.match(line(/^58\.03;Лаптев Родион Аркадьевич/), /Дт 900000\.00$/, "director's loan outstanding");
+    assert.match(line(/64 380,50 × 2/), /Бумажный Двор.*14\.05\.2025, 29\.05\.2025.*20781/, "double payment listed among repeated payments");
+    assert.match(line(/^- ООО "Меридиан-Сервис"; ИНН/), /оплачено 480 000,00/, "paid supplier with no incoming documents");
+    assert.match(line(/^60\.01;ООО "Меридиан-Сервис"/), /Дт 480 000,00$/, "…and its debit balance on 60.01");
+    assert.match(line(/^ИП Глебов Арсений Маркович;да;6;600 000,00/), /ОплатаПоставщику/);
+    assert.match(line(/^Сафонова Милена Робертовна;нет;6;240 000,00/), /ПрочееСписание/);
+    assert.match(line(/^58\.03;Лаптев Родион Аркадьевич/), /Дт 900 000,00$/, "director's loan outstanding");
     assert.ok(t.includes("Выплата дивидендов по решению участника") && !/НДФЛ.*дивиденд/i.test(t.split("=== ПРОВОДКИ")[0].split("9. Перечисления")[1]), "dividends paid; no НДФЛ payment for them among tax payments");
-    assert.match(t, /5\. Непроведённые документы за период[^\n]*: 1\.\n- Реализация товаров и услуг № ВТРТ-\d+ от 12\.11\.2025; АО "Городские Аптеки"; 312400\.00/);
+    assert.match(t, /5\. Непроведённые документы за период[^\n]*: 1\.\n- Реализация товаров и услуг № ВТРТ-\d+ от 12\.11\.2025; АО "Городские Аптеки"; 312 400,00/);
     assert.ok(!t.includes("ошибочный ввод"), "a document marked for deletion is ignored");
-    const usn = t.split("\n").filter(l => /^\d\d\.\d\d\.2025;[\d.]+;Единый налоговый платеж \(авансовый платеж по УСН/.test(l));
+    const usn = t.split("\n").filter(l => /^\d\d\.\d\d\.2025;[\d ]+,\d\d;Единый налоговый платеж \(авансовый платеж по УСН/.test(l));
     assert.deepEqual(usn.map(l => l.slice(3, 5)), ["04", "10"], "УСН payments: April and October only");
-    assert.match(line(/^68\.12;/), /;263000\.00;Кт 88000\.00$/, "accrued 263 000, paid 175 000: the half-year advance is unpaid");
-    assert.match(line(/^41\.01;/), /;Дт [\d.]+$/, "goods end with a debit balance");
+    assert.match(line(/^68\.12;/), /;263 000,00;Кт 88 000,00$/, "accrued 263 000, paid 175 000: the half-year advance is unpaid");
+    assert.match(line(/^41\.01;/), /;Дт [\d ]+,\d\d$/, "goods end with a debit balance");
+    for (const a of ["44\\.01", "90\\.01\\.1", "90\\.02\\.1", "90\\.07\\.1", "90\\.09", "91\\.02", "91\\.09", "99\\.01"]) {
+      assert.match(line(new RegExp(`^${a};`)), /;0,00$/, `account ${a} is closed at year end`);
+    }
+    assert.match(t, /Такой случай — признак риска \(документ нужно запросить\), а не подтверждённое нарушение/);
 
     // Data sections are complete.
     const section = (title: string) => t.split(`=== ${title}`)[1].split("\n===")[0].trim().split("\n").slice(2).filter(Boolean);
@@ -80,16 +84,16 @@ async function main() {
     const q2 = await readC1Snapshot(config, { from: "2025-04-01", to: "2025-06-30" });
     assert.equal(q2.documentCount, postedDocs.filter(r => String(r.Date) >= "2025-04-01" && String(r.Date) < "2025-07-01").length);
     assert.ok(q2.documentCount > 150 && q2.documentCount < 250);
-    assert.ok(!/^51;Расчетные счета;Дт 2400000\.00;/m.test(q2.text) && /^51;Расчетные счета;Дт /m.test(q2.text));
+    assert.ok(!/^51;Расчетные счета;Дт 2 400 000,00;/m.test(q2.text) && /^51;Расчетные счета;Дт /m.test(q2.text));
 
     // 5. As a stored document: parsed like a file, priced per document, bank lines match a statement file.
     const stored = new TextEncoder().encode(JSON.stringify(snap)).buffer as ArrayBuffer;
     const parsed = await parseFile(stored, "1c_odata");
     assert.equal(parsed.textContent, snap.text);
-    assert.equal(parsed.rowCount, 746);
+    assert.equal(parsed.rowCount, 759);
     assert.deepEqual(parsed.personNames, snap.personNames);
     const quote = quoteDocument({ fileType: "1c_odata", parsed, knownKeys: new Map(), sameFileAlreadyAccepted: false, operationRateRub: 12.5, pageRateRub: 20 });
-    assert.deepEqual([quote.kind, quote.units, quote.amountRub], ["operations", 746, 9325]);
+    assert.deepEqual([quote.kind, quote.units, quote.amountRub], ["operations", 759, 9487.5]);
     const K = await import("../lib/operation-keys");
     const firstOut = base.sets["Document_СписаниеСРасчетногоСчета"][0];
     assert.ok(snap.operationKeys.includes(K.numberedKey(firstOut.НомерВходящегоДокумента, String(firstOut.Date).slice(0, 10), firstOut.СуммаДокумента)),

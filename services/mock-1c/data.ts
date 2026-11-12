@@ -106,6 +106,8 @@ export function buildBase(year = 2025, scale = 1, seed = 20251112): MockBase {
     ["76.09", "Прочие расчеты с разными дебиторами и кредиторами", "ActivePassive"],
     ["84.01", "Прибыль, подлежащая распределению", "ActivePassive"],
     ["90.01.1", "Выручка по деятельности с основной системой налогообложения", "Passive"], ["90.02.1", "Себестоимость продаж по деятельности с основной системой налогообложения", "Active"],
+    ["90.07.1", "Расходы на продажу по деятельности с основной системой налогообложения", "Active"], ["90.09", "Прибыль / убыток от продаж", "ActivePassive"],
+    ["91.09", "Сальдо прочих доходов и расходов", "ActivePassive"],
     ["91.02", "Прочие расходы", "Active"], ["99.01", "Прибыли и убытки (налог при УСН)", "ActivePassive"],
   ];
   chart.forEach(([code, name, type], i) => {
@@ -419,6 +421,34 @@ export function buildBase(year = 2025, scale = 1, seed = 20251112): MockBase {
     const p = moneyIn(iso(year, 11, 20, 13, 55), c, amount, `Оплата по УПД ${number} от 12.11.${year}. НДС не облагается`);
     sale(iso(year, 11, 13, 9), customers[0], 55_000, "Реализация товаров (ошибочный ввод)", { posted: false, deleted: true });   // marked for deletion: must be ignored
     planted.push({ id: "unposted-sale", title: "Реализация не проведена — выручка не отражена", detail: `УПД ${number} на 312 400 не проведён; оплата от покупателя поступила 20.11.`, documents: [s, p], amount });
+  }
+
+  // Month-end closing (done last, so that it sees every document of the month),
+  // and the year-end closing of accounts 90, 91 and 99.
+  {
+    const turnover = (code: string, sideKey: "AccountDr_Key" | "AccountCr_Key", from: string, to: string) =>
+      r2(ledger.filter(r => r[sideKey] === acc(code) && String(r.Period) >= from && String(r.Period) <= to).reduce((sum, r) => sum + Number(r.Сумма), 0));
+    for (let m = 1; m <= 12; m++) {
+      const days = new Date(Date.UTC(year, m, 0)).getUTCDate();
+      const from = iso(year, m, 1, 0), to = iso(year, m, days, 22, 59, 59), at = iso(year, m, days, 23, 30);
+      const label = `${String(m).padStart(2, "0")}.${year}`;
+      const costs = turnover("44.01", "AccountDr_Key", from, to);
+      const profit = r2(turnover("90.01.1", "AccountCr_Key", from, to) - turnover("90.02.1", "AccountDr_Key", from, to) - costs);
+      const other = turnover("91.02", "AccountDr_Key", from, to);
+      const doc = manual(at, "90.07.1", "44.01", costs, `Закрытие месяца ${label}: списание издержек обращения`);
+      if (profit >= 0) post(doc, "Document_ОперацияБух", at, "90.09", "99.01", profit, `Закрытие месяца ${label}: прибыль от продаж`);
+      else post(doc, "Document_ОперацияБух", at, "99.01", "90.09", -profit, `Закрытие месяца ${label}: убыток от продаж`);
+      post(doc, "Document_ОперацияБух", at, "99.01", "91.09", other, `Закрытие месяца ${label}: сальдо прочих расходов`);
+    }
+    const from = iso(year, 1, 1, 0), to = iso(year, 12, 31, 23, 45), at = iso(year, 12, 31, 23, 50);
+    const net = (code: string) => r2(turnover(code, "AccountDr_Key", from, to) - turnover(code, "AccountCr_Key", from, to));
+    const doc = manual(at, "90.01.1", "90.09", -net("90.01.1"), `Реформация баланса ${year}: закрытие счета 90.01`);
+    post(doc, "Document_ОперацияБух", at, "90.09", "90.02.1", net("90.02.1"), `Реформация баланса ${year}: закрытие счета 90.02`);
+    post(doc, "Document_ОперацияБух", at, "90.09", "90.07.1", net("90.07.1"), `Реформация баланса ${year}: закрытие счета 90.07`);
+    post(doc, "Document_ОперацияБух", at, "91.09", "91.02", net("91.02"), `Реформация баланса ${year}: закрытие счета 91.02`);
+    const result = -net("99.01");                           // credit balance = profit after tax
+    if (result >= 0) post(doc, "Document_ОперацияБух", at, "99.01", "84.01", result, `Реформация баланса ${year}: чистая прибыль`);
+    else post(doc, "Document_ОперацияБух", at, "84.01", "99.01", -result, `Реформация баланса ${year}: убыток`);
   }
 
   ledger.sort((a, b) => String(a.Period).localeCompare(String(b.Period)) || String(a.Recorder).localeCompare(String(b.Recorder)) || Number(a.LineNumber) - Number(b.LineNumber));

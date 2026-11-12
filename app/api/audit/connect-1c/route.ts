@@ -15,7 +15,7 @@
  */
 import { NextRequest, NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase-server";
-import { readC1Snapshot, C1Error } from "@/lib/c1-reader";
+import { readC1Snapshot, C1Error, moscowDay } from "@/lib/c1-reader";
 import { parseC1Snapshot, toParsedSummary } from "@/lib/file-parser";
 import { quoteDocument, describeQuote } from "@/lib/doc-billing";
 import { authorizeSession, isAccessError, billingSchemaReady, resolveRates, loadAcceptedContent, sha256 } from "@/lib/doc-billing-server";
@@ -73,8 +73,7 @@ export async function POST(req: NextRequest) {
     const bytes = new TextEncoder().encode(JSON.stringify(snapshot));
     const buffer = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
     const stamp = new Date(snapshot.takenAt);
-    const p = (n: number) => String(n).padStart(2, "0");
-    const fileName = `База 1С — ${snapshot.organisation.name} (снимок ${p(stamp.getUTCDate())}.${p(stamp.getUTCMonth() + 1)}.${stamp.getUTCFullYear()})`;
+    const fileName = `База 1С — ${snapshot.organisation.name} (снимок ${moscowDay(snapshot.takenAt)})`;
     const storagePath = `${clientId}/${sessionId}/1c-snapshot-${stamp.getTime()}.json`;
 
     const { error: storageError } = await supabase.storage.from("audit-documents")
