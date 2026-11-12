@@ -40,6 +40,8 @@
  *   - Uploaded images / scans are a separate matter (they are not sent).
  */
 
+import petrovich from "petrovich";
+
 export class PseudonymizationError extends Error {
   constructor(message: string) { super(message); this.name = "PseudonymizationError"; }
 }
@@ -121,6 +123,46 @@ function surnameStem(surname: string): string {
 }
 // A stem as a regex fragment that matches both "е" and "ё".
 const stemRe = (stem: string) => esc(stem).replace(/е/g, "[её]");
+
+// ─── Putting a name back in the right case ───────────────────────────────────
+// A code is replaced by the name in the nominative ("Лаптев Родион
+// Аркадьевич"). The model is asked to phrase sentences so that this fits, but
+// it often writes "в пользу [ФЛ_1]" anyway, and the report then reads "в
+// пользу Лаптев Родион Аркадьевич". Where the word right before the code
+// leaves no doubt about the case, the name is declined (rules: `petrovich`).
+// Anything else — and any name not known in full, in the nominative — stays
+// as it is: an undeclined name is clumsy, a wrongly declined one is worse.
+type NameCase = "genitive" | "dative";
+const BEFORE_NAME = `(?:\\s+(?:ИП|индивидуальн\\S+\\s+предпринимател\\S+|гр\\.|гражданин\\S*|участник\\S*|директор\\S*|сотрудник\\S*|работник\\S*))?\\s+$`;
+const GENITIVE_BEFORE = new RegExp(`(?:^|[^А-Яа-яЁё])(?:в пользу|в адрес|на имя|от|у|для|без|в отношении|со стороны|доход(?:а|ы|ов|у)?|статус(?:а|у)?|услуг(?:и|ам)?|задолженност(?:ь|и)|долг(?:а|у)?)${BEFORE_NAME}`, "i");
+const DATIVE_BEFORE = new RegExp(`(?:^|[^А-Яа-яЁё])(?:выдан(?:а|о|ы)?|выплачен(?:а|о|ы)?|перечислен(?:а|о|ы)?|начислен(?:а|о|ы)?|предоставлен(?:а|о|ы)?|уплачен(?:а|о|ы)?|оплачен(?:а|о|ы)?|выплат(?:а|ы|у)?|за[её]м|займ(?:а|ы|у)?|вознаграждени(?:е|я))${BEFORE_NAME}`, "i");
+
+function caseBefore(context: string): NameCase | null {
+  // Inside a quotation the text is someone else's wording (a payment purpose,
+  // a document title) and is given back exactly as it was.
+  const line = context.slice(context.lastIndexOf("\n") + 1);
+  const opened = (line.match(/«/g) ?? []).length > (line.match(/»/g) ?? []).length;
+  const straight = (line.match(/"/g) ?? []).length % 2 === 1;
+  if (opened || straight) return null;
+  const near = context.slice(-60);
+  if (GENITIVE_BEFORE.test(near)) return "genitive";
+  if (DATIVE_BEFORE.test(near)) return "dative";
+  return null;
+}
+
+function declined(p: Person, kase: NameCase): string | null {
+  if (!p.nominative || !p.name || !p.patr || !/(ич|на)$/i.test(p.patr)) return null;
+  const parts = p.display.split(" ");
+  if (parts.length !== 3) return null;
+  try {
+    const gender = petrovich.detect_gender(p.patr);
+    if (gender !== "male" && gender !== "female") return null;
+    const r = petrovich({ last: parts[0], first: parts[1], middle: parts[2], gender }, kase);
+    return r.last && r.first && r.middle ? `${r.last} ${r.first} ${r.middle}` : null;
+  } catch {
+    return null;
+  }
+}
 
 interface Person { token: string; stem: string; display: string; name?: string; patr?: string; i1?: string; i2?: string; nominative?: boolean; }
 
@@ -225,6 +267,15 @@ export class Pseudonymizer {
       else if (isPatronymic(w)) patr ??= w;
       else if (isFirstName(w)) name ??= w;
       else if (!STOP.has(low(w))) surname ??= w;
+    }
+    // A first name the dictionary does not know ("Родион", "Милена"): with a
+    // patronymic present the word order settles it — "Фамилия Имя Отчество"
+    // or "Имя Отчество Фамилия".
+    if (!name && patr) {
+      const full = words.filter(w => w.length > 1);
+      const pi = full.indexOf(patr);
+      if (full.length === 3 && pi === 2) { surname = full[0]; name = full[1]; }
+      else if (full.length === 3 && pi === 1) { name = full[0]; surname = full[2]; }
     }
     if (!surname) return;   // a lone first name / patronymic is not coded
     // The service also returns ordinary words now and then ("Контрагент",
@@ -369,11 +420,19 @@ export class Pseudonymizer {
   static readonly TOKEN = /\[((?:ФЛ|ИНН_ФЛ|ОГРНИП|СЧ[ЕЁ]Т|КАРТА|СНИЛС|ПАСПОРТ|ТЕЛ|EMAIL)_\d+)(?::\d{5})?\]/g;
   unknownTokens = 0;
 
-  restore(text: string): string {
-    return text.replace(Pseudonymizer.TOKEN, (m, key: string) => {
-      const v = this.back.get(key.replace("СЧЁТ", "СЧЕТ"));
+  /**
+   * @param before text that came just before `text` (streaming) — only used
+   *               to see which word governs a name at the very start.
+   */
+  restore(text: string, before = ""): string {
+    return text.replace(Pseudonymizer.TOKEN, (m, key: string, offset: number) => {
+      const k = key.replace("СЧЁТ", "СЧЕТ");
+      const v = this.back.get(k);
       if (v === undefined) { this.unknownTokens++; return m; }   // model invented a token — leave visible
-      return v;
+      if (!k.startsWith("ФЛ_")) return v;
+      const person = this.persons.find(p => p.token === `[${k}]`);
+      const kase = person && caseBefore((before + text.slice(0, offset)).slice(-300));
+      return (person && kase && declined(person, kase)) || v;
     });
   }
 
@@ -389,6 +448,7 @@ export class Pseudonymizer {
   /** Restorer for streamed text: holds back a token that is split across chunks. */
   stream(emit: (text: string) => void) {
     let buf = "";
+    let tail = "";               // end of what was already emitted (coded), for the word before a name
     const MAX_TOKEN = 24;
     return {
       push: (delta: string) => {
@@ -397,10 +457,10 @@ export class Pseudonymizer {
         const hold = open !== -1 && buf.indexOf("]", open) === -1 && buf.length - open <= MAX_TOKEN ? open : buf.length;
         const ready = buf.slice(0, hold);
         buf = buf.slice(hold);
-        if (ready) emit(this.restore(ready));
+        if (ready) { emit(this.restore(ready, tail)); tail = (tail + ready).slice(-300); }
       },
-      flush: () => { if (buf) emit(this.restore(buf)); buf = ""; },
-      clear: () => { buf = ""; },
+      flush: () => { if (buf) emit(this.restore(buf, tail)); buf = ""; tail = ""; },
+      clear: () => { buf = ""; tail = ""; },
     };
   }
 }

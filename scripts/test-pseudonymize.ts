@@ -50,7 +50,7 @@ async function main() {
   assert.equal(pz.restore(coded[4]), cases[4][0]);
   assert.equal(pz.restore(coded[8]), cases[8][0]);
   assert.equal(pz.restore("счёт [СЧЁТ_1:40802] и [СЧЕТ_1]"), "счёт 40802810900000054321 и 40802810900000054321", "ё/е and missing suffix tolerated");
-  assert.equal(pz.restore("Выплата [ФЛ_4]"), "Выплата Кузнецова Мария Петровна");
+  assert.equal(pz.restore("Выплата [ФЛ_4]"), "Выплата Кузнецовой Марии Петровне");
   assert.equal(pz.restore("кто такой [ФЛ_99]?"), "кто такой [ФЛ_99]?", "unknown code is left visible");
   assert.equal(pz.unknownTokens, 1);
   assert.deepEqual(pz.restoreDeep({ findings: [{ title: "Заём [ФЛ_5]", n: 1 }] }), { findings: [{ title: "Заём Попову Сергею", n: 1 }] });
@@ -175,12 +175,43 @@ async function main() {
     for (const full of ["Орехов Тимофей Ильич", "Зуев Прохор Фомич", "Белова Агния Кузьминична", "Рябов Мирон Никитич"]) {
       const pz = new P();
       pz.learnDetectedName(full);
-      const src = `62.01;ИП ${full};771400088899;оплата от ИП ${full} по договору`;
+      const src = `62.01;ИП ${full};771400088899;плательщик: ИП ${full}, договор 9`;
       const [coded] = pz.encodeRequest([src]);
       assert.ok(!full.split(" ").some(w => coded.includes(w)), `${full}: nothing of the name is left`);
       assert.equal(pz.stats.persons, 1, `${full}: one person`);
       assert.equal(pz.restore(coded), src, `${full}: exact restore`);
     }
+  }
+
+  // Names put back in the right case where the word before the code fixes it.
+  {
+    const { Pseudonymizer: P } = await import("../lib/pseudonymize");
+    const pz = new P();
+    for (const n of ["Лаптев Родион Аркадьевич", "Сафонова Милена Робертовна", "Глебов Арсений Маркович"]) pz.learnDetectedName(n);
+    pz.learn("оплата ИП Зимин П.В. по счету");          // known only by surname and initials — never declined
+    const back = (coded: string) => pz.restore(coded);
+    assert.equal(back("в пользу [ФЛ_1]"), "в пользу Лаптева Родиона Аркадьевича");
+    assert.equal(back("Статус [ФЛ_2] не подтверждён"), "Статус Сафоновой Милены Робертовны не подтверждён");
+    assert.equal(back("оплачено ИП [ФЛ_3]"), "оплачено ИП Глебову Арсению Марковичу");
+    assert.equal(back("заём [ФЛ_1] не возвращён"), "заём Лаптеву Родиону Аркадьевичу не возвращён");
+    assert.equal(back("от участника [ФЛ_1]"), "от участника Лаптева Родиона Аркадьевича");
+    // No governing word → nominative, as before.
+    assert.equal(back("получатель — [ФЛ_1]"), "получатель — Лаптев Родион Аркадьевич");
+    assert.equal(back("[ФЛ_2] получила 240 000"), "Сафонова Милена Робертовна получила 240 000");
+    assert.equal(back("получатель платежа [ФЛ_1]"), "получатель платежа Лаптев Родион Аркадьевич");
+    assert.equal(back("счёт;[ФЛ_1];сумма"), "счёт;Лаптев Родион Аркадьевич;сумма");
+    assert.equal(back("в пользу ИП [ФЛ_4]"), "в пользу ИП Зимин П.В.", "a name not known in full is left as it is");
+    // A quotation is given back word for word.
+    assert.equal(back("назначение «Перевод в пользу [ФЛ_1] по договору»"), "назначение «Перевод в пользу Лаптев Родион Аркадьевич по договору»");
+    assert.equal(back('назначение "Оплата от ИП [ФЛ_3]" — без акта'), 'назначение "Оплата от ИП Глебов Арсений Маркович" — без акта');
+    assert.equal(back("«Оплата услуг» в пользу [ФЛ_1]"), "«Оплата услуг» в пользу Лаптева Родиона Аркадьевича");
+    // Streaming gives the same text, also when the governing word and the code arrive in different pieces.
+    const coded = "Дивиденды выплачены в пользу [ФЛ_1], услуги ИП [ФЛ_3] не подтверждены.";
+    let out = ""; const st = pz.stream(t => { out += t; });
+    for (let i = 0; i < coded.length; i += 5) st.push(coded.slice(i, i + 5));
+    st.flush();
+    assert.equal(out, back(coded));
+    assert.ok(out.includes("в пользу Лаптева Родиона Аркадьевича") && out.includes("услуги ИП Глебова Арсения Марковича"));
   }
 
   console.log("✅ pseudonymize: all checks passed (coding rules, restore, streaming, fail-closed, leak scan of the outbound payload, name-service integration)");
