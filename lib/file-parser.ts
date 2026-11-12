@@ -38,6 +38,8 @@ export interface PDFPageImage {
 }
 
 /** Summary section from the СекцияРасчСчет block of a 1CClientBankExchange file. */
+import { buildStatementFacts } from "./statement-facts";
+
 export interface C1AccountSummary {
   account: string;          // РасчСчет
   dateFrom: string;         // ДатаНачала
@@ -840,8 +842,13 @@ export function parse1CTxt(buffer: ArrayBuffer): ParseResult {
     ? `\n[Показаны первые 500 из ${transactions.length} транзакций]`
     : "";
 
+  // Facts computed in code over ALL transactions (also beyond the 500-row
+  // cap) — placed before the operation list so they are never truncated.
+  const facts = buildStatementFacts(transactions, accountSummary);
+
   const textContent = [
     ...summaryLines,
+    ...(facts ? [facts, "", "=== СПИСОК ОПЕРАЦИЙ ==="] : []),
     CSV_HEADERS,
     ...csvRows.slice(0, maxRows),
   ].join("\n").slice(0, MAX_CONTENT_CHARS) + truncNote;
