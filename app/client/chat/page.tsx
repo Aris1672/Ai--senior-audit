@@ -334,7 +334,8 @@ export default function ChatPage() {
   function pushAssistantReply(content: string, costRub?: number) {
     setMessages(prev => {
       const next = [...prev, { role: "assistant" as const, content, costRub }];
-      setTypingIndex(next.length - 1); // typewrite the last message
+      // No typing cursor here: these messages are complete when they appear,
+      // and nothing would switch the cursor off again.
       return next;
     });
     setTotalCost(prev => prev + (costRub || 0));
