@@ -7,7 +7,8 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "check:llm": "tsx scripts/check-llm.ts"
+    "check:llm": "tsx scripts/check-llm.ts",
+    "check:audit": "tsx scripts/check-audit.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.96.0",

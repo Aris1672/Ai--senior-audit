@@ -804,8 +804,12 @@ export function parse1CTxt(buffer: ArrayBuffer): ParseResult {
   // ── Build CSV-style textContent for AI consumption ───────────────────────
   const CSV_HEADERS = [
     "direction","date","amount","docType","number",
-    "payerName","payerInn","receiverName","receiverInn","purpose",
+    "payerName","payerInn","payerAccount","receiverName","receiverInn","receiverAccount","purpose",
   ].join(";");
+  // payerAccount / receiverAccount added Nov 2026: without them the model
+  // can't tell the client's own accounts apart (e.g. a transfer to the bank's
+  // tax-reserve account vs. the main account) or use the account-type prefix
+  // (40817 private person / 40802 ИП / 40702 company) — both are audit signals.
 
   const csvRows = transactions.map(tx =>
     [
@@ -815,9 +819,11 @@ export function parse1CTxt(buffer: ArrayBuffer): ParseResult {
       tx.docType,
       tx.number,
       tx.payerName    ?? "",
-      tx.payerInn     ?? "",
-      tx.receiverName ?? "",
-      tx.receiverInn  ?? "",
+      tx.payerInn        ?? "",
+      tx.payerAccount    ?? "",
+      tx.receiverName    ?? "",
+      tx.receiverInn     ?? "",
+      tx.receiverAccount ?? "",
       (tx.purpose     ?? "").replace(/;/g, ","),
     ].join(";")
   );
