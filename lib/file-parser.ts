@@ -12,7 +12,7 @@
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
-export type ParseMethod = "xlsx" | "xls" | "csv" | "xml" | "docx" | "doc" | "1c_txt" | "pdf" | "fallback";
+export type ParseMethod = "xlsx" | "xls" | "csv" | "xml" | "docx" | "doc" | "1c_txt" | "1c_odata" | "pdf" | "fallback";
 
 export interface ParseResult {
   rowCount: number;
@@ -34,6 +34,9 @@ export interface ParseResult {
   operationKeys?: string[];
   // PDF: number of pages (a billing unit for supporting documents).
   pageCount?: number;
+  // 1C snapshot: names of individuals known from the base's own fields —
+  // handed to the pseudonymizer as certain (see lib/c1-reader.ts).
+  personNames?: string[];
 }
 
 /** A single rendered PDF page, ready to send to Claude's vision input. */
@@ -970,9 +973,10 @@ export function parse1CTxt(buffer: ArrayBuffer): ParseResult {
 
 export async function parseFile(
   buffer: ArrayBuffer,
-  fileType: "xlsx" | "xls" | "csv" | "xml" | "docx" | "doc" | "1c_txt" | "pdf",
+  fileType: "xlsx" | "xls" | "csv" | "xml" | "docx" | "doc" | "1c_txt" | "pdf" | "1c_odata",
   range?: DateRange
 ): Promise<ParseResult> {
+  if (fileType === "1c_odata") return parseC1Snapshot(buffer);
   if (fileType === "csv")    return parseCSV(buffer, range);
   if (fileType === "xml")    return parseXML(buffer);
   if (fileType === "docx")   return parseDOCX(buffer);
@@ -987,13 +991,26 @@ export async function parseFile(
 
 function now() { return new Date().toISOString(); }
 
+// ─── 1C snapshot (stored as JSON by /api/audit/connect-1c) ────────────────────
+export function parseC1Snapshot(buffer: ArrayBuffer): ParseResult {
+  const snap = JSON.parse(new TextDecoder("utf-8").decode(buffer));
+  if (snap?.kind !== "1c_odata" || typeof snap.text !== "string" || !Array.isArray(snap.operationKeys)) {
+    throw new Error("not a 1C snapshot");
+  }
+  return {
+    rowCount: snap.operationKeys.length, parseMethod: "1c_odata", textContent: snap.text,
+    operationKeys: snap.operationKeys, personNames: Array.isArray(snap.personNames) ? snap.personNames : [],
+    detectedColumns: [`База 1С: ${snap.organisation?.name ?? ""}`], parsedAt: now(),
+  };
+}
+
 // ─── What is cached in documents.parsed_data ─────────────────────────────────
 // Counts and labels only. The document text is re-read from storage on every
 // audit request, and with no volume caps it can be megabytes — it must not be
 // copied into a database row. `textChars` keeps its size for volume checks.
-export type ParsedSummary = Omit<ParseResult, "textContent" | "operationKeys"> & { textChars: number; operationCount?: number };
+export type ParsedSummary = Omit<ParseResult, "textContent" | "operationKeys" | "personNames"> & { textChars: number; operationCount?: number };
 
 export function toParsedSummary(result: ParseResult): ParsedSummary {
-  const { textContent, operationKeys, ...rest } = result;
+  const { textContent, operationKeys, personNames: _names, ...rest } = result;
   return { ...rest, textChars: textContent?.length ?? 0, ...(operationKeys ? { operationCount: operationKeys.length } : {}) };
 }

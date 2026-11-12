@@ -165,39 +165,15 @@ export async function POST(req: NextRequest) {
     }
 
     // --- LIVE 1C MODE ---------------------------------------------------------
+    // Replaced Nov 2026: a 1C base is read by /api/audit/connect-1c, which
+    // stores a snapshot as a document of the audit; its price then comes
+    // through the per-document path above. The old code here only counted
+    // one document type, with no period, and priced on that.
     else if (c1Config) {
-      const { url, username, password, base } = c1Config;
-      const auth = Buffer.from(`${username}:${password}`).toString("base64");
-      // NOTE: $count with no date filter — live 1C mode does not yet scope
-      // to period_from/period_to. Same gap as file mode had; tracked
-      // separately since it needs an OData $filter clause, not a change
-      // to file-parser.ts. Flagging here so it isn't assumed fixed.
-      const endpoint =
-        `${url}/${base}/odata/standard.odata` +
-        `/Document_ПоступлениеТоваровУслуг?$count=true&$top=0&$format=json`;
-
-      try {
-        const c1Res = await fetch(endpoint, {
-          headers: { Authorization: `Basic ${auth}` },
-          signal:  AbortSignal.timeout(10_000),
-        });
-
-        if (!c1Res.ok) {
-          return NextResponse.json(
-            { error: "Не удалось подключиться к 1С. Проверьте настройки." },
-            { status: 400 }
-          );
-        }
-
-        const c1Data = await c1Res.json();
-        transactionCount = c1Data["@odata.count"] ?? 0;
-
-      } catch {
-        return NextResponse.json(
-          { error: "Превышено время ожидания 1С. Проверьте доступность сервера." },
-          { status: 400 }
-        );
-      }
+      return NextResponse.json(
+        { error: "Подключение 1С выполняется через /api/audit/connect-1c." },
+        { status: 400 }
+      );
     }
 
     // --- Price & persist --------------------------------------------------

@@ -203,23 +203,38 @@ export default function NewAuditPage() {
     const { sessionId: sid } = await sessionRes.json();
     setSessionId(sid);
 
-    // Connect to 1C and count transactions
+    // Read the period from 1C (server side). The result is stored as a
+    // snapshot document of this audit and priced per posted document; the
+    // password is used for this one read and is not stored.
+    const connectRes = await fetch("/api/audit/connect-1c", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ sessionId: sid, c1Config }),
+    });
+    const connectData = await connectRes.json();
+    if (!connectRes.ok) {
+      setError(connectData.error || "Ошибка подключения к 1С");
+      setStep("data-source");
+      setLoading(false);
+      return;
+    }
+    setC1Config(f => ({ ...f, password: "" }));
+
     const priceRes = await fetch("/api/audit/calculate-price", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        sessionId: sid,
-        clientId:  user.id,
-        c1Config,
-      }),
+      body: JSON.stringify({ sessionId: sid, documentId: connectData.documentId }),
     });
     const priceData = await priceRes.json();
 
     if (!priceRes.ok) {
-      setError(priceData.error || "Ошибка подключения к 1С");
+      setError(priceData.error || "Ошибка расчёта стоимости");
       setStep("data-source");
       setLoading(false);
       return;
+    }
+    if (Array.isArray(connectData.warnings) && connectData.warnings.length > 0) {
+      priceData.lines = [...(priceData.lines ?? []), ...connectData.warnings.map((w: string) => `Внимание: ${w}`)];
     }
 
     setPriceResult(priceData);
@@ -468,20 +483,20 @@ export default function NewAuditPage() {
                   <label style={labelStyle}>URL сервера 1С *</label>
                   <input style={inputStyle} value={c1Config.url}
                     onChange={e => setC1Config(f => ({ ...f, url: e.target.value }))}
-                    placeholder="http://192.168.1.100/accounting" />
+                    placeholder="https://1c.example.ru" />
                 </div>
                 <div>
                   <label style={labelStyle}>Имя базы данных</label>
                   <input style={inputStyle} value={c1Config.base}
                     onChange={e => setC1Config(f => ({ ...f, base: e.target.value }))}
-                    placeholder="БухгалтерияОсновная" />
+                    placeholder="buh (часть адреса перед /odata/…)" />
                 </div>
                 <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "14px" }}>
                   <div>
                     <label style={labelStyle}>Логин *</label>
                     <input style={inputStyle} value={c1Config.username}
                       onChange={e => setC1Config(f => ({ ...f, username: e.target.value }))}
-                      placeholder="Администратор" />
+                      placeholder="odata.user" />
                   </div>
                   <div>
                     <label style={labelStyle}>Пароль *</label>
@@ -496,7 +511,11 @@ export default function NewAuditPage() {
                 background: "#0d1f3e", border: "1px solid #1e2d55",
                 borderRadius: "8px", fontSize: "12px", color: "#7a90c0",
               }}>
-                ⚠️ Убедитесь, что сервер 1С доступен через интернет и включён OData REST API
+                База должна быть доступна из интернета, а в 1С включён стандартный интерфейс OData
+                (Администрирование → Синхронизация данных → Настройки стандартного интерфейса OData;
+                в составе — как минимум «Журнал проводок» с зависимыми объектами). Данные читаются один раз,
+                за период аудита, и сохраняются как снимок. Пароль используется только для этого чтения
+                и не сохраняется.
               </div>
               <div style={{ display: "flex", gap: "10px", marginTop: "20px" }}>
                 <button onClick={handleLiveProcess} style={{

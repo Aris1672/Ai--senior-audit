@@ -169,6 +169,20 @@ async function main() {
   assert.equal(sent.length, before, "name service down → no call to the model at all");
   delete process.env.NER_URL; delete process.env.NER_TOKEN;
 
+  // Short patronymics (Ильич, Фомич, Кузьмич…) — one person, exact restore.
+  {
+    const { Pseudonymizer: P } = await import("../lib/pseudonymize");
+    for (const full of ["Орехов Тимофей Ильич", "Зуев Прохор Фомич", "Белова Агния Кузьминична", "Рябов Мирон Никитич"]) {
+      const pz = new P();
+      pz.learnDetectedName(full);
+      const src = `62.01;ИП ${full};771400088899;оплата от ИП ${full} по договору`;
+      const [coded] = pz.encodeRequest([src]);
+      assert.ok(!full.split(" ").some(w => coded.includes(w)), `${full}: nothing of the name is left`);
+      assert.equal(pz.stats.persons, 1, `${full}: one person`);
+      assert.equal(pz.restore(coded), src, `${full}: exact restore`);
+    }
+  }
+
   console.log("✅ pseudonymize: all checks passed (coding rules, restore, streaming, fail-closed, leak scan of the outbound payload, name-service integration)");
 }
 main().catch(e => { console.error("❌", e.message ?? e); process.exit(1); });

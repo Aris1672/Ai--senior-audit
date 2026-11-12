@@ -24,6 +24,8 @@ interface DocumentsResult {
   images: { fileName: string; mediaType: string; base64: string }[];
   /** Text size of each document, for the request volume check. */
   sizes: VolumePart[];
+  /** Individuals known by field from a 1C snapshot — coded as certain. */
+  personNames: string[];
 }
 
 // Placeholder text for images / scanned PDFs while the audit model can't
@@ -57,6 +59,7 @@ async function getAllDocumentsContent(
 ): Promise<DocumentsResult> {
   const images: DocumentsResult["images"] = [];
   const sizes: VolumePart[] = [];
+  const personNames: string[] = [];
 
   try {
     console.log("[chat] Looking up all documents for sessionId:", sessionId);
@@ -83,11 +86,11 @@ async function getAllDocumentsContent(
 
     if (docErr) {
       console.error("[chat] Document lookup error:", docErr.message);
-      return { textContent: null, images, sizes };
+      return { textContent: null, images, sizes, personNames };
     }
     if (!docs || docs.length === 0) {
       console.warn("[chat] No documents found for session:", sessionId);
-      return { textContent: null, images, sizes };
+      return { textContent: null, images, sizes, personNames };
     }
 
     console.log(`[chat] Found ${docs.length} document(s) for session`);
@@ -143,7 +146,7 @@ async function getAllDocumentsContent(
       // (including 1C-format sniffing via is1CClientBankExchange), so we use
       // it directly instead of re-deriving from the filename extension here,
       // which previously caused .doc/.txt(1C)/.pdf to silently misparse as xlsx.
-      const PARSEABLE_TYPES = new Set(["xlsx", "xls", "csv", "xml", "docx", "doc", "1c_txt", "pdf"]);
+      const PARSEABLE_TYPES = new Set(["xlsx", "xls", "csv", "xml", "docx", "doc", "1c_txt", "pdf", "1c_odata"]);
 
       if (!PARSEABLE_TYPES.has(doc.file_type)) {
         sections.push(`[Документ: ${doc.file_name} — тип "${doc.file_type}" не поддерживается для текстового анализа]`);
@@ -218,19 +221,20 @@ async function getAllDocumentsContent(
         || `[Содержимое не извлечено. Строк: ${parsed.rowCount}]`;
 
       sizes.push({ name: doc.file_name, chars: content.length });
+      if (parsed.personNames?.length) personNames.push(...parsed.personNames);
       sections.push(
         `=== ДОКУМЕНТ: ${doc.file_name} ===\n${header}\n\n${content}\n=== КОНЕЦ: ${doc.file_name} ===`
       );
     }
 
-    if (sections.length === 0) return { textContent: null, images, sizes };
+    if (sections.length === 0) return { textContent: null, images, sizes, personNames };
 
     const intro = docs.length > 1 ? `Загружено документов: ${docs.length}\n\n` : "";
-    return { textContent: intro + sections.join("\n\n"), images, sizes };
+    return { textContent: intro + sections.join("\n\n"), images, sizes, personNames };
 
   } catch (err) {
     console.error("[chat] getAllDocumentsContent exception:", err);
-    return { textContent: null, images, sizes };
+    return { textContent: null, images, sizes, personNames };
   }
 }
 
@@ -469,6 +473,7 @@ export async function POST(req: NextRequest) {
           let fileSection = "";
           let images: { fileName: string; mediaType: string; base64: string }[] = [];
           let docSizes: VolumePart[] = [];
+          let knownPersons: string[] = [];
           if (sessionId) {
             // Look up the audit's selected period so document parsing only
             // includes rows inside it — same period_from/period_to written by
@@ -488,6 +493,7 @@ export async function POST(req: NextRequest) {
             const docsResult = await getAllDocumentsContent(supabase, sessionId, period, step);
             images = docsResult.images;
             docSizes = docsResult.sizes;
+            knownPersons = docsResult.personNames;
             if (docsResult.textContent) {
               fileSection = `\n\n=== ЗАГРУЖЕННЫЕ ФИНАНСОВЫЕ ДОКУМЕНТЫ ===\n${docsResult.textContent}\n=== КОНЕЦ ДОКУМЕНТОВ ===`;
               console.log("[chat] File section length:", fileSection.length);
@@ -579,12 +585,16 @@ export async function POST(req: NextRequest) {
           // the final (reviewed) text reaches the client as the answer; the
           // draft and all reasoning go to the «Ход рассуждений» panel.
           if (LLM_PSEUDONYMIZE_ENABLED) step("Обезличиваю персональные данные перед отправкой");
+          // Individuals a 1C base names in its own fields are coded as certain
+          // (no guessing from text); see lib/c1-reader.ts.
+          const pseudonymizer = LLM_PSEUDONYMIZE_ENABLED ? new Pseudonymizer() : undefined;
+          if (pseudonymizer) for (const n of knownPersons) pseudonymizer.learnDetectedName(n);
           const result = await runAuditTurn(systemPrompt, workingMessages, {
             step,
             thinking: d => { thinkingBuffer += d; },
             text:     d => { flushThinking(); fullText += d; send({ type: "delta", text: d }); },
             reset:    () => { fullText = ""; send({ type: "reset" }); },
-          }, LLM_PSEUDONYMIZE_ENABLED ? new Pseudonymizer() : undefined);
+          }, pseudonymizer);
           fullText = result.text; // authoritative
           const toolFindings = result.findings as any[];
           console.log("[chat] audit turn done — reviewed:", result.reviewed,

@@ -106,7 +106,7 @@ export function sha256(buffer: ArrayBuffer): string {
   return createHash("sha256").update(Buffer.from(buffer)).digest("hex");
 }
 
-const OPERATION_TYPES = new Set(["xlsx", "xls", "csv", "1c_txt"]);
+const OPERATION_TYPES = new Set(["xlsx", "xls", "csv", "1c_txt", "1c_odata"]);
 
 /**
  * Operation keys of every ACCEPTED file of the audit (merged, so operations
@@ -133,7 +133,7 @@ export async function loadAcceptedContent(
     const buffer = await blob.arrayBuffer();
     if (!doc.content_hash) hashes.add(sha256(buffer));   // files from before migration 005
     try {
-      const parsed: ParseResult = await parseFile(buffer, doc.file_type as "xlsx" | "xls" | "csv" | "1c_txt", period);
+      const parsed: ParseResult = await parseFile(buffer, doc.file_type as "xlsx" | "xls" | "csv" | "1c_txt" | "1c_odata", period);
       if (parsed.operationKeys?.length) lists.push(parsed.operationKeys);
     } catch (err) {
       console.error("[billing] could not re-read an accepted file for the overlap check:", (err as Error)?.message);

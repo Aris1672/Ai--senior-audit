@@ -103,8 +103,13 @@ const STOP = new Set(`ооо оао зао пао ао нко ип банк сч
 рф руб директор бухгалтер генеральный главный`.split(/\s+/).filter(Boolean));
 
 // Patronymic in any case form: Иванович/-а/-у/-ем/-е, Ивановна/-ы/-е/-у/-ой.
-const isPatronymic = (w: string) => w.length >= 6 &&
-  /((ович|евич|ьич)(а|у|ем|ом|е)?|(овн|евн|ичн|иничн)(а|ы|е|у|ой)|оглы|кызы)$/i.test(w);
+// The short forms (Ильич, Фомич, Лукич, Кузьмич, Никитич, Саввич…) are listed
+// by stem: they are under six letters or do not end in -ович/-евич, and a
+// missed patronymic was once read as a second person's surname ("ИП Орехов
+// Тимофей Ильич" → two people, and a wrong name on the way back).
+const SHORT_PATRONYMIC = /^(иль|кузьм|лук|фом|никит|савв|фок|ион|кирилл?)ич(а|у|ем|ом|е)?$/i;
+const isPatronymic = (w: string) => SHORT_PATRONYMIC.test(w) || (w.length >= 6 &&
+  /((ович|евич|ьич)(а|у|ем|ом|е)?|(овн|евн|ичн|иничн)(а|ы|е|у|ой)|оглы|кызы)$/i.test(w));
 const esc = (s: string) => s.replace(/[.*+?^${}()|[\]\\-]/g, "\\$&");
 const low = (s: string) => s.toLowerCase().replace(/ё/g, "е");
 
