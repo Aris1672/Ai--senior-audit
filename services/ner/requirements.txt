@@ -1,0 +1,8 @@
+# Pinned to the versions the service was tested with (Nov 2026).
+# Python 3.10 on purpose: pymorphy2 (a Natasha dependency) does not run on 3.11+.
+natasha==1.6.0
+pymorphy2==0.9.1
+pymorphy2-dicts-ru==2.4.417127.4579844
+setuptools<81        # pymorphy2 needs pkg_resources, removed in setuptools 81
+fastapi==0.162.5
+uvicorn==0.54.0

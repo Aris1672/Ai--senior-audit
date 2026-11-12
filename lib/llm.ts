@@ -107,7 +107,7 @@ export const AUDIT_MODEL_PRICING = LLM_PROVIDER === "deepseek"
   ? { inputPer1K: 0.00132, outputPer1K: 0.00396 }
   : { inputPer1K: 0.003,   outputPer1K: 0.015 };   // Claude Sonnet 5, $3 / $15 per 1M
 
-console.log(`[llm] provider=${LLM_PROVIDER} model=${AUDIT_MODEL} thinking=${LLM_THINKING_ENABLED ? `enabled effort=${LLM_EFFORT}` : "disabled"} review=${AUDIT_REVIEW_ENABLED ? "on" : "off"} pseudonymize=${LLM_PSEUDONYMIZE_ENABLED ? "on" : "off"}`);
+console.log(`[llm] provider=${LLM_PROVIDER} model=${AUDIT_MODEL} thinking=${LLM_THINKING_ENABLED ? `enabled effort=${LLM_EFFORT}` : "disabled"} review=${AUDIT_REVIEW_ENABLED ? "on" : "off"} pseudonymize=${LLM_PSEUDONYMIZE_ENABLED ? "on" : "off"} ner=${process.env.NER_URL ? "on" : "off"}`);
 
 // ─── System prompt ───
 // Revised Nov 12, 2026 after comparing Sonnet 5 vs DeepSeek V4 Pro on the same

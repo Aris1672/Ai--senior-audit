@@ -171,7 +171,13 @@ export class Pseudonymizer {
     if (!surname || STOP.has(low(surname)) || surname.length < 2) return;
     const stem = surnameStem(surname);
     const init1 = (name?.[0] ?? i1)?.toUpperCase();
-    const existing = this.persons.find(p => p.stem === stem && (!p.i1 || !init1 || p.i1 === init1));
+    // Same person if the stems match — or, for short surnames whose case
+    // endings are not stripped ("Кот" / "Коту"), if one stem extends the
+    // other by at most two letters — and the initials do not contradict.
+    const sameStem = (a: string, b: string) => a === b ||
+      (Math.abs(a.length - b.length) <= 2 && Math.min(a.length, b.length) >= 3 && (a.startsWith(b) || b.startsWith(a)));
+    const existing = this.persons.find(p => sameStem(p.stem, stem) && (!p.i1 || !init1 || p.i1 === init1));
+    if (existing && stem.length < existing.stem.length) existing.stem = stem;   // keep the shorter (base) stem
     if (existing) {
       // learn a fuller form if we now have one
       // learn a fuller / nominative form if we now have one
@@ -191,6 +197,29 @@ export class Pseudonymizer {
     this.persons.push({ token, stem, display, name, patr, i1: init1, i2: (patr?.[0] ?? i2)?.toUpperCase(),
       nominative: !!name && (FIRST_NAMES.has(name.toLowerCase()) || (!!patr && /(ич|на|оглы|кызы)$/i.test(patr))) });
     this.back.set(token.slice(1, -1), display);
+  }
+
+  /**
+   * Remember a name found by the name-detection service (Natasha). The
+   * service's own first/last split is unreliable ("Сидоров Пётр" comes back
+   * with the roles swapped), so the roles are assigned here: patronymic by
+   * its ending, first name by the dictionary, single letters as initials,
+   * and the remaining word is the surname. A span without a surname (a lone
+   * first name) is ignored.
+   */
+  learnDetectedName(span: string): void {
+    const words = span.split(/[\s.,]+/).filter(w => /^[А-ЯЁа-яё-]+$/.test(w));
+    let surname: string | undefined, name: string | undefined, patr: string | undefined;
+    const initials: string[] = [];
+    for (const w of words) {
+      if (w.length === 1) initials.push(w.toUpperCase());
+      else if (isPatronymic(w)) patr ??= w;
+      else if (isFirstName(w)) name ??= w;
+      else if (!STOP.has(low(w))) surname ??= w;
+    }
+    if (!surname) return;   // a lone first name / patronymic is not coded
+    const cap = (w: string) => (w === w.toUpperCase() ? w : w[0].toUpperCase() + w.slice(1));
+    this.addPerson(cap(surname), name && cap(name), patr && cap(patr), initials[0], initials[1]);
   }
 
   /** Find people in a text and remember them. Call for every outbound text before encode(). */
@@ -235,8 +264,10 @@ export class Pseudonymizer {
     const stems = [...new Set(this.persons.map(p => p.stem))].sort((a, b) => b.length - a.length);
     for (const stem of stems) {
       const group = this.persons.filter(p => p.stem === stem);
-      // short stems: exact word only (avoid coding ordinary words)
-      const re = new RegExp(`${NB}${stemRe(stem)}${stem.length >= 4 ? `[${CYR}]{0,3}` : ""}${NA}`, "gi");
+      // Short stems ("Кот", "Ли"): a case form ("Коту") is accepted only next
+      // to initials or a name — otherwise ordinary words would be coded.
+      const short = stem.length < 4;
+      const re = new RegExp(`${NB}${stemRe(stem)}[${CYR}]{0,${short ? 2 : 3}}${NA}`, "gi");
       let out = "", pos = 0, m: RegExpExecArray | null;
       while ((m = re.exec(text))) {
         if (!/^[А-ЯЁ]/.test(m[0])) continue;                       // names are capitalised
@@ -257,6 +288,7 @@ export class Pseudonymizer {
         if ((x = /([А-ЯЁ])\.\s?([А-ЯЁ])\.\s?$/.exec(before))) { start -= x[0].length; initial ??= x[1]; }     // И.И. Иванов
         else if ((x = new RegExp(`(${W})\\s+(${W})\\s+$`).exec(before)) && isPatronymic(x[2])) { start -= x[0].length; initial ??= x[1][0]; } // Иван Иванович Иванов
         else if ((x = new RegExp(`(${W})\\s+$`).exec(before)) && isFirstName(x[1])) { start -= x[0].length; initial ??= x[1][0]; }   // Иван Иванов
+        if (short && low(m[0]) !== stem && !initial) { re.lastIndex = m.index + m[0].length; continue; }
         const person = group.find(p => initial && p.i1 === initial.toUpperCase()) ?? group[0];
         out += text.slice(pos, start) + person.token;
         pos = end; re.lastIndex = end;

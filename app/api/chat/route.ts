@@ -577,7 +577,9 @@ export async function POST(req: NextRequest) {
             // Fail closed: nothing was sent to the LLM. The message never
             // contains personal data (see lib/pseudonymize.ts).
             console.error("[chat] pseudonymization failed — request NOT sent:", err.message);
-            send({ type: "error", error: "Не удалось обезличить персональные данные в документах, поэтому запрос не был отправлен на анализ. Данные никуда не переданы. Обратитесь в поддержку." });
+            send({ type: "error", error: /service unavailable/.test(err.message)
+              ? "Сервис обезличивания персональных данных временно недоступен, поэтому запрос не был отправлен на анализ. Данные никуда не переданы. Повторите попытку позже или обратитесь в поддержку."
+              : "Не удалось обезличить персональные данные в документах, поэтому запрос не был отправлен на анализ. Данные никуда не переданы. Обратитесь в поддержку." });
           } else {
             console.error("[chat] stream error:", err);
             send({ type: "error", error: "Внутренняя ошибка сервера во время генерации ответа" });

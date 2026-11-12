@@ -11,6 +11,7 @@ process.env.LLM_API_KEY ??= "test-key-not-used";
 // the server's own settings are (e.g. LLM_REVIEW=disabled in Coolify).
 delete process.env.LLM_REVIEW;
 delete process.env.LLM_PSEUDONYMIZE;
+delete process.env.NER_URL;   // sections 1–2 test the built-in rules; the name service is tested in section 3
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
@@ -132,6 +133,33 @@ async function main() {
   assert.deepEqual(res.findings, [{ title: "Пополнения с карты 2204********0001", description: "Тестов Тест Тестович, ИНН 770000000011" }]);
   assert.equal(res.reviewed, "done");
 
-  console.log("✅ pseudonymize: all checks passed (coding rules, restore, streaming, fail-closed, leak scan of the outbound payload)");
+  // ── 3. Names from the name-detection service (Natasha) ─────────────────────
+  // Spans exactly as the service returns them (roles are assigned by our code).
+  const pn = new Pseudonymizer();
+  for (const span of ["Сидоров", "Кузнецова", "Кот В.П.", "Шевчук", "Гусь Марине", "Сидоров Петр", "Марина", "Сергеевна"]) pn.learnDetectedName(span);
+  const free = [
+    'debit;01.02.2025;50000;ООО "Ромашка";7701234567;40702810900000012345;возврат займа Сидорову по договору 5',
+    "debit;02.02.2025;30000;ВЫПЛАТА КУЗНЕЦОВОЙ ПОД ОТЧЕТ БЕЗ НДС",
+    "Аванс Коту В.П.; дивиденды учредителю Шевчук; оплата Гусь Марине; позже Сидоров вернул 100, а Кузнецова отчиталась.",
+  ];
+  const freeCoded = pn.encodeRequest(free);
+  assert.equal(freeCoded[0], 'debit;01.02.2025;50000;ООО "Ромашка";7701234567;40702810900000012345;возврат займа [ФЛ_1] по договору 5');
+  assert.equal(freeCoded[1], "debit;02.02.2025;30000;ВЫПЛАТА [ФЛ_2] ПОД ОТЧЕТ БЕЗ НДС");
+  assert.equal(freeCoded[2], "Аванс [ФЛ_3]; дивиденды учредителю [ФЛ_4]; оплата [ФЛ_5]; позже [ФЛ_1] вернул 100, а [ФЛ_2] отчиталась.");
+  assert.equal(pn.stats.persons, 5, "a lone first name / patronymic is not a person; Кот = Коту");
+  assert.equal(pn.restore("Заём [ФЛ_1], аванс [ФЛ_3]"), "Заём Сидоров Петр, аванс Кот В.П.", "restored in the nominative form the service gave");
+
+  // Service configured but unreachable → the audit is blocked, nothing is sent
+  const { detectNames } = await import("../lib/ner-client");
+  assert.equal(await detectNames(["текст"]), null, "service not configured → not used");
+  process.env.NER_URL = "http://127.0.0.1:9";   // nothing listens here
+  await assert.rejects(() => detectNames(["оплата Сидорову"]), (e: Error) => e instanceof PseudonymizationError && !/Сидоров/.test(e.message));
+  const before = sent.length;
+  await assert.rejects(() => runAuditTurn(system, messages, { step: () => {}, text: () => {}, thinking: () => {}, reset: () => {} }, new Pseudonymizer()),
+    PseudonymizationError);
+  assert.equal(sent.length, before, "name service down → no call to the model at all");
+  delete process.env.NER_URL;
+
+  console.log("✅ pseudonymize: all checks passed (coding rules, restore, streaming, fail-closed, leak scan of the outbound payload, name-service integration)");
 }
 main().catch(e => { console.error("❌", e.message ?? e); process.exit(1); });

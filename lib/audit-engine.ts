@@ -28,6 +28,7 @@ import {
   LLM_THINKING_ENABLED, AUDIT_REVIEW_ENABLED, buildReviewRequest, AUDIT_SYSTEM_PROMPT,
 } from "./llm";
 import { Pseudonymizer, PseudonymizationError, PSEUDONYM_NOTE } from "./pseudonymize";
+import { detectNames } from "./ner-client";
 
 type Msg = Anthropic.Messages.MessageParam;
 
@@ -181,6 +182,14 @@ export async function runAuditTurn(
       else throw new PseudonymizationError(`content block "${block.type}" cannot be pseudonymized`);
     });
   });
+
+  // Names found by the Natasha service (if configured). Configured but
+  // unavailable → PseudonymizationError → the audit is blocked.
+  const detected = await detectNames(texts);
+  if (detected) {
+    for (const n of detected) pz.learnDetectedName(n.normal || n.text);
+    console.log(`[audit] name service: ${detected.length} name span(s)`);
+  }
 
   const coded = pz.encodeRequest(texts);   // throws PseudonymizationError → nothing sent
   const codedSystem = `${hasStatic ? AUDIT_SYSTEM_PROMPT : ""}${PSEUDONYM_NOTE}${coded[0]}`;
