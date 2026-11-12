@@ -5,6 +5,7 @@ import { runAuditTurn } from "@/lib/audit-engine";
 import { Pseudonymizer, PseudonymizationError } from "@/lib/pseudonymize";
 import { createAdminClient } from "@/lib/supabase-server";
 import { parseFile, renderPDFPagesAsImages, type DateRange } from "@/lib/file-parser";
+import { billingSchemaReady } from "@/lib/doc-billing-server";
 import { checkRequestVolume, isContextLimitError, CONTEXT_LIMIT_MESSAGE, type VolumePart } from "@/lib/volume";
 import { NextRequest, NextResponse } from "next/server";
 
@@ -60,11 +61,25 @@ async function getAllDocumentsContent(
   try {
     console.log("[chat] Looking up all documents for sessionId:", sessionId);
 
-    const { data: docs, error: docErr } = await supabase
+    // Only documents whose quote the client has confirmed are analysed
+    // (Nov 2026). Before migration 005 there is no such column and every
+    // document of the session is read, as before.
+    const billingReady = await billingSchemaReady(supabase);
+    const { data: allDocs, error: docErr } = await supabase
       .from("documents")
-      .select("storage_path, file_name, file_type, page_count")
+      .select(billingReady
+        ? "storage_path, file_name, file_type, page_count, billing_status"
+        : "storage_path, file_name, file_type, page_count")
       .eq("session_id", sessionId)
       .order("uploaded_at", { ascending: true });
+
+    type DocRow = { storage_path: string; file_name: string; file_type: string; page_count: number | null; billing_status?: string };
+    const rows = (allDocs ?? []) as unknown as DocRow[];
+    const docs = billingReady ? rows.filter(d => d.billing_status === "confirmed") : rows;
+    const waiting = billingReady ? rows.filter(d => d.billing_status === "pending") : [];
+    if (waiting.length > 0) {
+      step(`Ожидают подтверждения стоимости и не анализируются: ${waiting.map(d => `«${d.file_name}»`).join(", ")}`);
+    }
 
     if (docErr) {
       console.error("[chat] Document lookup error:", docErr.message);

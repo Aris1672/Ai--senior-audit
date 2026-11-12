@@ -11,7 +11,9 @@ type SourceType = "file" | "live_1c";
 interface PriceResult {
   transactionCount: number;
   priceRub:         number;
-  tierName:         string;
+  rateRub?:         number;
+  pages?:           number;
+  lines?:           string[];   // one line per uploaded file, from the server's quote
 }
 
 export default function NewAuditPage() {
@@ -133,6 +135,12 @@ export default function NewAuditPage() {
 
     const uploadRes = await fetch("/api/upload", { method: "POST", body: formData });
     const uploadData = await uploadRes.json();
+    if (!uploadRes.ok) {
+      setError(uploadData.error || "Ошибка загрузки файла");
+      setStep("data-source");
+      setLoading(false);
+      return;
+    }
 
     // Count transactions and get price
     const priceRes = await fetch("/api/audit/calculate-price", {
@@ -145,6 +153,12 @@ export default function NewAuditPage() {
       }),
     });
     const priceData = await priceRes.json();
+    if (!priceRes.ok) {
+      setError(priceData.error || "Ошибка расчёта стоимости");
+      setStep("data-source");
+      setLoading(false);
+      return;
+    }
 
     setPriceResult(priceData);
     setLoading(false);
@@ -558,8 +572,13 @@ export default function NewAuditPage() {
             {/* Price breakdown */}
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "12px", marginBottom: "24px" }}>
               {[
-                { label: "Транзакций найдено", value: priceResult.transactionCount.toLocaleString("ru"), color: "#4d91ff" },
-                { label: "Тарифный план",      value: priceResult.tierName,                              color: "#7a90c0" },
+                priceResult.transactionCount === 0 && (priceResult.pages ?? 0) > 0
+                  ? { label: "Страниц к анализу",  value: (priceResult.pages ?? 0).toLocaleString("ru"),       color: "#4d91ff" }
+                  : { label: "Операций к анализу", value: priceResult.transactionCount.toLocaleString("ru"),   color: "#4d91ff" },
+                { label: priceResult.transactionCount === 0 && (priceResult.pages ?? 0) > 0 ? "Цена за страницу" : "Цена за операцию",
+                  value: priceResult.transactionCount > 0 && priceResult.rateRub != null ? formatRubles(priceResult.rateRub)
+                       : (priceResult.pages ?? 0) > 0 ? formatRubles(priceResult.priceRub / (priceResult.pages ?? 1)) : "—",
+                  color: "#7a90c0" },
                 { label: "Стоимость аудита",   value: formatRubles(priceResult.priceRub),                color: "#2ecc8f" },
               ].map((item, i) => (
                 <div key={i} style={{
@@ -572,6 +591,12 @@ export default function NewAuditPage() {
               ))}
             </div>
 
+            {priceResult.lines && priceResult.lines.length > 0 && (
+              <div style={{ fontSize: "13px", color: "#7a90c0", marginBottom: "20px", lineHeight: 1.6 }}>
+                {priceResult.lines.map((line, i) => <div key={i}>{line}</div>)}
+              </div>
+            )}
+
             {/* Confirm info */}
             <div style={{
               background: "#0d1f3e", border: "1px solid #1565e8",
@@ -579,7 +604,8 @@ export default function NewAuditPage() {
             }}>
               После подтверждения начнётся аудит и вы перейдёте в чат с ИИ Старшим Аудитором.
               Стоимость <strong style={{ color: "#e8edf8" }}>{formatRubles(priceResult.priceRub)}</strong> будет
-              зафиксирована за этот аудит.
+              записана за этот аудит. Документы, добавленные позже, оцениваются отдельно —
+              вы увидите стоимость и подтвердите её до начала их анализа.
             </div>
           </div>
 

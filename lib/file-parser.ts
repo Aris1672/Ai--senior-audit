@@ -28,6 +28,12 @@ export interface ParseResult {
   // scanned document), signaling the caller should render pages as images
   // and route them through vision instead of relying on textContent.
   likelyScanned?: boolean;
+  // Billing (see lib/operation-keys.ts, lib/doc-billing.ts). Present only
+  // when the document is a list of dated operations; one key per operation,
+  // rows repeated across the sheets of one workbook counted once.
+  operationKeys?: string[];
+  // PDF: number of pages (a billing unit for supporting documents).
+  pageCount?: number;
 }
 
 /** A single rendered PDF page, ready to send to Claude's vision input. */
@@ -40,6 +46,7 @@ export interface PDFPageImage {
 /** Summary section from the СекцияРасчСчет block of a 1CClientBankExchange file. */
 import { buildStatementFacts } from "./statement-facts";
 import { describeSheetOverlap, type SheetData } from "./sheet-overlap";
+import { tableKeys, numberedKey, mergeKeyLists, flattenKeys } from "./operation-keys";
 
 export interface C1AccountSummary {
   account: string;          // РасчСчет
@@ -197,7 +204,11 @@ export function parseCSV(buffer: ArrayBuffer, range?: DateRange): ParseResult {
   const totalRows = dataLines.length;
   const textContent = [headers.join(delimiter), ...dataLines].join("\n");
 
-  return { rowCount: totalRows, parseMethod: "csv", detectedColumns: headers.filter(Boolean).slice(0, 10), textContent, parsedAt: now() };
+  const operationKeys = dateColIdx !== -1
+    ? tableKeys(headers, dataLines.map(l => l.split(delimiter).map(c => c.replace(/^"|"$/g, ""))), dateColIdx)
+    : undefined;
+
+  return { rowCount: totalRows, parseMethod: "csv", detectedColumns: headers.filter(Boolean).slice(0, 10), textContent, operationKeys, parsedAt: now() };
 }
 
 // ─── XML ──────────────────────────────────────────────────────────────────────
@@ -264,6 +275,7 @@ export async function parseXLS(buffer: ArrayBuffer, range?: DateRange): Promise<
     let totalRowCount = 0;
     const sheetBlocks: string[] = [];
     const allHeaders: string[] = [];
+    const sheetKeyLists: string[][] = [];
 
     for (const sheetName of workbook.SheetNames) {
       const sheet = workbook.Sheets[sheetName];
@@ -288,6 +300,9 @@ export async function parseXLS(buffer: ArrayBuffer, range?: DateRange): Promise<
 
       const totalRows = dataRows.length;
       totalRowCount  += totalRows;
+      if (dateColIdx !== -1) {
+        sheetKeyLists.push(tableKeys(headersRaw, dataRows.map(r => (r as any[]).map(c => String(c ?? ""))), dateColIdx));
+      }
 
       const lines = [
         headersRaw.join(";"),
@@ -310,6 +325,7 @@ export async function parseXLS(buffer: ArrayBuffer, range?: DateRange): Promise<
     return {
       rowCount:        totalRowCount,
       parseMethod:     "xls",
+      operationKeys:   sheetKeyLists.length ? flattenKeys(mergeKeyLists(sheetKeyLists)) : undefined,
       sheetName:       workbook.SheetNames.join(", "),
       detectedColumns: allHeaders.slice(0, 10),
       textContent,
@@ -394,6 +410,7 @@ export async function parseXLSX(buffer: ArrayBuffer, range?: DateRange): Promise
     const sheetBlocks: string[] = [];
     const sheetNamesUsed: string[] = [];
     const sheetData: SheetData[] = [];   // for the repeated-sheet check below
+    const sheetKeyLists: string[][] = [];
 
     for (const sheetKey of sheetKeys) {
       const sheetName = sheetNameByKey[sheetKey]
@@ -428,6 +445,7 @@ export async function parseXLSX(buffer: ArrayBuffer, range?: DateRange): Promise
       const sheetRowCount = dataRowValues.length;
       totalRowCount += sheetRowCount;
       sheetData.push({ name: sheetName, headers: headerValues, rows: dataRowValues });
+      sheetKeyLists.push(dateColIdx !== -1 ? tableKeys(headerValues, dataRowValues, dateColIdx) : []);
 
       const csvLines: string[] = [headerValues.join(";")];
       for (const values of dataRowValues) csvLines.push(values.join(";"));
@@ -443,6 +461,14 @@ export async function parseXLSX(buffer: ArrayBuffer, range?: DateRange): Promise
     const overlap = describeSheetOverlap(sheetData);
     totalRowCount -= overlap.duplicateRows;
 
+    // Billing keys: sheets that repeat another sheet are left out (their
+    // columns differ, so their rows would not match by key and would be
+    // charged twice); the remaining sheets are merged.
+    const billableLists = sheetKeyLists.filter((_, i) => !overlap.repeatedSheets.includes(i));
+    const operationKeys = billableLists.some(l => l.length > 0)
+      ? flattenKeys(mergeKeyLists(billableLists))
+      : undefined;
+
     const multiSheetHeader = sheetKeys.length > 1
       ? `[Файл содержит ${sheetKeys.length} листов: ${sheetNamesUsed.join(", ")}]\n` +
         (overlap.notes.length ? overlap.notes.join("\n") + "\n" : "") + "\n"
@@ -453,6 +479,7 @@ export async function parseXLSX(buffer: ArrayBuffer, range?: DateRange): Promise
     return {
       rowCount:        totalRowCount,
       parseMethod:     "xlsx",
+      operationKeys,
       sheetName:       sheetNamesUsed.join(", "), // all sheet names, comma-separated
       detectedColumns: sharedStrings.slice(0, 10),
       textContent,
@@ -559,6 +586,7 @@ export async function parsePDF(buffer: ArrayBuffer): Promise<ParseResult> {
         likelyScanned: true,
         textContent:   "[PDF не содержит извлекаемого текста — вероятно, это скан. Страницы будут переданы модели как изображения.]",
         detectedColumns: [`Страниц: ${numPages}`],
+        pageCount:     numPages,
         parsedAt:      now(),
       };
     }
@@ -572,6 +600,7 @@ export async function parsePDF(buffer: ArrayBuffer): Promise<ParseResult> {
     return {
       rowCount,
       parseMethod: "pdf",
+      pageCount:   numPages,
       detectedColumns: [`Страниц: ${numPages}`],
       textContent,
       parsedAt: now(),
@@ -842,6 +871,7 @@ export function parse1CTxt(buffer: ArrayBuffer): ParseResult {
   return {
     rowCount:         transactions.length,
     parseMethod:      "1c_txt",
+    operationKeys:    transactions.map(t => numberedKey(t.number, t.date, t.amount)),
     textContent,
     c1AccountSummary: accountSummary,
     parsedAt:         now(),
@@ -873,9 +903,9 @@ function now() { return new Date().toISOString(); }
 // Counts and labels only. The document text is re-read from storage on every
 // audit request, and with no volume caps it can be megabytes — it must not be
 // copied into a database row. `textChars` keeps its size for volume checks.
-export type ParsedSummary = Omit<ParseResult, "textContent"> & { textChars: number };
+export type ParsedSummary = Omit<ParseResult, "textContent" | "operationKeys"> & { textChars: number; operationCount?: number };
 
 export function toParsedSummary(result: ParseResult): ParsedSummary {
-  const { textContent, ...rest } = result;
-  return { ...rest, textChars: textContent?.length ?? 0 };
+  const { textContent, operationKeys, ...rest } = result;
+  return { ...rest, textChars: textContent?.length ?? 0, ...(operationKeys ? { operationCount: operationKeys.length } : {}) };
 }

@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import ReactMarkdown from "react-markdown";
+import { formatRubles } from "@/lib/billing";
 
 interface Message { role: "user" | "assistant"; content: string; costRub?: number; fileNames?: string[]; thinking?: string; }
 
@@ -228,6 +229,10 @@ export default function ChatPage() {
   const [pendingFiles,   setPendingFiles]   = useState<File[]>([]);
   const [uploading,      setUploading]      = useState(false);
   const [auditCompleted, setAuditCompleted] = useState(false);
+  // Cost of newly uploaded documents, waiting for the client's yes/no.
+  // Nothing is analysed until they confirm (server enforces this too).
+  const [quoteAsk,       setQuoteAsk]       = useState<{ lines: string[]; totalRub: number } | null>(null);
+  const quoteAnswerRef = useRef<((accept: boolean) => void) | null>(null);
   // index of the message currently being typewritten (-1 = none)
   const [typingIndex,    setTypingIndex]    = useState(-1);
 
@@ -305,7 +310,7 @@ export default function ChatPage() {
 
     const ctx = init.ctx;
     const systemMessage = ctx
-      ? `Начат новый аудит.\n\nКлиент: ${ctx.company_name || "не указан"}\nИНН: ${ctx.inn || "не указан"}\nПериод: ${ctx.period || "не указан"}\nКоличество транзакций в базе: ${ctx.transactions_ct || 0}\nСтоимость аудита зафиксирована: ${ctx.cost_rub || 0} ₽\n\nФайл с финансовыми данными прикреплён к этой сессии — ты получишь его содержимое автоматически. Представься кратко и сразу задай уточняющие вопросы по приоритетам проверки.`
+      ? `Начат новый аудит.\n\nКлиент: ${ctx.company_name || "не указан"}\nИНН: ${ctx.inn || "не указан"}\nПериод: ${ctx.period || "не указан"}\nКоличество транзакций в базе: ${ctx.transactions_ct || 0}\nСтоимость аудита на данный момент: ${ctx.cost_rub || 0} ₽\n\nФайл с финансовыми данными прикреплён к этой сессии — ты получишь его содержимое автоматически. Представься кратко и сразу задай уточняющие вопросы по приоритетам проверки.`
       : `Начат новый сеанс аудита. Представься и спроси, что нужно проверить.`;
 
     sendAutoMessageDirect(
@@ -529,6 +534,7 @@ export default function ChatPage() {
   //    /api/chat once per file. ─────────────────────────────────────────────
   async function uploadFilesAndSend(files: File[], uid: string, sid: string, currentMessages: Message[]) {
     setUploading(true);
+    const quoted: { documentId: string; quoteText: string; amountRub: number }[] = [];
 
     for (const file of files) {
       const formData = new FormData();
@@ -542,11 +548,40 @@ export default function ChatPage() {
       if (!uploadRes.ok) {
         setUploading(false);
         pushAssistantReply(`❌ Ошибка загрузки файла «${file.name}»: ${uploadData.error || "неизвестная ошибка"}`);
+        // Files of this batch that did upload are not left waiting unpriced.
+        if (quoted.length > 0) await settleQuote(sid, quoted.map(q => q.documentId), false);
         return; // stop on first failure — avoids sending a partial/confusing analysis
+      }
+      if (uploadData.quote) {
+        quoted.push({ documentId: uploadData.documentId, quoteText: uploadData.quoteText, amountRub: Number(uploadData.quote.amountRub) || 0 });
       }
     }
 
     setUploading(false);
+
+    // ── Cost confirmation ────────────────────────────────────────────────
+    // The server has priced each file. The client sees the cost and decides;
+    // only accepted files are analysed. A zero total needs no question.
+    if (quoted.length > 0) {
+      const totalRub = Math.round(quoted.reduce((sum, q) => sum + q.amountRub, 0) * 100) / 100;
+      const accept = totalRub === 0 ? true : await new Promise<boolean>(resolve => {
+        quoteAnswerRef.current = resolve;
+        setQuoteAsk({ lines: quoted.map(q => q.quoteText), totalRub });
+      });
+      setQuoteAsk(null);
+      quoteAnswerRef.current = null;
+
+      const settled = await settleQuote(sid, quoted.map(q => q.documentId), accept);
+      if (!settled) {
+        pushAssistantReply("❌ Не удалось записать подтверждение стоимости. Документы не переданы на анализ. Повторите загрузку.");
+        return;
+      }
+      if (!accept) {
+        pushAssistantReply("Документы не приняты: они не будут проанализированы и не оплачиваются.");
+        return;
+      }
+      if (totalRub > 0) setTotalCost(prev => prev + totalRub);
+    }
 
     try {
       await runStreamedReply({
@@ -564,6 +599,20 @@ export default function ChatPage() {
       // unexpected escaping it, so uploadFilesAndSend's caller (sendMessage)
       // still reaches its own finally block below either way.
       console.error("[chat] post-upload streamed reply failed unexpectedly:", err);
+    }
+  }
+
+  // Records the client's answer on the server. Returns false on failure.
+  async function settleQuote(sid: string, documentIds: string[], accept: boolean): Promise<boolean> {
+    try {
+      const res = await fetch("/api/billing/confirm-documents", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sessionId: sid, documentIds, accept }),
+      });
+      return res.ok;
+    } catch {
+      return false;
     }
   }
 
@@ -730,7 +779,7 @@ export default function ChatPage() {
           );
         })}
 
-        {(loading || uploading) && (() => {
+        {(loading || uploading) && !quoteAsk && (() => {
           const now      = nowMs;
           const done     = steps.slice(0, -1).slice(-STEP_DONE_MAX);
           const current  = steps[steps.length - 1];
@@ -778,6 +827,37 @@ export default function ChatPage() {
       </div>
 
       {/* Pending files list */}
+      {quoteAsk && (
+        <div style={{
+          margin: "0 0 12px", padding: "16px 18px", background: "#0d1f3e",
+          border: "1px solid #1565e8", borderRadius: "10px",
+        }}>
+          <div style={{ fontSize: "14px", fontWeight: 600, color: "#e8edf8", marginBottom: "8px" }}>
+            Стоимость анализа загруженных документов
+          </div>
+          <div style={{ fontSize: "13px", color: "#a9b8dc", lineHeight: 1.6, marginBottom: "10px" }}>
+            {quoteAsk.lines.map((line, i) => <div key={i}>{line}</div>)}
+          </div>
+          <div style={{ fontSize: "14px", color: "#e8edf8", marginBottom: "12px" }}>
+            Итого к стоимости аудита будет добавлено: <strong>{formatRubles(quoteAsk.totalRub)}</strong>
+          </div>
+          <div style={{ display: "flex", gap: "10px" }}>
+            <button onClick={() => quoteAnswerRef.current?.(true)} style={{
+              padding: "10px 20px", background: "#1565e8", border: "none", borderRadius: "8px",
+              color: "#fff", fontSize: "14px", fontWeight: 600, cursor: "pointer",
+            }}>
+              Подтвердить и проанализировать
+            </button>
+            <button onClick={() => quoteAnswerRef.current?.(false)} style={{
+              padding: "10px 20px", background: "transparent", border: "1px solid #1e2d55", borderRadius: "8px",
+              color: "#7a90c0", fontSize: "14px", cursor: "pointer",
+            }}>
+              Отменить
+            </button>
+          </div>
+        </div>
+      )}
+
       {pendingFiles.length > 0 && (
         <div style={{ display: "flex", flexDirection: "column", gap: "6px", marginBottom: "8px" }}>
           {pendingFiles.map((file, idx) => (

@@ -1,6 +1,7 @@
 import { createAdminClient } from "@/lib/supabase-server";
 import { NextRequest, NextResponse } from "next/server";
 import { LEGAL_FORM_VALUES, TAX_REGIME_VALUES, VAT_STATUS_VALUES } from "@/lib/audit-constants";
+import { authorizeSession, isAccessError, billingSchemaReady, settleDocuments } from "@/lib/doc-billing-server";
 
 export async function POST(req: NextRequest) {
   try {
@@ -355,6 +356,17 @@ export async function POST(req: NextRequest) {
           );
         }
 
+        // Nov 2026: the price is what the SERVER quoted for the uploaded
+        // documents, recorded when they are accepted here. The numbers the
+        // browser sends are ignored (they are used only before migration
+        // 005 has been run, as before).
+        if (await billingSchemaReady(supabase)) {
+          const access = await authorizeSession(supabase, sessionId);
+          if (isAccessError(access)) return NextResponse.json({ error: access.error }, { status: access.status });
+          const settled = await settleDocuments(supabase, sessionId, null, true);
+          return NextResponse.json({ success: true, ...settled.session });
+        }
+
         await supabase.from("audit_sessions").update({
           cost_rub:        priceRub,
           transactions_ct: transactionCount ?? 0,
@@ -431,6 +443,14 @@ export async function POST(req: NextRequest) {
           .from("audit_sessions")
           .update({ status })
           .eq("id", sessionId);
+        // Completion freezes the recorded amount: no document can be added
+        // or confirmed afterwards (see /api/upload and settlement).
+        if (status === "completed" && await billingSchemaReady(supabase)) {
+          await supabase.from("audit_sessions")
+            .update({ billing_frozen_at: new Date().toISOString(), completed_at: new Date().toISOString() })
+            .eq("id", sessionId)
+            .is("billing_frozen_at", null);
+        }
         return NextResponse.json({ success: true });
       }
 

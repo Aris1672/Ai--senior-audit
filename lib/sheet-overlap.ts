@@ -13,7 +13,7 @@
  * Pure function; tested in scripts/test-statement-facts.ts.
  */
 export interface SheetData { name: string; headers: string[]; rows: string[][]; }
-export interface SheetOverlap { notes: string[]; duplicateRows: number; }
+export interface SheetOverlap { notes: string[]; duplicateRows: number; /** indices of sheets that repeat another sheet */ repeatedSheets: number[]; }
 
 const MIN_SHARED_COLUMNS = 3;
 const MIN_MATCH_SHARE = 0.9;
@@ -63,5 +63,5 @@ export function describeSheetOverlap(sheets: SheetData[]): SheetOverlap {
       break;
     }
   }
-  return { notes, duplicateRows };
+  return { notes, duplicateRows, repeatedSheets: [...absorbed] };
 }

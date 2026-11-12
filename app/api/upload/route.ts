@@ -1,15 +1,23 @@
 /**
  * app/api/upload/route.ts
  *
- * Uploads a file to Supabase Storage (Vercel → Supabase),
- * creates a documents record, then fires a background parse
- * for xlsx / csv / xml so the row count is ready by the time
- * the client calls /api/audit/calculate-price.
+ * Uploads a file to storage, creates a documents record, reads the file and
+ * QUOTES it (Nov 2026): operations × rate, or pages × rate — computed here on
+ * the server. The document is stored as "pending" and is not analysed until
+ * the client confirms the quote (/api/billing/confirm-documents). This is the
+ * same for the first file of an audit and for files added later in the chat.
+ *
+ * The caller must be signed in and own the audit; the client id is taken
+ * from the audit, not from the request.
  */
 
 import { createAdminClient } from "@/lib/supabase-server";
 import { parseFile, is1CClientBankExchange, toParsedSummary } from "@/lib/file-parser";
 import { NextRequest, NextResponse } from "next/server";
+import { quoteDocument, describeQuote, type DocumentQuote } from "@/lib/doc-billing";
+import {
+  authorizeSession, isAccessError, billingSchemaReady, resolveRates, loadAcceptedContent, sha256,
+} from "@/lib/doc-billing-server";
 
 const ALLOWED_TYPES: Record<string, string> = {
   "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": "xlsx",
@@ -33,12 +41,28 @@ export async function POST(req: NextRequest) {
   try {
     const formData  = await req.formData();
     const file      = formData.get("file")      as File;
-    const clientId  = formData.get("clientId")  as string;
     const sessionId = formData.get("sessionId") as string;
 
-    if (!file || !clientId || !sessionId) {
+    if (!file || !sessionId) {
       return NextResponse.json(
-        { error: "file, clientId и sessionId обязательны" },
+        { error: "file и sessionId обязательны" },
+        { status: 400 }
+      );
+    }
+
+    const supabase = createAdminClient();
+
+    // ── Who is asking, and is it their audit ──────────────────────────────
+    const access = await authorizeSession(supabase, sessionId);
+    if (isAccessError(access)) {
+      return NextResponse.json({ error: access.error }, { status: access.status });
+    }
+    const clientId = access.session.client_id;
+    const session  = access.session;
+
+    if (session.status !== "active") {
+      return NextResponse.json(
+        { error: "Аудит завершён, стоимость зафиксирована — добавить документы нельзя. Создайте новый аудит." },
         { status: 400 }
       );
     }
@@ -59,8 +83,6 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const supabase = createAdminClient();
-
     // ── Check client is active ────────────────────────────────────────────
     const { data: profile } = await supabase
       .from("profiles")
@@ -80,15 +102,7 @@ export async function POST(req: NextRequest) {
     // scoped to the client's selected audit period, not the whole file —
     // same period_from/period_to written by create_audit_session, single
     // source of truth (see PROJECT_STATUS.md period-filtering fix).
-    const { data: session } = await supabase
-      .from("audit_sessions")
-      .select("period_from, period_to")
-      .eq("id", sessionId)
-      .single();
-
-    const period = session
-      ? { dateFrom: session.period_from ?? undefined, dateTo: session.period_to ?? undefined }
-      : undefined;
+    const period = { dateFrom: session.period_from ?? undefined, dateTo: session.period_to ?? undefined };
 
     // ── Upload to Supabase Storage (Vercel → Supabase) ────────────────────
     const timestamp   = Date.now();
@@ -121,6 +135,9 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    const billingReady = await billingSchemaReady(supabase);
+    const contentHash  = sha256(arrayBuffer);
+
     // ── Create document record ────────────────────────────────────────────
     const { data: doc, error: dbError } = await supabase
       .from("documents")
@@ -132,6 +149,7 @@ export async function POST(req: NextRequest) {
         file_size:    file.size,
         storage_path: storagePath,
         status:       "processing",
+        ...(billingReady ? { billing_status: "pending", content_hash: contentHash } : {}),
       })
       .select()
       .single();
@@ -152,30 +170,60 @@ export async function POST(req: NextRequest) {
       metadata:   { file_name: file.name, file_type: fileType, file_size: file.size },
     });
 
-    // ── Background parse (xlsx / csv / xml only) ──────────────────────────
-    // We already have the arrayBuffer in memory — parse directly without
-    // another HTTP hop. Run after response is returned using waitUntil-style
-    // fire-and-forget (no await).
+    // ── Read the file now: the quote needs its real content ───────────────
+    let parsed: Awaited<ReturnType<typeof parseFile>> | null = null;
     if (PARSEABLE.has(fileType)) {
-      parseFile(arrayBuffer, fileType as "xlsx" | "xls" | "csv" | "xml" | "docx" | "doc" | "1c_txt", period)
-        .then((result) =>
-          supabase
-            .from("documents")
-            .update({ parsed_data: toParsedSummary(result), status: "ready" })
-            .eq("id", doc.id)
-        )
-        .catch((err) => console.error("[upload] background parse error:", err));
+      try {
+        parsed = await parseFile(arrayBuffer, fileType as "xlsx" | "xls" | "csv" | "xml" | "docx" | "doc" | "1c_txt" | "pdf", period);
+        await supabase.from("documents")
+          .update({ parsed_data: toParsedSummary(parsed), status: "ready", page_count: parsed.pageCount ?? null })
+          .eq("id", doc.id);
+      } catch (err) {
+        console.error("[upload] parse error:", err);
+        await supabase.from("documents").update({ status: "error" }).eq("id", doc.id);
+      }
+    } else {
+      await supabase.from("documents").update({ status: "ready" }).eq("id", doc.id);
+    }
+
+    // ── Quote ─────────────────────────────────────────────────────────────
+    let quote: DocumentQuote | null = null;
+    let quoteText: string | null = null;
+    if (billingReady) {
+      const rates = await resolveRates(supabase, clientId);
+      if (!rates) {
+        await supabase.from("documents").update({ billing_status: "declined" }).eq("id", doc.id);
+        return NextResponse.json({ error: "Тариф не настроен. Обратитесь к администратору." }, { status: 500 });
+      }
+      const accepted = await loadAcceptedContent(supabase, sessionId, period, doc.id);
+      quote = quoteDocument({
+        fileType, parsed,
+        sameFileAlreadyAccepted: accepted.hashes.has(contentHash),
+        knownKeys: accepted.knownKeys,
+        operationRateRub: rates.operationRateRub,
+        pageRateRub: rates.pageRateRub,
+      });
+      quoteText = describeQuote(file.name, quote);
+      await supabase.from("documents").update({
+        billing_kind:       quote.kind,
+        billing_units:      quote.units,
+        billing_new_units:  quote.newUnits,
+        billing_rate_rub:   quote.rateRub,
+        billing_amount_rub: quote.amountRub,
+      }).eq("id", doc.id);
+      console.log("[upload] quote —", quote.kind, "| units:", quote.units, "| new:", quote.newUnits, "| amount:", quote.amountRub);
     }
 
     return NextResponse.json({
       documentId:  doc.id,
-      storagePath,
+      fileName:    file.name,
       fileType,
       parseable:   PARSEABLE.has(fileType),
-      status:      PARSEABLE.has(fileType) ? "processing" : "ready",
-      message:     PARSEABLE.has(fileType)
-        ? "Файл загружен, выполняется подсчёт строк…"
-        : "Файл успешно загружен",
+      status:      "ready",
+      // null until migration 005 has been run (old behaviour: no quote, no confirmation)
+      quote,
+      quoteText,
+      message:     "Файл загружен",
     });
 
   } catch (err) {
