@@ -106,7 +106,7 @@ export function buildBase(year = 2025, scale = 1, seed = 20251112): MockBase {
     ["76.09", "Прочие расчеты с разными дебиторами и кредиторами", "ActivePassive"],
     ["84.01", "Прибыль, подлежащая распределению", "ActivePassive"],
     ["90.01.1", "Выручка по деятельности с основной системой налогообложения", "Passive"], ["90.02.1", "Себестоимость продаж по деятельности с основной системой налогообложения", "Active"],
-    ["91.02", "Прочие расходы", "Active"],
+    ["91.02", "Прочие расходы", "Active"], ["99.01", "Прибыли и убытки (налог при УСН)", "ActivePassive"],
   ];
   chart.forEach(([code, name, type], i) => {
     const key = guid("account:" + code);
@@ -268,7 +268,7 @@ export function buildBase(year = 2025, scale = 1, seed = 20251112): MockBase {
     }));
     if (posted) {
       post(key, "Document_РеализацияТоваровУслуг", date, "62.01", "90.01.1", amount, what, { dr: [p.key, "Catalog_Контрагенты"] });
-      post(key, "Document_РеализацияТоваровУслуг", date, "90.02.1", "41.01", r2(amount * 0.68), "Себестоимость проданных товаров");
+      post(key, "Document_РеализацияТоваровУслуг", date, "90.02.1", "41.01", r2(amount * 0.6), "Себестоимость проданных товаров");
     }
     return key;
   };
@@ -359,13 +359,17 @@ export function buildBase(year = 2025, scale = 1, seed = 20251112): MockBase {
     moneyOut(iso(year, m, days, 20), bank, r2(between(1_800, 3_400)), `Комиссия за расчетное обслуживание за ${String(m).padStart(2, "0")}.${year}`, { dr: "91.02", operation: "КомиссияБанка" });
   }
 
-  // УСН advance payments: Q1 and Q3 paid, Q2 NOT paid (planted).
+  // УСН advance payments are accrued each quarter; Q1 and 9 months are paid,
+  // the half-year one is NOT (planted) — its amount stays as a credit balance on 68.12.
+  manual(iso(year, 3, 31, 21), "99.01", "68.12", 84_000, `Начислен авансовый платеж по УСН за 1 квартал ${year}`);
+  manual(iso(year, 6, 30, 21), "99.01", "68.12", 88_000, `Начислен авансовый платеж по УСН за полугодие ${year}`);
+  manual(iso(year, 9, 30, 21), "99.01", "68.12", 91_000, `Начислен авансовый платеж по УСН за 9 месяцев ${year}`);
   const usn = (m: number, d: number, amount: number, q: string) =>
     moneyOut(iso(year, m, workday(m, d), 11, 30), fns, amount, `Единый налоговый платеж (авансовый платеж по УСН за ${q} ${year})`, { dr: "68.12", operation: "ПеречислениеНалога" });
   usn(4, 28, 84_000, "1 квартал");
   usn(10, 28, 91_000, "9 месяцев");
   planted.push({ id: "usn-q2-missing", title: "Авансовый платёж по УСН за полугодие не уплачен",
-    detail: "Платежи по УСН есть за 1 квартал (апрель) и 9 месяцев (октябрь); платежа за полугодие (срок 28 июля) нет.", documents: [], amount: 0 });
+    detail: "Авансы начислены за 1 квартал, полугодие и 9 месяцев; уплачены за 1 квартал (апрель) и 9 месяцев (октябрь). Аванс за полугодие 88 000 (срок 28 июля) не уплачен — кредитовое сальдо 68.12.", documents: [], amount: 88_000 });
 
   // PLANTED 1 — the same supplier invoice paid twice.
   {

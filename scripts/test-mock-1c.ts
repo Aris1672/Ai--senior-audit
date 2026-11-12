@@ -102,6 +102,15 @@ async function main() {
     assert.equal(sum(ghostBalance, "СуммаBalance"), 480_000, "paid supplier with no documents shows as a debit balance on 60.01");
     const usn = (await get("Document_СписаниеСРасчетногоСчета?$format=json&$filter=substringof('по УСН', НазначениеПлатежа)&$select=Date")).json().value;
     assert.deepEqual(usn.map((r: any) => r.Date.slice(5, 7)), ["04", "10"]);
+    assert.equal(sum(closing.filter((r: any) => r.Account_Key === key("68.12")), "СуммаBalance"), -88_000, "the unpaid half-year advance is a credit balance on 68.12");
+    // No accidental errors: goods never go below zero.
+    let stock = 0, minStock = Infinity;
+    for (const r of mock.base.ledger) {
+      if (r.AccountDr_Key === key("41.01")) stock += Number(r.Сумма);
+      if (r.AccountCr_Key === key("41.01")) stock -= Number(r.Сумма);
+      minStock = Math.min(minStock, stock);
+    }
+    assert.ok(minStock >= 0 && stock > 0, `stock on 41.01 never goes below zero (lowest ${Math.round(minStock)})`);
     const unposted = (await get("Document_РеализацияТоваровУслуг?$format=json&$filter=Posted eq false and DeletionMark eq false")).json().value;
     assert.equal(unposted.length, 1);
     assert.equal(unposted[0].СуммаДокумента, 312_400);

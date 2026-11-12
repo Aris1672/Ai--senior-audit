@@ -46,7 +46,7 @@ invented. The same year always produces the same data.
 | `director-loan` | Interest-free loan of 900 000 to the director, not repaid (58.03) |
 | `dividends-no-ndfl` | Dividends of 1 200 000 paid in full; НДФЛ not withheld or paid |
 | `unposted-sale` | A shipment of 312 400 left unposted — paid by the customer, no revenue in the ledger |
-| `usn-q2-missing` | УСН advance payments for Q1 and 9 months exist; the half-year one does not |
+| `usn-q2-missing` | УСН advances are accrued for Q1, half-year and 9 months; Q1 and 9 months are paid, the half-year one (88 000) is not — credit balance on 68.12 |
 
 There is also one sale marked for deletion, which a reader must ignore.
 The list is available to tests as `base.planted`; it is never served.
