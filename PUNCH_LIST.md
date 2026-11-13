@@ -2,6 +2,8 @@
 
 Prioritized by what it blocks. Derived from full source review (see PROJECT_STATUS.md for details on each item).
 
+> **▶ FIRST TASK ON RESUME — closing findings (agreed Nov 13, 03:35).** The audit page shows "0% решено", and each finding has a status (open / resolved / disputed), but nothing in the app ever sets it: the agent's only tool adds findings. To build: (1) a second agent tool to update an existing finding (resolved / still open + what is missing), naming the document that justified it; (2) the open findings with identifiers given to the agent on every turn; (3) rules for when a finding may be closed; (4) a record of who closed what and why, on the audit page and in the PDF. **User decision needed first:** the agent closes a finding itself, or proposes and a person confirms (recommended). Test on the mock company with text documents; OCR after.
+
 > **▶ RESUME HERE (state at the end of Nov 13, 2026)** — steps 1–4b done and verified by the user; next is **step 5: OCR, then stage 2**. On resume: (1) redeploy, (2) `npm run check:audit` — the prompt got the «Неотражённый доход» rule, (3) decide the OCR engine and the stage-2 mechanics (see the top entry of `PROJECT_STATUS.md`), (4) build. Still open in step 4: the run against the 1С:Фреш trial base.
 
 > **⚠ BEFORE THE FIRST REAL CLIENT (launch checklist)**
