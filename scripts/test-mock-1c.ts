@@ -102,7 +102,16 @@ async function main() {
     assert.equal(sum(ghostBalance, "СуммаBalance"), 480_000, "paid supplier with no documents shows as a debit balance on 60.01");
     const usn = (await get("Document_СписаниеСРасчетногоСчета?$format=json&$filter=substringof('по УСН', НазначениеПлатежа)&$select=Date")).json().value;
     assert.deepEqual(usn.map((r: any) => r.Date.slice(5, 7)), ["04", "10"]);
-    assert.equal(sum(closing.filter((r: any) => r.Account_Key === key("68.12")), "СуммаBalance"), -88_000, "the unpaid half-year advance is a credit balance on 68.12");
+    assert.equal(sum(closing.filter((r: any) => r.Account_Key === key("68.12")), "СуммаBalance"), -123_120, "68.12 ends in credit: the unpaid half-year advance (30 000) and the year's tax not yet due (93 120)");
+    const beforeYearTax = (await get("AccountingRegister_Хозрасчетный/Balance(Period=datetime'2025-12-31T23:00:00')?$format=json")).json().value;
+    assert.equal(sum(beforeYearTax.filter((r: any) => r.Account_Key === key("68.12")), "СуммаBalance"), -30_000, "before the year's tax is accrued, only the unpaid half-year advance is owed");
+    // No accidental errors: bank documents never fall on a weekend.
+    for (const set of ["Document_ПоступлениеНаРасчетныйСчет", "Document_СписаниеСРасчетногоСчета"]) {
+      for (const r of mock.base.sets[set]) {
+        const wd = new Date(String(r.Date).slice(0, 10) + "T00:00:00Z").getUTCDay();
+        assert.ok(wd !== 0 && wd !== 6 && String(r.Date).startsWith("2025"), `${set} dated ${r.Date}`);
+      }
+    }
     // No accidental errors: goods never go below zero.
     let stock = 0, minStock = Infinity;
     for (const r of mock.base.ledger) {

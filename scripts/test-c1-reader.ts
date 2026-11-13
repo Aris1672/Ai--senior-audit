@@ -35,7 +35,7 @@ async function main() {
     const postedDocs = Object.entries(base.sets).filter(([n]) => n.startsWith("Document_"))
       .flatMap(([, rows]) => rows).filter(r => r.Posted && String(r.Date).startsWith("2025"));
     assert.equal(snap.documentCount, postedDocs.length, "one operation per posted document of the period");
-    assert.equal(snap.documentCount, 759);
+    assert.equal(snap.documentCount, 760);
     assert.equal(snap.operationKeys.length, snap.documentCount);
     assert.equal(new Set(snap.operationKeys).size, snap.operationKeys.length, "no two documents share a billing key");
     assert.equal(snap.organisation.inn, "7700123456");
@@ -62,7 +62,7 @@ async function main() {
     assert.ok(!t.includes("ошибочный ввод"), "a document marked for deletion is ignored");
     const usn = t.split("\n").filter(l => /^\d\d\.\d\d\.2025;[\d ]+,\d\d;Единый налоговый платеж \(авансовый платеж по УСН/.test(l));
     assert.deepEqual(usn.map(l => l.slice(3, 5)), ["04", "10"], "УСН payments: April and October only");
-    assert.match(line(/^68\.12;/), /;263 000,00;Кт 88 000,00$/, "accrued 263 000, paid 175 000: the half-year advance is unpaid");
+    assert.match(line(/^68\.12;/), /;55 000,00;178 120,00;Кт 123 120,00$/, "accrued 178 120 (three advances and the year's tax), paid 55 000: the half-year advance of 30 000 is unpaid");
     assert.match(line(/^41\.01;/), /;Дт [\d ]+,\d\d$/, "goods end with a debit balance");
     for (const a of ["44\\.01", "90\\.01\\.1", "90\\.02\\.1", "90\\.07\\.1", "90\\.09", "91\\.02", "91\\.09", "99\\.01"]) {
       assert.match(line(new RegExp(`^${a};`)), /;0,00$/, `account ${a} is closed at year end`);
@@ -90,10 +90,10 @@ async function main() {
     const stored = new TextEncoder().encode(JSON.stringify(snap)).buffer as ArrayBuffer;
     const parsed = await parseFile(stored, "1c_odata");
     assert.equal(parsed.textContent, snap.text);
-    assert.equal(parsed.rowCount, 759);
+    assert.equal(parsed.rowCount, 760);
     assert.deepEqual(parsed.personNames, snap.personNames);
     const quote = quoteDocument({ fileType: "1c_odata", parsed, knownKeys: new Map(), sameFileAlreadyAccepted: false, operationRateRub: 12.5, pageRateRub: 20 });
-    assert.deepEqual([quote.kind, quote.units, quote.amountRub], ["operations", 759, 9487.5]);
+    assert.deepEqual([quote.kind, quote.units, quote.amountRub], ["operations", 760, 9500]);
     const K = await import("../lib/operation-keys");
     const firstOut = base.sets["Document_СписаниеСРасчетногоСчета"][0];
     assert.ok(snap.operationKeys.includes(K.numberedKey(firstOut.НомерВходящегоДокумента, String(firstOut.Date).slice(0, 10), firstOut.СуммаДокумента)),

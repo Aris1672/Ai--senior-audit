@@ -32,7 +32,8 @@ Login is HTTP Basic, like 1C's "automatic REST service" user. Settings (env):
 three employees. One year: purchases of goods (paid 5–20 days later), rent and
 delivery, sales (paid 3–25 days later), monthly payroll with НДФЛ and
 contributions, bank charges, УСН advances accrued each quarter, month-end
-closing of costs and results, and the year-end closing of accounts 90, 91 and 99. Opening balances are entered
+closing of costs and results, the year's tax, and the year-end closing of accounts 90, 91
+and 99. Bank documents never fall on a weekend. Opening balances are entered
 on 31 December of the previous year. All names, ИНН and account numbers are
 invented. The same year always produces the same data.
 
@@ -47,7 +48,7 @@ invented. The same year always produces the same data.
 | `director-loan` | Interest-free loan of 900 000 to the director, not repaid (58.03) |
 | `dividends-no-ndfl` | Dividends of 1 200 000 paid in full; НДФЛ not withheld or paid |
 | `unposted-sale` | A shipment of 312 400 left unposted — paid by the customer, no revenue in the ledger |
-| `usn-q2-missing` | УСН advances are accrued for Q1, half-year and 9 months; Q1 and 9 months are paid, the half-year one (88 000) is not — credit balance on 68.12 |
+| `usn-q2-missing` | УСН advances are accrued for Q1 (28 000), half-year (30 000) and 9 months (27 000); Q1 and 9 months are paid, the half-year one is not. The year's tax (minimum tax, 93 120 after advances) is accrued on 31 December and is not yet due, so 68.12 ends at Кт 123 120 |
 
 There is also one sale marked for deletion, which a reader must ignore.
 The list is available to tests as `base.planted`; it is never served.

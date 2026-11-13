@@ -213,8 +213,20 @@ export function buildBase(year = 2025, scale = 1, seed = 20251112): MockBase {
     }));
   };
 
+  // Banks do not move money on Saturdays and Sundays: a bank document dated
+  // on a weekend goes to the next Monday (or back to Friday at the year's end).
+  const bankDay = (date: string): string => {
+    const d = new Date(date.slice(0, 10) + "T00:00:00Z");
+    const wd = d.getUTCDay();
+    if (wd !== 0 && wd !== 6) return date;
+    d.setUTCDate(d.getUTCDate() + (wd === 6 ? 2 : 1));
+    if (d.getUTCFullYear() !== Number(date.slice(0, 4))) d.setUTCDate(d.getUTCDate() - 3);
+    return d.toISOString().slice(0, 10) + date.slice(10);
+  };
+
   let incomingNo = 100;
-  const moneyIn = (date: string, p: Party, amount: number, purpose: string, opts: { cr?: string; operation?: string; posted?: boolean } = {}) => {
+  const moneyIn = (rawDate: string, p: Party, amount: number, purpose: string, opts: { cr?: string; operation?: string; posted?: boolean } = {}) => {
+    const date = bankDay(rawDate);
     const key = guid("in:" + date + ":" + (counters["in"] = (counters["in"] ?? 0) + 1));
     const posted = opts.posted ?? true;
     add("Document_ПоступлениеНаРасчетныйСчет", make("Document_ПоступлениеНаРасчетныйСчет", {
@@ -230,8 +242,9 @@ export function buildBase(year = 2025, scale = 1, seed = 20251112): MockBase {
   };
 
   let paymentNo = 0;
-  const moneyOut = (date: string, p: Party | null, amount: number, purpose: string,
+  const moneyOut = (rawDate: string, p: Party | null, amount: number, purpose: string,
                     opts: { dr?: string; operation?: string; person?: { key: string }; posted?: boolean; number?: string } = {}) => {
+    const date = bankDay(rawDate);
     const key = guid("out:" + date + ":" + (counters["out"] = (counters["out"] ?? 0) + 1));
     const dr = opts.dr ?? "60.01";
     add("Document_СписаниеСРасчетногоСчета", make("Document_СписаниеСРасчетногоСчета", {
@@ -363,15 +376,15 @@ export function buildBase(year = 2025, scale = 1, seed = 20251112): MockBase {
 
   // УСН advance payments are accrued each quarter; Q1 and 9 months are paid,
   // the half-year one is NOT (planted) — its amount stays as a credit balance on 68.12.
-  manual(iso(year, 3, 31, 21), "99.01", "68.12", 84_000, `Начислен авансовый платеж по УСН за 1 квартал ${year}`);
-  manual(iso(year, 6, 30, 21), "99.01", "68.12", 88_000, `Начислен авансовый платеж по УСН за полугодие ${year}`);
-  manual(iso(year, 9, 30, 21), "99.01", "68.12", 91_000, `Начислен авансовый платеж по УСН за 9 месяцев ${year}`);
+  manual(iso(year, 3, 31, 21), "99.01", "68.12", 28_000, `Начислен авансовый платеж по УСН за 1 квартал ${year}`);
+  manual(iso(year, 6, 30, 21), "99.01", "68.12", 30_000, `Начислен авансовый платеж по УСН за полугодие ${year}`);
+  manual(iso(year, 9, 30, 21), "99.01", "68.12", 27_000, `Начислен авансовый платеж по УСН за 9 месяцев ${year}`);
   const usn = (m: number, d: number, amount: number, q: string) =>
     moneyOut(iso(year, m, workday(m, d), 11, 30), fns, amount, `Единый налоговый платеж (авансовый платеж по УСН за ${q} ${year})`, { dr: "68.12", operation: "ПеречислениеНалога" });
-  usn(4, 28, 84_000, "1 квартал");
-  usn(10, 28, 91_000, "9 месяцев");
+  usn(4, 28, 28_000, "1 квартал");
+  usn(10, 28, 27_000, "9 месяцев");
   planted.push({ id: "usn-q2-missing", title: "Авансовый платёж по УСН за полугодие не уплачен",
-    detail: "Авансы начислены за 1 квартал, полугодие и 9 месяцев; уплачены за 1 квартал (апрель) и 9 месяцев (октябрь). Аванс за полугодие 88 000 (срок 28 июля) не уплачен — кредитовое сальдо 68.12.", documents: [], amount: 88_000 });
+    detail: "Авансы начислены за 1 квартал, полугодие и 9 месяцев; уплачены за 1 квартал (апрель) и 9 месяцев (октябрь). Аванс за полугодие 30 000 (срок 28 июля) не уплачен — в кредитовом сальдо 68.12 (вместе с налогом за год, срок которого ещё не наступил).", documents: [], amount: 30_000 });
 
   // PLANTED 1 — the same supplier invoice paid twice.
   {
@@ -442,6 +455,20 @@ export function buildBase(year = 2025, scale = 1, seed = 20251112): MockBase {
     }
     const from = iso(year, 1, 1, 0), to = iso(year, 12, 31, 23, 45), at = iso(year, 12, 31, 23, 50);
     const net = (code: string) => r2(turnover(code, "AccountDr_Key", from, to) - turnover(code, "AccountCr_Key", from, to));
+    // The year's tax is accrued before the books are closed: 15% of the profit,
+    // but not less than the minimum tax (1% of the money received), less the
+    // advances already accrued. It falls due the next March.
+    {
+      const accrued = turnover("68.12", "AccountCr_Key", from, to);
+      const profit  = -net("99.01") + accrued;
+      const income  = turnover("51", "AccountDr_Key", from, to);
+      const minimum = Math.round(income * 0.01), regular = Math.round(Math.max(profit, 0) * 0.15);
+      const yearTax = Math.max(minimum, regular);
+      const what = minimum > regular ? "минимальный налог 1% от доходов" : "15% от разницы доходов и расходов";
+      if (yearTax > accrued) {
+        manual(iso(year, 12, 31, 23, 40), "99.01", "68.12", r2(yearTax - accrued), `Начислен налог по УСН за ${year} год (${what}) за вычетом авансовых платежей`);
+      }
+    }
     const doc = manual(at, "90.01.1", "90.09", -net("90.01.1"), `Реформация баланса ${year}: закрытие счета 90.01`);
     post(doc, "Document_ОперацияБух", at, "90.09", "90.02.1", net("90.02.1"), `Реформация баланса ${year}: закрытие счета 90.02`);
     post(doc, "Document_ОперацияБух", at, "90.09", "90.07.1", net("90.07.1"), `Реформация баланса ${year}: закрытие счета 90.07`);
