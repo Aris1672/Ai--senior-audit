@@ -2,7 +2,13 @@
 
 Prioritized by what it blocks. Derived from full source review (see PROJECT_STATUS.md for details on each item).
 
-> **▶ NOW (Nov 13, midday): stage 2, closing findings — BUILT, waiting for the user's test.** Decision: the agent proposes, the client confirms. **⚠ To switch it on: run `supabase/migrations/006_finding_resolution.sql`, redeploy.** Test on the mock company with the document pack sent to the user. Details: top entry of `PROJECT_STATUS.md`. After the test: OCR, the shorter reply format in practice, and the rest of stage 2.
+> **▶ RESUME HERE (handover Nov 13, 2026, 17:00): BUILD OCR ON THE USER'S OWN SERVER.** Read `claude/where-we-are.md` in the claude.ai project first. Design agreed: `services/ocr/` (FastAPI + Tesseract `rus+eng`, its own Coolify app like `services/ner`, mandatory token); confidence gate (low confidence → not analysed, not charged); recognised text stored once, coded as usual; the agent told the text is from a scan — a scanned amount supports closing a finding only if it matches the base or the statement; pages that pass are charged per page. Waiting from the user: a few real scans to tune the threshold. To settle with the user: what happens when the OCR service is down (suggested: the document is treated as unreadable, 0 ₽). Before building: `npm run check:audit` once.
+> - [x] Stage 2 part 1 — closing findings (agent proposes, client confirms; reconsideration «Пересмотри вывод Н-…») — **verified by the user Nov 13**.
+> - [ ] **OCR** (above).
+> - [ ] Step 4c — one run against the 1С:Фреш trial base.
+> - [ ] Rest of stage 2: client closing a finding without a proposal (not requested); whether stage 2 is a separately started paid step.
+
+> ~~NOW (Nov 13, midday): stage 2, closing findings — BUILT, waiting for the user's test.~~ Verified. Original note: Decision: the agent proposes, the client confirms. **⚠ To switch it on: run `supabase/migrations/006_finding_resolution.sql`, redeploy.** Test on the mock company with the document pack sent to the user. Details: top entry of `PROJECT_STATUS.md`. After the test: OCR, the shorter reply format in practice, and the rest of stage 2.
 
 > ~~FIRST TASK ON RESUME — closing findings (agreed Nov 13, 03:35).~~ Done, see above. Original note: The audit page shows "0% решено", and each finding has a status (open / resolved / disputed), but nothing in the app ever sets it: the agent's only tool adds findings. To build: (1) a second agent tool to update an existing finding (resolved / still open + what is missing), naming the document that justified it; (2) the open findings with identifiers given to the agent on every turn; (3) rules for when a finding may be closed; (4) a record of who closed what and why, on the audit page and in the PDF. **User decision needed first:** the agent closes a finding itself, or proposes and a person confirms (recommended). Test on the mock company with text documents; OCR after.
 
