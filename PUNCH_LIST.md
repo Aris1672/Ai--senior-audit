@@ -2,7 +2,13 @@
 
 Prioritized by what it blocks. Derived from full source review (see PROJECT_STATUS.md for details on each item).
 
+> **▶ RESUME HERE (state at the end of Nov 13, 2026)** — steps 1–4b done and verified by the user; next is **step 5: OCR, then stage 2**. On resume: (1) redeploy, (2) `npm run check:audit` — the prompt got the «Неотражённый доход» rule, (3) decide the OCR engine and the stage-2 mechanics (see the top entry of `PROJECT_STATUS.md`), (4) build. Still open in step 4: the run against the 1С:Фреш trial base.
+
 > **⚠ BEFORE THE FIRST REAL CLIENT (launch checklist)**
+> - [ ] Registration must not be open to strangers while the setting below is on.
+> - [ ] Turn on Docker cleanup on the Coolify server (the disk filled up on Nov 13).
+> - [ ] Rotate the credentials listed in `Self-Host-Migration.md`; check the Supabase Studio port is not open to the internet.
+> - [ ] Ownership checks on `/api/chat` and the rest of `/api/data`.
 > - [ ] **Remove `C1_ALLOW_PRIVATE_HOSTS=true` from the auditor's environment in Coolify and redeploy.** It is left on deliberately (user decision, Nov 13, 2026) so the mock 1C base on `localhost` can be used for tests while nobody else uses the app. While it is on, anyone who can create an audit can make the server connect to internal addresses. The auditor's startup log prints a warning while it is set.
 
 > **Updated November 12, 2026 (work order agreed)** — details in `PROJECT_STATUS.md` top entries.
@@ -11,6 +17,7 @@ Prioritized by what it blocks. Derived from full source review (see PROJECT_STAT
 > - [x] **3. Billing** — built: server-side quote per document, cost card + confirmation before analysis (wizard and chat), each operation charged once across files, totals recorded on accept and frozen at completion, price endpoint and upload behind an ownership check; `npm run test:billing`. **⚠ To switch it on: run `supabase/migrations/005_document_billing.sql` in the Supabase SQL editor**, then check one audit end to end in the browser. Open decision: bank statements uploaded as PDF/Word are priced per page.
 > - [x] **3 verified live** (Nov 13) — cost cards, overlap, pages, unreadable image, repeated file.
 > - [ ] **4. 1C** — [x] 4a mock server (`services/mock-1c`, 8 planted errors, `npm run test:mock1c`); [x] 4b reader in the app (`lib/c1-reader.ts`, `/api/audit/connect-1c`, snapshot stored as a document, priced per posted document, facts from the ledger, coding by field; `npm run test:1c`) — **to verify: one audit on the mock through the model**; [ ] 4c one run against the 1С:Фреш trial base.
+> - [ ] **4c.** One run against the 1С:Фреш trial base (enter an organisation and a few documents there first).
 > - [ ] **5. OCR, then stage 2** (documents linked to findings, closing a finding, before/after report).
 > - [ ] Also open: computed facts for Excel/CSV; token usage and cost recorded per turn; background jobs for long audits; server-side access checks on all API routes; anonymised ООО file as a second regression fixture; redeploy + re-run of the ООО file for commits `10d5045` / `133424b`.
 
