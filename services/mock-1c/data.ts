@@ -102,6 +102,7 @@ export function buildBase(year = 2025, scale = 1, seed = 20251112): MockBase {
     ["62.01", "Расчеты с покупателями и заказчиками", "Active"], ["62.02", "Расчеты по авансам полученным", "Passive"],
     ["68.01", "НДФЛ при исполнении обязанностей налогового агента", "ActivePassive"], ["68.12", "Налог при упрощенной системе налогообложения", "ActivePassive"],
     ["69.09", "Страховые взносы по единому тарифу", "ActivePassive"],
+    ["69.11", "Расчеты по обязательному социальному страхованию от несчастных случаев на производстве", "ActivePassive"],
     ["70", "Расчеты с персоналом по оплате труда", "Passive"], ["75.02", "Расчеты по выплате доходов", "Passive"],
     ["76.09", "Прочие расчеты с разными дебиторами и кредиторами", "ActivePassive"],
     ["84.01", "Прибыль, подлежащая распределению", "ActivePassive"],
@@ -177,6 +178,7 @@ export function buildBase(year = 2025, scale = 1, seed = 20251112): MockBase {
   ];
   const bank   = party("bank", 'АО "Тестовый Банк"', "7700999001");
   const fns    = party("fns", "Казначейство России (ФНС России)", "7727406020", { state: true });
+  const sfr    = party("sfr", "ОСФР по г. Москве и Московской области", "7703363868", { state: true });
   const noDocs = party("x1", 'ООО "Меридиан-Сервис"', "9705000112", { kind: "supplier" });                 // paid, never delivered anything
   const consult = party("x2", "ИП Глебов Арсений Маркович", "500300077766", { legal: false, ip: true, kind: "supplier" });
   const helper  = party("x3", "Сафонова Милена Робертовна", "772900055544", { legal: false });               // individual paid for "services"
@@ -362,12 +364,15 @@ export function buildBase(year = 2025, scale = 1, seed = 20251112): MockBase {
     const payroll = manual(accrual, "44.01", "70", gross, `Начисление заработной платы за ${String(m).padStart(2, "0")}.${year}`);
     post(payroll, "Document_ОперацияБух", accrual, "70", "68.01", r2(gross * 0.13), "НДФЛ с заработной платы");
     post(payroll, "Document_ОперацияБух", accrual, "44.01", "69.09", r2(gross * 0.30), "Страховые взносы");
+    // An organisation with employees also pays injury insurance to the СФР (0.2% here), by the 15th.
+    post(payroll, "Document_ОперацияБух", accrual, "44.01", "69.11", r2(gross * 0.002), "Взносы на страхование от несчастных случаев");
     if (m < 12) {
       const payDay = iso(year, m + 1, workday(m + 1, 10), 10);
       staff.forEach((p, i) => moneyOut(payDay.replace("T10:00", `T10:0${i}`), null, r2(salary[i] * 0.87), `Заработная плата за ${String(m).padStart(2, "0")}.${year}`,
         { dr: "70", operation: "ПеречислениеЗаработнойПлатыРаботнику", person: p }));
       moneyOut(iso(year, m + 1, workday(m + 1, 28), 10), fns, r2(gross * 0.13), `Единый налоговый платеж (НДФЛ за ${String(m).padStart(2, "0")}.${year})`, { dr: "68.01", operation: "ПеречислениеНалога" });
       moneyOut(iso(year, m + 1, workday(m + 1, 28), 10, 5), fns, r2(gross * 0.30), `Единый налоговый платеж (страховые взносы за ${String(m).padStart(2, "0")}.${year})`, { dr: "69.09", operation: "ПеречислениеНалога" });
+      moneyOut(iso(year, m + 1, workday(m + 1, 15), 10, 10), sfr, r2(gross * 0.002), `Страховые взносы от несчастных случаев на производстве за ${String(m).padStart(2, "0")}.${year}`, { dr: "69.11", operation: "ПеречислениеНалога" });
     }
 
     // Bank charges.

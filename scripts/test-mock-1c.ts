@@ -105,6 +105,8 @@ async function main() {
     assert.equal(sum(closing.filter((r: any) => r.Account_Key === key("68.12")), "СуммаBalance"), -123_120, "68.12 ends in credit: the unpaid half-year advance (30 000) and the year's tax not yet due (93 120)");
     const beforeYearTax = (await get("AccountingRegister_Хозрасчетный/Balance(Period=datetime'2025-12-31T23:00:00')?$format=json")).json().value;
     assert.equal(sum(beforeYearTax.filter((r: any) => r.Account_Key === key("68.12")), "СуммаBalance"), -30_000, "before the year's tax is accrued, only the unpaid half-year advance is owed");
+    // No accidental errors: injury insurance is accrued monthly and paid; only December's is outstanding.
+    assert.equal(sum(closing.filter((r: any) => r.Account_Key === key("69.11")), "СуммаBalance"), -550);
     // No accidental errors: bank documents never fall on a weekend.
     for (const set of ["Document_ПоступлениеНаРасчетныйСчет", "Document_СписаниеСРасчетногоСчета"]) {
       for (const r of mock.base.sets[set]) {

@@ -11,7 +11,7 @@ npm run test:mock1c    # checks the interface and that the books balance
 Login is HTTP Basic, like 1C's "automatic REST service" user. Settings (env):
 `MOCK_1C_PORT` (8081), `MOCK_1C_BASE` ("mock" — the part of the address before
 `/odata/…`), `MOCK_1C_USER` (odata.user), `MOCK_1C_PASSWORD` (mock-password),
-`MOCK_1C_YEAR` (2025), `MOCK_1C_SCALE` (1 ≈ 760 documents a year; 4 ≈ 2 500).
+`MOCK_1C_YEAR` (2025), `MOCK_1C_SCALE` (1 ≈ 770 documents a year; 4 ≈ 2 500).
 
 ## What it is built from
 
@@ -30,8 +30,8 @@ Login is HTTP Basic, like 1C's "automatic REST service" user. Settings (env):
 
 ООО «Вектор-Трейд», УСН «Доходы минус расходы», wholesale of office supplies,
 three employees. One year: purchases of goods (paid 5–20 days later), rent and
-delivery, sales (paid 3–25 days later), monthly payroll with НДФЛ and
-contributions, bank charges, УСН advances accrued each quarter, month-end
+delivery, sales (paid 3–25 days later), monthly payroll with НДФЛ,
+contributions and injury insurance, bank charges, УСН advances accrued each quarter, month-end
 closing of costs and results, the year's tax, and the year-end closing of accounts 90, 91
 and 99. Bank documents never fall on a weekend. Opening balances are entered
 on 31 December of the previous year. All names, ИНН and account numbers are

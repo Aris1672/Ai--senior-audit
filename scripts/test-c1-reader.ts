@@ -35,7 +35,7 @@ async function main() {
     const postedDocs = Object.entries(base.sets).filter(([n]) => n.startsWith("Document_"))
       .flatMap(([, rows]) => rows).filter(r => r.Posted && String(r.Date).startsWith("2025"));
     assert.equal(snap.documentCount, postedDocs.length, "one operation per posted document of the period");
-    assert.equal(snap.documentCount, 760);
+    assert.equal(snap.documentCount, 771);
     assert.equal(snap.operationKeys.length, snap.documentCount);
     assert.equal(new Set(snap.operationKeys).size, snap.operationKeys.length, "no two documents share a billing key");
     assert.equal(snap.organisation.inn, "7700123456");
@@ -72,7 +72,7 @@ async function main() {
     // Data sections are complete.
     const section = (title: string) => t.split(`=== ${title}`)[1].split("\n===")[0].trim().split("\n").slice(2).filter(Boolean);
     assert.equal(section("ПРОВОДКИ ЗА ПЕРИОД").length, base.ledger.filter(r => String(r.Period).startsWith("2025")).length);
-    assert.equal(section("БАНКОВСКИЕ ДОКУМЕНТЫ (проведённые)").length, 163 + 242);
+    assert.equal(section("БАНКОВСКИЕ ДОКУМЕНТЫ (проведённые)").length, 163 + 253);
 
     // Individuals known by field are handed over for coding.
     for (const n of ["Лаптев Родион Аркадьевич", "Жданова Таисия Львовна", "Сафонова Милена Робертовна", "Глебов Арсений Маркович", "Орехов Тимофей Ильич"]) {
@@ -90,10 +90,10 @@ async function main() {
     const stored = new TextEncoder().encode(JSON.stringify(snap)).buffer as ArrayBuffer;
     const parsed = await parseFile(stored, "1c_odata");
     assert.equal(parsed.textContent, snap.text);
-    assert.equal(parsed.rowCount, 760);
+    assert.equal(parsed.rowCount, 771);
     assert.deepEqual(parsed.personNames, snap.personNames);
     const quote = quoteDocument({ fileType: "1c_odata", parsed, knownKeys: new Map(), sameFileAlreadyAccepted: false, operationRateRub: 12.5, pageRateRub: 20 });
-    assert.deepEqual([quote.kind, quote.units, quote.amountRub], ["operations", 760, 9500]);
+    assert.deepEqual([quote.kind, quote.units, quote.amountRub], ["operations", 771, 9637.5]);
     const K = await import("../lib/operation-keys");
     const firstOut = base.sets["Document_СписаниеСРасчетногоСчета"][0];
     assert.ok(snap.operationKeys.includes(K.numberedKey(firstOut.НомерВходящегоДокумента, String(firstOut.Date).slice(0, 10), firstOut.СуммаДокумента)),
