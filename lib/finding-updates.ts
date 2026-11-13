@@ -26,6 +26,7 @@ export interface AgentFinding {
   description: string;
   recommendation: string | null;
   legal_basis?: string | null;
+  financial_impact?: string | null;
   risk_level: string;
   evidence_status: string | null;
   status: string;               // open | resolved | disputed
@@ -46,12 +47,20 @@ const REVISION_FIELDS = {
   legal_basis:     { type: "string", description: "Новое правовое основание целиком (до 200 знаков)." },
   recommendation:  { type: "string", description: "Новая рекомендация целиком (до 300 знаков)." },
 } as const;
+const IMPACT_FIELD = { financial_impact: { type: "string", description: "Новое финансовое влияние одной строкой (до 200 знаков): сумма под риском, возможные доначисления — только из данных аудита." } } as const;
+
+/** How a finding is closed (migration 008): put right, or shown unfounded by documents. */
+export type ResolutionKind = "corrected" | "documented";
+export const RESOLUTION_LABEL: Record<ResolutionKind, string> = {
+  corrected: "Нарушение устранено",
+  documented: "Закрыто по подтверждающим документам",
+};
 
 /**
  * The stage-2 tool. `withRevise` (migration 007 run) adds the third action,
  * proposing a corrected assessment.
  */
-export function updateFindingsTool(withRevise: boolean): Anthropic.Messages.Tool {
+export function updateFindingsTool(withRevise: boolean, withReport = false): Anthropic.Messages.Tool {
   return {
     name: "update_findings",
     description:
@@ -76,11 +85,17 @@ export function updateFindingsTool(withRevise: boolean): Anthropic.Messages.Tool
               basis: { type: "string", description: "Что именно в документах подтверждает решение: реквизиты документа, суммы, даты, пункты. 1–3 предложения." + (withRevise ? " Для propose_revise — почему прежняя оценка неверна (норма, правило)." : "") },
               documents: { type: "array", items: { type: "string" }, description: "Имена файлов, на которых основано решение." },
               remaining: { type: "string", description: "Для keep_open: что ещё нужно представить, чтобы вывод можно было закрыть (конкретные документы, суммы, периоды). Для propose_close — пустая строка." },
+              ...(withReport ? {
+                resolution: {
+                  type: "string", enum: ["corrected", "documented"],
+                  description: "Только для propose_close — как снято основание: corrected — нарушение БЫЛО и исправлено (налог уплачен, документ проведён, деньги возвращены, подан уточнённый расчёт); documented — документы показывают, что нарушения нет (акты на всю сумму, статус НПД, акт сверки с зачётом).",
+                },
+              } : {}),
               ...(withRevise ? {
                 revision: {
                   type: "object",
                   description: "Только для propose_revise: ТОЛЬКО изменяемые поля, каждое — новым текстом целиком. Неизменяемые поля не указывай.",
-                  properties: REVISION_FIELDS,
+                  properties: withReport ? { ...REVISION_FIELDS, ...IMPACT_FIELD } : REVISION_FIELDS,
                 },
               } : {}),
             },
@@ -104,7 +119,7 @@ const clip = (s: string | null | undefined, n: number) => {
 };
 
 /** The block added to the request when the audit already has findings. Empty string when it has none. */
-export function buildFindingsBlock(findings: AgentFinding[], withRevise = false): string {
+export function buildFindingsBlock(findings: AgentFinding[], withRevise = false, withReport = false): string {
   if (findings.length === 0) return "";
   const open = findings.filter(f => f.status === "open");
   const closed = findings.filter(f => f.status !== "open");
@@ -117,6 +132,7 @@ export function buildFindingsBlock(findings: AgentFinding[], withRevise = false)
     lines.push(`[${f.code}] ${RISK_LABEL[f.risk_level] ?? f.risk_level} · ${STATUS_LABEL[f.evidence_status ?? ""] ?? "статус не указан"} · ${clip(f.title, 200)}`);
     lines.push(`  Суть: ${clip(f.description, 700)}`);
     if (f.legal_basis) lines.push(`  Основание (норма): ${clip(f.legal_basis, 250)}`);
+    if (f.financial_impact) lines.push(`  Финансовое влияние: ${clip(f.financial_impact, 200)}`);
     if (f.recommendation) lines.push(`  Рекомендация: ${clip(f.recommendation, 300)}`);
     if (f.revisionProposed) lines.push("  Состояние: исправление оценки уже предложено, ожидает решения клиента — повторно не предлагай.");
     if (f.proposed) lines.push("  Состояние: закрытие уже предложено, ожидает решения клиента — повторно не предлагай, если нет новых документов.");
@@ -151,6 +167,7 @@ export function buildFindingsBlock(findings: AgentFinding[], withRevise = false)
    Полный отчёт из восьми разделов составляй заново, только если клиент прямо просит об этом или загрузил новые первичные данные (выписку, выгрузку, базу) с новыми операциями — тогда проанализируй их как обычно, а существующие выводы не дублируй.
 8. Пересмотр по просьбе клиента. Если клиент прямо просит пересмотреть конкретный вывод (называет его код или суть) — заново сопоставь этот вывод со ВСЕМИ документами аудита, включая загруженные ранее, по правилам 3–5, и ОБЯЗАТЕЛЬНО вызови update_findings по нему (это исключение из правила 2 — новых документов для этого не нужно): "propose_close", если основание устранено полностью, иначе "keep_open" с тем, чего не хватает. Это относится и к выводу, по которому клиент ранее отклонил твоё предложение: просьба пересмотреть — достаточный повод оценить его заново, но не повод ослабить требования к документам. Если клиент возражает по существу (считает документ недостаточным) — объясни свою оценку и, если он прав, оставь вывод открытым.`);
   if (withRevise) lines.push(`9. Исправление оценки. Если при пересмотре вывода или по новым документам ты видишь, что открытый вывод записан НЕВЕРНО по существу — неверен уровень существенности или статус достоверности, неверно правовое обоснование, описание противоречит данным или правилам основного промпта (например, нижней границе уровня для обязанностей налогового агента), — предложи исправленную версию: update_findings с action "propose_revise", в revision — только изменяемые поля, каждое новым текстом целиком; в basis — почему прежняя оценка неверна (норма, правило, документ). Исправление вступает в силу только после подтверждения клиентом. В тексте ответа пиши «предлагаю исправить оценку» и перечисли, что меняется. Не используй это для мелкой правки формулировок, для закрытия вывода или для новых нарушений (новое — через record_findings). По одному выводу в одном вызове — одно действие: если вывод одновременно и закрывается документами, предлагай закрытие; если при пересмотре по просьбе клиента (правило 8) вывод остаётся открытым, но его оценка неверна, — propose_revise вместо keep_open.`);
+  if (withReport) lines.push(`10. Как закрывается вывод. В propose_close укажи resolution: "corrected" — нарушение действительно было и исправлено (налог уплачен с пенями, документ проведён, деньги возвращены, подан уточнённый расчёт); "documented" — документы показывают, что нарушения не было или риск снят (договор и акты на всю сумму, статус НПД с чеками, акт сверки с зачётом). В отчёте клиента это разные отметки: «Нарушение устранено» и «Закрыто по подтверждающим документам».`);
   return lines.join("\n");
 }
 
@@ -188,6 +205,7 @@ export interface Revision {
   description?: string;
   legal_basis?: string;
   recommendation?: string;
+  financial_impact?: string;
 }
 
 export interface ValidUpdate {
@@ -199,6 +217,8 @@ export interface ValidUpdate {
   remaining: string;
   /** propose_revise only: the fields that change (already checked and trimmed). */
   revision?: Revision;
+  /** propose_close only (migration 008): corrected or documented. */
+  resolutionKind?: ResolutionKind;
 }
 
 const RISK_IN: Record<string, string> = {
@@ -226,13 +246,13 @@ export function clipText(text: string, limit: number): string {
 }
 
 /** Same limits as findings recorded by record_findings (app/api/chat/route.ts). */
-const TEXT_LIMITS = { title: 100, description: 500, legal_basis: 200, recommendation: 300 } as const;
+const TEXT_LIMITS = { title: 100, description: 500, legal_basis: 200, recommendation: 300, financial_impact: 200 } as const;
 
 /**
  * The fields of a proposed correction that really change something. Unknown
  * values are dropped; texts are trimmed to the same limits as new findings.
  */
-export function cleanRevision(raw: unknown, f: AgentFinding): Revision {
+export function cleanRevision(raw: unknown, f: AgentFinding, withReport = false): Revision {
   const r = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
   const out: Revision = {};
   const risk = RISK_IN[String(r.risk_level ?? "").trim()] ?? RISK_IN[String(r.risk_level ?? "").trim().toLowerCase()];
@@ -241,8 +261,10 @@ export function cleanRevision(raw: unknown, f: AgentFinding): Revision {
   if (ev && ev !== f.evidence_status) out.evidence_status = ev;
   const current: Record<string, string> = {
     title: f.title ?? "", description: f.description ?? "", legal_basis: f.legal_basis ?? "", recommendation: f.recommendation ?? "",
+    financial_impact: f.financial_impact ?? "",
   };
   for (const key of Object.keys(TEXT_LIMITS) as (keyof typeof TEXT_LIMITS)[]) {
+    if (key === "financial_impact" && !withReport) continue;
     const v = typeof r[key] === "string" ? clipText(r[key] as string, TEXT_LIMITS[key]) : "";
     if (v.length >= 5 && v !== current[key].trim()) out[key] = v;
   }
@@ -250,7 +272,7 @@ export function cleanRevision(raw: unknown, f: AgentFinding): Revision {
 }
 
 const EVIDENCE_NAME: Record<string, string> = { confirmed: "Подтверждённое нарушение", risk_flag: "Признак риска", indirect: "Косвенный признак" };
-const FIELD_NAME: Record<string, string> = { title: "название", description: "описание", legal_basis: "правовое основание", recommendation: "рекомендация" };
+const FIELD_NAME: Record<string, string> = { title: "название", description: "описание", legal_basis: "правовое основание", recommendation: "рекомендация", financial_impact: "финансовое влияние" };
 
 /** One line for the client: "Уровень: НЕСУЩЕСТВЕННО → СУЩЕСТВЕННО; статус: … → …; изменены: описание, правовое основание". */
 export function describeRevision(before: { risk_level?: string | null; evidence_status?: string | null }, rev: Revision): string {
@@ -267,7 +289,7 @@ export function describeRevision(before: { risk_level?: string | null; evidence_
  * Checks what the agent sent. An entry is dropped when it names a code that
  * is not an OPEN finding of this audit, has no basis, or repeats a code.
  */
-export function validateUpdates(raw: unknown[], findings: AgentFinding[], withRevise = false): { valid: ValidUpdate[]; skipped: string[] } {
+export function validateUpdates(raw: unknown[], findings: AgentFinding[], withRevise = false, withReport = false): { valid: ValidUpdate[]; skipped: string[] } {
   const byCode = new Map(findings.map(f => [f.code.toUpperCase().replace(/\s+/g, ""), f]));
   const valid: ValidUpdate[] = [], skipped: string[] = [], seen = new Set<string>();
   for (const item of raw) {
@@ -284,7 +306,7 @@ export function validateUpdates(raw: unknown[], findings: AgentFinding[], withRe
     let revision: Revision | undefined;
     if (action === "propose_revise") {
       if (f.revisionProposed)  { skipped.push(`${f.code}: исправление уже ожидает решения клиента`); continue; }
-      revision = cleanRevision(u.revision, f);
+      revision = cleanRevision(u.revision, f, withReport);
       if (Object.keys(revision).length === 0) { skipped.push(`${f.code}: в исправлении нет изменений`); continue; }
     }
     seen.add(f.id);
@@ -293,6 +315,8 @@ export function validateUpdates(raw: unknown[], findings: AgentFinding[], withRe
       documents: Array.isArray(u.documents) ? u.documents.map(d => String(d).trim()).filter(Boolean).slice(0, 20) : [],
       remaining: action === "keep_open" ? String(u.remaining ?? "").trim().slice(0, 2000) : "",
       ...(revision ? { revision } : {}),
+      ...(withReport && action === "propose_close" && (u.resolution === "corrected" || u.resolution === "documented")
+        ? { resolutionKind: u.resolution as ResolutionKind } : {}),
     });
   }
   return { valid, skipped };

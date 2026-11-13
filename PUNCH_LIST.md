@@ -2,6 +2,8 @@
 
 Prioritized by what it blocks. Derived from full source review (see PROJECT_STATUS.md for details on each item).
 
+> **▶ NOW (Nov 13, evening): PDF report redesigned.** ⚠ Run `supabase/migrations/008_finding_report_fields.sql` (financial impact; corrected vs documented). Then download the PDF of audit «1C-8». Details: top entry of `PROJECT_STATUS.md`.
+
 > **▶ NOW (Nov 13, 19:10): correcting a finding's assessment — DONE, migration 007 run, verified by the user on Н-6.** Details: top entries of `PROJECT_STATUS.md`.
 
 > **▶ NOW (Nov 13, 2026, 18:25): OCR DONE — deployed and accepted by the user.** Details: top entries of `PROJECT_STATUS.md`. Open: threshold on real scans; confirm "OCR service down → 0 ₽, upload again"; whether an invoice alone may become a finding. Next by the plan: step 4c (1С:Фреш trial) or the rest of stage 2 — user to choose. `npm run check:audit` still not re-run.

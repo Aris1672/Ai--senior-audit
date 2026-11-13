@@ -28,13 +28,14 @@ export async function GET(req: NextRequest) {
 
     const codes = new Map((await loadAgentFindings(supabase, sessionId!)).map(f => [f.id, f.code]));
     const { data } = await supabase.from("findings")
-      .select("id, title, risk_level, proposal_basis, proposal_documents, proposed_at")
+      .select("*")
       .eq("session_id", sessionId).eq("status", "open").not("proposed_at", "is", null)
       .order("proposed_at", { ascending: true });
     return NextResponse.json({
       proposals: (data ?? []).map(f => ({
         findingId: f.id, code: codes.get(f.id) ?? "", title: f.title, riskLevel: f.risk_level,
         basis: f.proposal_basis ?? "", documents: String(f.proposal_documents ?? "").split("; ").filter(Boolean),
+        kind: f.proposal_kind ?? null,
       })),
       revisions: await loadRevisionProposals(supabase, sessionId!),
     });

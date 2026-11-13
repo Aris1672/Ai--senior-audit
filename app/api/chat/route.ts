@@ -8,7 +8,7 @@ import { parseFile, renderPDFPagesAsImages, type DateRange } from "@/lib/file-pa
 import { parseStoredOcr, ocrSidecarPath, ocrTextForModel, ocrCounts } from "@/lib/ocr";
 import { billingSchemaReady } from "@/lib/doc-billing-server";
 import { buildFindingsBlock, validateUpdates, proposalsFromText, updateFindingsTool, clipText, type AgentFinding } from "@/lib/finding-updates";
-import { findingsSchemaReady, revisionSchemaReady, loadAgentFindings, applyAgentUpdates } from "@/lib/finding-updates-server";
+import { findingsSchemaReady, revisionSchemaReady, reportFieldsReady, loadAgentFindings, applyAgentUpdates } from "@/lib/finding-updates-server";
 import { checkRequestVolume, isContextLimitError, CONTEXT_LIMIT_MESSAGE, type VolumePart } from "@/lib/volume";
 import { NextRequest, NextResponse } from "next/server";
 
@@ -339,6 +339,8 @@ async function saveFindings(
     const validRiskLevels      = new Set(["КРИТИЧНО", "СУЩЕСТВЕННО", "НЕСУЩЕСТВЕННО"]);
     const validEvidenceStatuses = new Set(["confirmed", "risk_flag", "indirect"]);
 
+    // Migration 008 adds financial_impact; without it the field is not written.
+    const withImpact = await reportFieldsReady(supabase);
     const acceptedTitles: string[] = [...existingTitles];
     const rows: any[] = [];
 
@@ -367,6 +369,7 @@ async function saveFindings(
         description:     clipText(String(f.description    || ""), 500),
         legal_basis:     clipText(String(f.legal_basis    || ""), 200),
         recommendation:  clipText(String(f.recommendation || ""), 300),
+        ...(withImpact && f.financial_impact ? { financial_impact: clipText(String(f.financial_impact), 200) } : {}),
         status:          "open",
       });
       acceptedTitles.push(title); // also guards against dupes within this same batch
@@ -573,11 +576,13 @@ export async function POST(req: NextRequest) {
           // 006 has been run this is absent and the turn runs as before.
           let agentFindings: AgentFinding[] = [];
           let withRevise = false;   // correcting an assessment — migration 007
+          let withReport = false;   // financial impact, corrected / documented — migration 008
           if (sessionId && await findingsSchemaReady(supabase)) {
             agentFindings = await loadAgentFindings(supabase, sessionId);
             withRevise = await revisionSchemaReady(supabase);
+            withReport = await reportFieldsReady(supabase);
           }
-          const findingsBlock = buildFindingsBlock(agentFindings, withRevise);
+          const findingsBlock = buildFindingsBlock(agentFindings, withRevise, withReport);
           const stage2 = agentFindings.some(f => f.status === "open");
 
           // Build system prompt: base + audit context + all file contents
@@ -647,7 +652,7 @@ export async function POST(req: NextRequest) {
             thinking: d => { thinkingBuffer += d; },
             text:     d => { flushThinking(); fullText += d; send({ type: "delta", text: d }); },
             reset:    () => { fullText = ""; send({ type: "reset" }); },
-          }, pseudonymizer, stage2 ? { extraTools: [updateFindingsTool(withRevise)] } : {});
+          }, pseudonymizer, stage2 ? { extraTools: [updateFindingsTool(withRevise, withReport)] } : {});
           fullText = result.text; // authoritative
           const toolFindings = result.findings as any[];
           console.log("[chat] audit turn done — reviewed:", result.reviewed,
@@ -682,7 +687,7 @@ export async function POST(req: NextRequest) {
           }
           console.log("[chat] stage 2:", stage2, "| tool entries:", result.updates.length, "| used:", rawUpdates.length);
           if (stage2 && rawUpdates.length > 0) {
-            const { valid, skipped } = validateUpdates(rawUpdates, agentFindings, withRevise);
+            const { valid, skipped } = validateUpdates(rawUpdates, agentFindings, withRevise, withReport);
             if (skipped.length > 0) console.warn("[chat] finding updates skipped:", skipped.join(" | "));
             const applied = await applyAgentUpdates(supabase, sessionId, valid, agentFindings);
             console.log("[chat] finding updates — proposals:", applied.proposals.length, "| revisions:", applied.revisions.length, "| kept open:", applied.keptOpen);

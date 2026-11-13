@@ -124,6 +124,17 @@ async function main() {
   assert.equal(clipText("слово ".repeat(200), 300).endsWith("слово…"), true);
   assert.equal(clipText("короткий текст", 300), "короткий текст");
 
+  // 7. Report fields (migration 008): how a finding is closed; financial impact.
+  const closeIt = { finding: "Н-1", action: "propose_close", basis: "Платёжное поручение на 30 000,00 ₽ и пени уплачены.", resolution: "corrected" };
+  assert.equal(validateUpdates([closeIt], list, true, true).valid[0].resolutionKind, "corrected");
+  assert.equal(validateUpdates([closeIt], list, true, false).valid[0].resolutionKind, undefined);          // before 008: not recorded
+  assert.equal(validateUpdates([{ ...closeIt, resolution: "maybe" }], list, true, true).valid[0].resolutionKind, undefined);
+  assert.ok((updateFindingsTool(true, true).input_schema as any).properties.updates.items.properties.resolution);
+  assert.match(buildFindingsBlock([f(0)], true, true), /10\. Как закрывается вывод\./);
+  assert.ok(buildFindingsBlock([f(0)], true, true).indexOf("9. Исправление оценки") < buildFindingsBlock([f(0)], true, true).indexOf("10. Как закрывается"));
+  assert.deepEqual(cleanRevision({ financial_impact: "Недоимка 30 000,00 ₽ плюс пени." }, loan, false), {});
+  assert.deepEqual(cleanRevision({ financial_impact: "Недоимка 30 000,00 ₽ плюс пени." }, loan, true), { financial_impact: "Недоимка 30 000,00 ₽ плюс пени." });
+
   // A reply cut at a tool call is finished by a second call (lib/audit-engine.ts).
   const { looksUnfinished } = await import("../lib/audit-engine");
   assert.equal(looksUnfinished(""), true);

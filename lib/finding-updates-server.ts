@@ -4,7 +4,7 @@
  * client's decision.
  */
 import { createAdminClient } from "./supabase-server";
-import { findingCode, describeRevision, type AgentFinding, type ValidUpdate, type Revision } from "./finding-updates";
+import { findingCode, describeRevision, type AgentFinding, type ValidUpdate, type Revision, type ResolutionKind } from "./finding-updates";
 
 type Admin = ReturnType<typeof createAdminClient>;
 
@@ -36,6 +36,19 @@ export async function revisionSchemaReady(supabase: Admin): Promise<boolean> {
   return revReady;
 }
 
+// Report fields (financial impact, how a finding was closed) need migration 008.
+let repReady: boolean | null = null;
+let repCheckedAt = 0;
+export async function reportFieldsReady(supabase: Admin): Promise<boolean> {
+  if (repReady === true) return true;
+  if (repReady === false && Date.now() - repCheckedAt < 60_000) return false;
+  const { error } = await supabase.from("findings").select("financial_impact").limit(1);
+  repReady = !error;
+  repCheckedAt = Date.now();
+  if (error) console.warn("[findings] ⚠ migration 008_finding_report_fields.sql has NOT been run — no financial impact, no corrected/documented mark.");
+  return repReady;
+}
+
 /** Every finding of the audit, in order of creation, with its stable code. */
 export async function loadAgentFindings(supabase: Admin, sessionId: string): Promise<AgentFinding[]> {
   const { data, error } = await supabase
@@ -65,20 +78,20 @@ export async function loadAgentFindings(supabase: Admin, sessionId: string): Pro
 
   return (data ?? []).map((f, i) => ({
     id: f.id, code: findingCode(i), title: f.title, description: f.description, recommendation: f.recommendation,
-    legal_basis: f.legal_basis ?? null, revisionProposed: !!f.revision_proposed_at,
+    legal_basis: f.legal_basis ?? null, financial_impact: f.financial_impact ?? null, revisionProposed: !!f.revision_proposed_at,
     risk_level: f.risk_level, evidence_status: f.evidence_status, status: f.status ?? "open",
     proposed: !!f.proposed_at, agent_note: f.agent_note,
     declined: f.status === "open" && !f.proposed_at ? declined.get(f.id) ?? null : null,
   }));
 }
 
-export interface Proposal { findingId: string; code: string; title: string; riskLevel: string; basis: string; documents: string[] }
+export interface Proposal { findingId: string; code: string; title: string; riskLevel: string; basis: string; documents: string[]; kind?: ResolutionKind | null }
 
 /** A corrected assessment waiting for the client. */
 export interface RevisionProposal {
   findingId: string; code: string; title: string;
   /** Current values, for the before → after view. */
-  before: { risk_level: string; evidence_status: string | null; title: string; description: string; legal_basis: string | null; recommendation: string | null };
+  before: { risk_level: string; evidence_status: string | null; title: string; description: string; legal_basis: string | null; recommendation: string | null; financial_impact?: string | null };
   revision: Revision;
   summary: string;
   basis: string;
@@ -108,7 +121,7 @@ export async function applyAgentUpdates(
       revisions.push({
         findingId: f.id, code: f.code, title: f.title, summary, basis: u.basis, revision: u.revision,
         before: { risk_level: f.risk_level, evidence_status: f.evidence_status, title: f.title, description: f.description,
-                  legal_basis: f.legal_basis ?? null, recommendation: f.recommendation },
+                  legal_basis: f.legal_basis ?? null, recommendation: f.recommendation, financial_impact: f.financial_impact ?? null },
       });
       await supabase.from("finding_events").insert({
         finding_id: u.findingId, session_id: sessionId, actor: "agent", event_type: "revision_proposed",
@@ -118,10 +131,11 @@ export async function applyAgentUpdates(
     }
     if (u.action === "propose_close") {
       const { error } = await supabase.from("findings")
-        .update({ proposed_at: now, proposal_basis: u.basis, proposal_documents: documents, agent_note: null })
+        .update({ proposed_at: now, proposal_basis: u.basis, proposal_documents: documents, agent_note: null,
+                  ...(u.resolutionKind ? { proposal_kind: u.resolutionKind } : {}) })
         .eq("id", u.findingId).eq("session_id", sessionId).eq("status", "open");
       if (error) { console.error("[findings] proposal error:", error.message); continue; }
-      proposals.push({ findingId: f.id, code: f.code, title: f.title, riskLevel: f.risk_level, basis: u.basis, documents: u.documents });
+      proposals.push({ findingId: f.id, code: f.code, title: f.title, riskLevel: f.risk_level, basis: u.basis, documents: u.documents, kind: u.resolutionKind ?? null });
     } else {
       // A new "still open" verdict withdraws an earlier proposal: the agent has changed its view.
       const note = [u.basis, u.remaining && `Что нужно: ${u.remaining}`].filter(Boolean).join(" ");
@@ -160,7 +174,7 @@ export async function loadRevisionProposals(supabase: Admin, sessionId: string):
       findingId: f.id, code: f.code, title: f.title, revision, basis: r.revision_basis ?? "",
       summary: describeRevision(f, revision),
       before: { risk_level: f.risk_level, evidence_status: f.evidence_status, title: f.title, description: f.description,
-                legal_basis: f.legal_basis ?? null, recommendation: f.recommendation },
+                legal_basis: f.legal_basis ?? null, recommendation: f.recommendation, financial_impact: f.financial_impact ?? null },
     });
   }
   return out;
@@ -231,8 +245,9 @@ export async function decideFinding(
       (comment ?? "").trim().slice(0, 1000) || null);
   }
   const { data: f } = await supabase.from("findings")
-    .select("id, status, proposed_at, proposal_basis, proposal_documents")
+    .select("*")
     .eq("id", findingId).eq("session_id", sessionId).maybeSingle();
+  const withKind = "proposal_kind" in (f ?? {});   // migration 008
   if (!f) return { ok: false, error: "Вывод не найден" };
   const now = new Date().toISOString();
   const note = (comment ?? "").trim().slice(0, 1000) || null;
@@ -241,7 +256,8 @@ export async function decideFinding(
     if (f.status !== "open" || !f.proposed_at) return { ok: false, error: "По этому выводу нет предложения о закрытии" };
     const { data: moved } = await supabase.from("findings")
       .update({ status: "resolved", resolved_at: now, resolved_by: actor.id, resolution_basis: f.proposal_basis,
-                resolution_documents: f.proposal_documents, proposed_at: null, agent_note: null })
+                resolution_documents: f.proposal_documents, proposed_at: null, agent_note: null,
+                ...(withKind ? { resolution_kind: f.proposal_kind ?? null, proposal_kind: null } : {}) })
       .eq("id", findingId).eq("status", "open").not("proposed_at", "is", null).select("id");
     if (!moved?.length) return { ok: false, error: "Состояние вывода изменилось — обновите страницу" };
     await supabase.from("finding_events").insert({ finding_id: findingId, session_id: sessionId, actor: actor.role, actor_id: actor.id,
@@ -252,7 +268,7 @@ export async function decideFinding(
   if (decision === "decline") {
     if (f.status !== "open" || !f.proposed_at) return { ok: false, error: "По этому выводу нет предложения о закрытии" };
     await supabase.from("findings")
-      .update({ proposed_at: null, proposal_basis: null, proposal_documents: null })
+      .update({ proposed_at: null, proposal_basis: null, proposal_documents: null, ...(withKind ? { proposal_kind: null } : {}) })
       .eq("id", findingId).eq("status", "open");
     await supabase.from("finding_events").insert({ finding_id: findingId, session_id: sessionId, actor: actor.role, actor_id: actor.id,
       event_type: "declined", note, documents: f.proposal_documents });
@@ -261,7 +277,8 @@ export async function decideFinding(
 
   if (f.status !== "resolved") return { ok: false, error: "Вывод не закрыт" };
   const { data: moved } = await supabase.from("findings")
-    .update({ status: "open", resolved_at: null, resolved_by: null, resolution_basis: null, resolution_documents: null })
+    .update({ status: "open", resolved_at: null, resolved_by: null, resolution_basis: null, resolution_documents: null,
+              ...(withKind ? { resolution_kind: null } : {}) })
     .eq("id", findingId).eq("status", "resolved").select("id");
   if (!moved?.length) return { ok: false, error: "Состояние вывода изменилось — обновите страницу" };
   await supabase.from("finding_events").insert({ finding_id: findingId, session_id: sessionId, actor: actor.role, actor_id: actor.id,

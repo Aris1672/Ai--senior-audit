@@ -18,7 +18,9 @@
     "test:mock1c": "tsx scripts/test-mock-1c.ts",
     "test:1c": "tsx scripts/test-c1-reader.ts",
     "test:findings": "tsx scripts/test-findings.ts",
-    "test:ocr": "tsx scripts/test-ocr.ts"
+    "test:ocr": "tsx scripts/test-ocr.ts",
+    "report:sample": "tsx scripts/render-report-sample.ts",
+    "test:report": "tsx scripts/test-report.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.96.0",

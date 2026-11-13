@@ -125,9 +125,9 @@ const markdownComponents = {
 // forever, with no visible error. Every failure path here instead throws a
 // normal Error with a real message, which callers catch and always resolve
 // (loading/uploading state is guaranteed to reset — see finally blocks below).
-interface FindingProposal { findingId: string; code: string; title: string; riskLevel: string; basis: string; documents: string[] }
+interface FindingProposal { findingId: string; code: string; title: string; riskLevel: string; basis: string; documents: string[]; kind?: "corrected" | "documented" | null }
 // A corrected assessment proposed by the agent (stage 2, migration 007).
-interface RevisionFields { risk_level?: string; evidence_status?: string; title?: string; description?: string; legal_basis?: string; recommendation?: string }
+interface RevisionFields { risk_level?: string; evidence_status?: string; title?: string; description?: string; legal_basis?: string; recommendation?: string; financial_impact?: string }
 interface RevisionProposal {
   findingId: string; code: string; title: string; summary: string; basis: string;
   revision: RevisionFields;
@@ -135,7 +135,7 @@ interface RevisionProposal {
 }
 const EVIDENCE_RU: Record<string, string> = { confirmed: "Подтверждённое нарушение", risk_flag: "Признак риска", indirect: "Косвенный признак" };
 const REVISION_TEXT_FIELDS: [keyof RevisionFields, string][] = [
-  ["title", "Название"], ["description", "Описание"], ["legal_basis", "Правовое основание"], ["recommendation", "Рекомендация"],
+  ["title", "Название"], ["description", "Описание"], ["financial_impact", "Финансовое влияние"], ["legal_basis", "Правовое основание"], ["recommendation", "Рекомендация"],
 ];
 
 interface StreamHandlers {
@@ -307,7 +307,7 @@ export default function ChatPage() {
         pushAssistantReply(`❌ ${data.error || "Не удалось записать решение."}`);
       } else {
         pushAssistantReply(decision === "confirm"
-          ? `Вывод ${p.code} «${p.title}» закрыт по вашему решению. Основание и документы сохранены в отчёте.`
+          ? `Вывод ${p.code} «${p.title}» закрыт по вашему решению${p.kind === "corrected" ? " как устранённое нарушение" : p.kind === "documented" ? " по подтверждающим документам" : ""}. Основание и документы сохранены в отчёте.`
           : `Вывод ${p.code} «${p.title}» оставлен открытым. Если захотите, чтобы ИИ-аудитор оценил его заново, напишите в чат: «Пересмотри вывод ${p.code}».`);
       }
     } catch {
@@ -989,6 +989,11 @@ export default function ChatPage() {
               <div style={{ fontSize: "14px", fontWeight: 600, color: "#e8edf8", marginBottom: "6px" }}>
                 {p.code} · {p.title}
               </div>
+              {p.kind && (
+                <div style={{ fontSize: "13px", color: "#e8edf8", marginBottom: "4px" }}>
+                  {p.kind === "corrected" ? "Нарушение устранено" : "Закрывается по подтверждающим документам"}
+                </div>
+              )}
               <div style={{ fontSize: "13px", color: "#a9b8dc", lineHeight: 1.55, marginBottom: "4px" }}>
                 <strong style={{ color: "#c9d4ee" }}>Основание:</strong> {p.basis}
               </div>

@@ -9,359 +9,26 @@ function rubles(n: number): string {
   const whole = Math.abs(v * 100 - Math.round(v) * 100) < 0.5;
   return v.toLocaleString("ru-RU", { minimumFractionDigits: whole ? 0 : 2, maximumFractionDigits: 2 });
 }
-function pluralRu(n: number, one: string, few: string, many: string): string {
-  const n10 = n % 10, n100 = n % 100;
-  if (n10 === 1 && n100 !== 11) return one;
-  if (n10 >= 2 && n10 <= 4 && (n100 < 12 || n100 > 14)) return few;
-  return many;
-}
 import { useParams, useRouter } from "next/navigation";
+import { buildReportDefinition, reportFileName } from "@/lib/report-pdf";
 import {
   getRiskColor, getRiskBgColor, type RiskLevel,
   getEvidenceStatusLabel, getEvidenceStatusColor, getEvidenceStatusBgColor, type EvidenceStatus,
 } from "@/lib/billing";
 
-const LOGO_BASE64 =
-  "data:image/png;base64,/9j/4AAQSkZJRgABAQAAAQABAAD/4gHYSUNDX1BST0ZJTEUAAQEAAAHIAAAAAAQwAABtbnRyUkdCIFhZWiAH4AABAAEAAAAAAABhY3NwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAQAA9tYAAQAAAADTLQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAlkZXNjAAAA8AAAACRyWFlaAAABFAAAABRnWFlaAAABKAAAABRiWFlaAAABPAAAABR3dHB0AAABUAAAABRyVFJDAAABZAAAAChnVFJDAAABZAAAAChiVFJDAAABZAAAAChjcHJ0AAABjAAAADxtbHVjAAAAAAAAAAEAAAAMZW5VUwAAAAgAAAAcAHMAUgBHAEJYWVogAAAAAAAAb6IAADj1AAADkFhZWiAAAAAAAABimQAAt4UAABjaWFlaIAAAAAAAACSgAAAPhAAAts9YWVogAAAAAAAA9tYAAQAAAADTLXBhcmEAAAAAAAQAAAACZmYAAPKnAAANWQAAE9AAAApbAAAAAAAAAABtbHVjAAAAAAAAAAEAAAAMZW5VUwAAACAAAAAcAEcAbwBvAGcAbABlACAASQBuAGMALgAgADIAMAAxADb/2wBDAAUDBAQEAwUEBAQFBQUGBwwIBwcHBw8LCwkMEQ8SEhEPERETFhwXExQaFRERGCEYGh0dHx8fExciJCIeJBweHx7/2wBDAQUFBQcGBw4ICA4eFBEUHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh7/wAARCAAzAmsDASIAAhEBAxEB/8QAHAAAAgIDAQEAAAAAAAAAAAAAAAcFBgMECAIB/8QAWRAAAQMCAwEHDQsIBwUJAAAAAQACAwQFBgcREiExQVFhcRQXFzI2UnSBg6Gxs8HSFSIjN2ZykZOksuIzUkRUYsLD0RYkRYKElKI0RURW8SVDRlNjkqPh8P/EABsBAAIDAQEBAAAAAAAAAAAAAAUGAAQHAwIB/8QAQxEAAQMDAAQJBwsEAQUAAAAAAQACAwQFEQYhMXESIkFRYYGRsdEWNDZyocHhExQVMjNCUlOCsvAjNpLSoiRDYsLx/9oADAMBAAIRAxEAPwDjJCEKKITdyfwnFFQG+XOnZJJUN0po5GghrO60PGeLm6VSst8NOxFfWtmaeoafR9Q7l5GdJ82qfcskFJSulkcyGCFhLid5rGgeYBO+idoEhNbMOKPq55+U9XfuStpDcSwfNojrO3w6/wCbV4koqOSmkpn0sJhkaWPZsABwO8QkBj3Dc2G726n0c6kl1fTSHjbyHnHAfAeNMnB2YMV5xNVW2oa2GGZ/9Qcd4kAdi7nOmo8I5FZMZWCnxHZJaGbRso9/BKR+TeOA9HEeZG7lS01+ozJSnLmk46uTr2jqQuiqJrTU8CccV2M+PVyrnFCz3CkqKCtmoquMxTwvли9HEeZG7lS01+ozJSnLmk46uTr2jqQuiqJrTU8CccV2M+PVyrnFCz3CkqKCtmoquMxTwvли9/BKR+TeOA9HEeZG7lS01+ozJSnLmk46uTr2jqQuiqJrTU8CccV2M+PVyrnFCz3CkqKCtmoquMxTwvMnEWsGAoUXHEUJAGSsSEybJlPXzxNlutwjpCRruUTd0cOYnUAHo1U03KWz6e+udcTzBg9SP";
 
 // "2025-01-01 – 2025-12-31" (as stored) → "01.01.2025 – 31.12.2025".
 function ruPeriod(period: string): string {
   return period.replace(/(\d{4})-(\d{2})-(\d{2})/g, "$3.$2.$1");
 }
 
+// The PDF report: layout in lib/report-pdf.ts (Nov 13, 2026 redesign), rendered here with pdfmake.
 async function generatePDF(session: SessionDetail, findings: Finding[]) {
   const pdfMake  = (await import("pdfmake/build/pdfmake")).default;
   const pdfFonts = (await import("pdfmake/build/vfs_fonts")).default;
-  (pdfMake as any).vfs = (pdfFonts as any).vfs;
-
-  const RISK_ORDER_LOCAL = ["КРИТИЧНО", "СУЩЕСТВЕННО", "НЕСУЩЕСТВЕННО"] as const;
-
-  // transactions_ct is often 0 in DB — extract real count from findings text
-  const txFromFindings = (() => {
-    for (const f of findings) {
-      const m = (f.description + " " + f.title).match(/(\d+)\s*(финансов|транзакц|операци)/i);
-      if (m) return parseInt(m[1], 10);
-    }
-    return null;
-  })();
-  const transactionCount = session.transactions_ct || txFromFindings;
-
-  // Executive Premium Light Palette
-  const colors = {
-    textMain: "#1a1a1a",
-    textMuted: "#555555",
-    textLight: "#888888",
-    bgCard: "#f8f9fa",
-    primary: "#1e2d55",
-    accentBlue: "#1565e8",   // Matches your specific brand color '24'
-    brandDark: "#0c1220",    // Premium dark color for clean typography contrast
-    red: "#c0392b",          // Critical
-    amber: "#d35400",        // Significant
-    green: "#27ae60",        // Minor / Safe
-  };
-
-  const RISK_COLORS: Record<string, string> = {
-    "КРИТИЧНО":      colors.red,
-    "СУЩЕСТВЕННО":   colors.amber,
-    "НЕСУЩЕСТВЕННО": colors.green,
-  };
-
-  // Evidence-confidence labels for the PDF — distinct axis from risk level,
-  // so a reader never mistakes a weak signal for a proven violation.
-  const EVIDENCE_LABELS: Record<EvidenceStatus, string> = {
-    confirmed: "Подтверждённое нарушение",
-    risk_flag:  "Признак риска",
-    indirect:   "Косвенный признак",
-  };
-
-  const allFindings  = findings;
-  const codes = new Map(findings.map((f, i) => [f.id, `Н-${i + 1}`]));   // same codes as in the chat
-  // The conclusion speaks about what is still OPEN; closed findings stay in
-  // the register below, marked as closed with the basis.
-  const openFindings = allFindings.filter(f => f.status !== "resolved");
-  const resolvedCt   = allFindings.length - openFindings.length;
-  const criticalCt   = openFindings.filter(f => f.risk_level === "КРИТИЧНО").length;
-  const majorCt      = openFindings.filter(f => f.risk_level === "СУЩЕСТВЕННО").length;
-  const minorCt      = openFindings.filter(f => f.risk_level === "НЕСУЩЕСТВЕННО").length;
-  const closedNote   = resolvedCt > 0 ? ` Закрыто по подтверждающим документам: ${resolvedCt} из ${allFindings.length}.` : "";
-  const validPeriod  = session.period && session.period !== "All periods" ? ruPeriod(session.period) : null;
-  const auditDate    = new Date(session.created_at).toLocaleDateString("ru-RU", { day: "numeric", month: "long", year: "numeric" });
-  const reportDate   = new Date().toLocaleDateString("ru-RU", { day: "numeric", month: "long", year: "numeric" });
-
-  const closedIn = (items: Finding[]) => items.filter(f => f.status === "resolved").length;
-
-  function findingsSection(level: string): any[] {
-    const items = allFindings.filter(f => f.risk_level === level);
-    if (!items.length) return [];
-    const color = RISK_COLORS[level] || colors.textLight;
-    
-    const rows: any[] = [{
-      text: [
-        { text: `■ ${level}`, color, fontSize: 13, bold: true },
-        { text: `  (${items.length} ${pluralRu(items.length, "нарушение", "нарушения", "нарушений")}` +
-                (closedIn(items) > 0 ? `, из них закрыто ${closedIn(items)}` : "") + ")", color: colors.textLight, fontSize: 11, bold: false },
-      ],
-      margin: [0, 20, 0, 10],
-    }];
-
-    items.forEach((f, i) => {
-      const evidenceLabel = f.evidence_status ? EVIDENCE_LABELS[f.evidence_status] : null;
-
-      rows.push({
-        table: {
-          dontBreakRows: true,
-          widths: ["*"],
-          body: [[{
-            stack: [
-              {
-                columns: [
-                  { text: `${codes.get(f.id) ?? `${i + 1}.`} ${f.title}${f.status === "resolved" ? "  — закрыто" : ""}`, bold: true, fontSize: 12, color: f.status === "resolved" ? colors.textLight : colors.textMain, width: "*" },
-                  { text: level, bold: true, fontSize: 9, color: color, alignment: "right", width: "auto" }
-                ],
-                margin: [0, 0, 0, 4]
-              },
-              ...(evidenceLabel ? [{
-                text: evidenceLabel,
-                fontSize: 8.5,
-                italics: true,
-                color: colors.textLight,
-                margin: [0, 0, 0, 8],
-              }] : []),
-              ...(f.description ? [{ text: f.description, fontSize: 10, color: colors.textMuted, margin: [0, 0, 0, 8], lineHeight: 1.3 }] : []),
-              ...(f.legal_basis ? [{ 
-                text: [
-                  { text: "Основание: ", bold: true, color: colors.textMain },
-                  { text: f.legal_basis }
-                ], 
-                fontSize: 9, 
-                color: colors.textMuted, 
-                margin: [0, 0, 0, 8] 
-              }] : []),
-              ...(f.recommendation ? [{
-                table: {
-                  widths: ["*"],
-                  body: [[{
-                    text: `💡 Рекомендация: ${f.recommendation}`,
-                    fontSize: 9.5,
-                    color: colors.primary,
-                    lineHeight: 1.3
-                  }]]
-                },
-                layout: "noBorders",
-                fillColor: "#eef3f9",
-                margin: [0, 4, 0, 0]
-              }] : []),
-              ...(f.revised_at && f.revision_summary ? [{
-                text: [
-                  { text: "Оценка исправлена по решению клиента.\n", bold: true, color: "#a36a00" },
-                  { text: f.revision_summary },
-                ],
-                fontSize: 9.5, color: colors.textMuted, margin: [0, 8, 0, 0], lineHeight: 1.3,
-              }] : []),
-              ...(f.status !== "resolved" && f.revision_proposed_at ? [{
-                text: [{ text: "Предложено исправить оценку, ожидает решения клиента.", bold: true, color: "#a36a00" }],
-                fontSize: 9.5, color: colors.textMuted, margin: [0, 8, 0, 0], lineHeight: 1.3,
-              }] : []),
-              ...(f.status === "resolved" ? [{
-                text: [
-                  { text: `ЗАКРЫТО ${ruDate(f.resolved_at)} по решению клиента. `, bold: true, color: "#1b7f55" },
-                  { text: f.resolution_basis ? `Основание: ${f.resolution_basis}` : "" },
-                  { text: f.resolution_documents ? ` Документы: ${f.resolution_documents}.` : "" },
-                ],
-                fontSize: 9.5, color: colors.textMuted, margin: [0, 8, 0, 0], lineHeight: 1.3,
-              }] : f.proposed_at ? [{
-                text: [
-                  { text: "Предложено к закрытию, ожидает решения клиента. ", bold: true, color: "#a36a00" },
-                  { text: f.proposal_basis ? `Основание: ${f.proposal_basis}` : "" },
-                ],
-                fontSize: 9.5, color: colors.textMuted, margin: [0, 8, 0, 0], lineHeight: 1.3,
-              }] : f.agent_note ? [{
-                text: [{ text: "Остаётся открытым. ", bold: true, color: colors.textMain }, { text: f.agent_note }],
-                fontSize: 9.5, color: colors.textMuted, margin: [0, 8, 0, 0], lineHeight: 1.3,
-              }] : []),
-            ],
-            fillColor: colors.bgCard,
-            padding: [12, 12, 12, 12],
-            border: [true, false, false, false],
-          }]],
-        },
-        layout: {
-          vLineColor: () => color,
-          vLineWidth: () => 4,
-        },
-        margin: [0, 0, 0, 12],
-      });
-    });
-    return rows;
-  }
-
-  const docDefinition: any = {
-    pageSize: "A4",
-    pageMargins: [45, 45, 45, 55],
-    
-    footer: (currentPage: number, pageCount: number) => ({
-      stack: [
-        {
-          canvas: [{ type: "line", x1: 45, y1: 0, x2: 550, y2: 0, lineWidth: 0.5, strokeColor: "#e0e0e0" }],
-          margin: [0, 0, 0, 8]
-        },
-        {
-          columns: [
-            { text: "Автоматический аудит платформы Assistant24", fontSize: 8, color: colors.textLight, margin: [45, 0, 0, 0] },
-            { text: `Страница ${currentPage} из ${pageCount}`, fontSize: 8, color: colors.textLight, alignment: "right", margin: [0, 0, 45, 0] },
-          ]
-        }
-      ]
-    }),
-
-    content: [
-      // Clean Minimalist Header Layout
-      {
-        columns: [
-          {
-            text: [
-              { text: "Assistant", bold: true, color: colors.brandDark, fontSize: 22 },
-              { text: "24", bold: true, color: colors.accentBlue, fontSize: 22 }
-            ],
-            margin: [0, 0, 0, 0],
-            width: "*"
-          },
-          { 
-            text: "ОТЧЁТ ОБ АУДИТЕ", 
-            fontSize: 10, 
-            bold: true, 
-            color: colors.textLight, 
-            alignment: "right" as const, 
-            margin: [0, 12, 0, 0],
-            width: "auto"
-          }
-        ],
-        margin: [0, 5, 0, 15]
-      },
-
-      // Thin Elegant Top Dividing Ruler Line
-      { canvas: [{ type: "line", x1: 0, y1: 0, x2: 505, y2: 0, lineWidth: 1, strokeColor: "#e2e8f0" }], margin: [0, 0, 0, 20] },
-
-      // Metadata Block
-      {
-        columns: [
-          {
-            stack: [
-              { text: "Объект аудита:", fontSize: 9, color: colors.textLight },
-              { text: session.company_name, fontSize: 18, bold: true, color: colors.primary, margin: [0, 2, 0, 12] },
-              ...(validPeriod ? [{ text: `Проверяемый период: ${validPeriod}`, fontSize: 10, color: colors.textMuted }] : []),
-            ],
-            width: "*"
-          },
-          {
-            stack: [
-              { text: `Дата проверки: ${auditDate}`, fontSize: 10, color: colors.textMuted, alignment: "right" },
-              { text: `Дата отчёта: ${reportDate}`, fontSize: 10, color: colors.textMuted, alignment: "right", margin: [0, 4, 0, 0] },
-            ],
-            width: "auto"
-          }
-        ],
-        margin: [0, 0, 0, 25]
-      },
-
-      { text: "Сводные показатели", fontSize: 13, bold: true, color: colors.primary, margin: [0, 10, 0, 10] },
-      
-      // Horizontal KPI Dashboard Metrics Grid
-      {
-        columns: [
-          {
-            stack: [
-              { text: "Проверено транзакций", fontSize: 9, color: colors.textLight, alignment: "center" },
-              { text: transactionCount?.toLocaleString("ru-RU") || "—", fontSize: 18, bold: true, color: colors.accentBlue, alignment: "center", margin: [0, 4, 0, 0] }
-            ],
-            fillColor: colors.bgCard,
-            margin: [0, 0, 6, 0],
-            padding: [10, 10, 10, 10]
-          },
-          {
-            stack: [
-              { text: "Критичные риски (открытые)", fontSize: 9, color: colors.textLight, alignment: "center" },
-              { text: criticalCt.toString(), fontSize: 18, bold: true, color: criticalCt > 0 ? colors.red : colors.green, alignment: "center", margin: [0, 4, 0, 0] }
-            ],
-            fillColor: colors.bgCard,
-            margin: [3, 0, 3, 0],
-            padding: [10, 10, 10, 10]
-          },
-          {
-            stack: [
-              { text: "Существенные риски (открытые)", fontSize: 9, color: colors.textLight, alignment: "center" },
-              { text: majorCt.toString(), fontSize: 18, bold: true, color: majorCt > 0 ? colors.amber : colors.textMuted, alignment: "center", margin: [0, 4, 0, 0] }
-            ],
-            fillColor: colors.bgCard,
-            margin: [3, 0, 3, 0],
-            padding: [10, 10, 10, 10]
-          },
-          {
-            stack: [
-              { text: "Стоимость аудита", fontSize: 9, color: colors.textLight, alignment: "center" },
-              { text: session.cost_rub ? `${rubles(session.cost_rub)} ₽` : "—", fontSize: 15, bold: true, color: colors.primary, alignment: "center", margin: [0, 6, 0, 0] }
-            ],
-            fillColor: colors.bgCard,
-            margin: [6, 0, 0, 0],
-            padding: [10, 10, 10, 10]
-          }
-        ],
-        margin: [0, 0, 0, 25]
-      },
-
-      // Executive Summary Panel
-      {
-        table: {
-          widths: ["*"],
-          body: [[{
-            stack: [
-              { text: "Итоговое заключение", fontSize: 11, bold: true, color: colors.primary, margin: [0, 0, 0, 4] },
-              {
-                // The wording must not say more than the findings do: with
-                // material findings on the list it used to read "замечания носят
-                // локальный характер", and with none — "полностью соответствуют".
-                text: criticalCt > 0
-                  ? `По результатам проверки выявлено критичных нарушений: ${criticalCt}` +
-                    (majorCt > 0 ? `, существенных нарушений и признаков риска: ${majorCt}` : "") +
-                    `. Критичные нарушения требуют незамедлительного исправления — см. реестр ниже.${closedNote}`
-                  : majorCt > 0
-                    ? `Критичных нарушений не выявлено. Выявлено существенных нарушений и признаков риска: ${majorCt}` +
-                      (minorCt > 0 ? `; несущественных замечаний: ${minorCt}` : "") +
-                      `. Существенные нарушения требуют исправления и могут повлечь налоговые доначисления, штрафы и пени — см. реестр ниже.${closedNote}`
-                    : openFindings.length > 0
-                      ? `Критичных и существенных нарушений не выявлено. Несущественных замечаний: ${minorCt} — см. реестр ниже.${closedNote}`
-                      : allFindings.length > 0
-                        ? `Все выявленные нарушения закрыты по подтверждающим документам (${resolvedCt}). Основания закрытия — в реестре ниже.`
-                        : "В пределах проверенных данных нарушений не выявлено. Вывод относится только к представленным документам и периоду.",
-                fontSize: 10, color: colors.textMain, lineHeight: 1.4
-              }
-            ],
-            fillColor: criticalCt > 0 ? "#fdf2f2" : majorCt > 0 ? "#fff8e6" : "#f0f9f4",
-            padding: [12, 12, 12, 12],
-            border: [true, true, true, true]
-          }]]
-        },
-        layout: {
-          hLineColor: () => criticalCt > 0 ? "#f5c6cb" : majorCt > 0 ? "#f3dca0" : "#c3e6cb",
-          vLineColor: () => criticalCt > 0 ? "#f5c6cb" : majorCt > 0 ? "#f3dca0" : "#c3e6cb",
-          hLineWidth: () => 1, vLineWidth: () => 1
-        },
-        margin: [0, 0, 0, 30]
-      },
-
-      // Detailed Registry of Findings Breakdown
-      ...(allFindings.length === 0 ? [] : [
-        { text: "Подробный реестр выявленных нарушений", fontSize: 14, bold: true, color: colors.primary, margin: [0, 10, 0, 5], pageBreak: "before" as const },
-        ...RISK_ORDER_LOCAL.flatMap(level => findingsSection(level)),
-      ]),
-    ],
-    defaultStyle: { font: "Roboto", fontSize: 10, color: colors.textMain },
-  };
-
-  const doc = pdfMake.createPdf(docDefinition);
-  const safeName = session.company_name.replace(/[^а-яёА-ЯЁa-zA-Z0-9]/g, "_");
-  const fileName = `Аудит_${safeName}_${new Date().toISOString().slice(0, 10)}.pdf`;
-  doc.download(fileName);
+  (pdfMake as unknown as { vfs: unknown }).vfs = (pdfFonts as unknown as { vfs: unknown }).vfs;
+  const definition = buildReportDefinition(session, findings);
+  pdfMake.createPdf(definition).download(reportFileName(session.company_name));
 }
 
 interface Finding {
@@ -389,15 +56,19 @@ interface Finding {
   resolution_documents?: string | null;
   // Correcting an assessment (migration 007).
   revision_proposed_at?: string | null;   // the agent proposes a corrected version; waits for the client
-  proposed_revision?:    { risk_level?: string; evidence_status?: string; title?: string; description?: string; legal_basis?: string; recommendation?: string } | null;
+  proposed_revision?:    { risk_level?: string; evidence_status?: string; title?: string; description?: string; legal_basis?: string; recommendation?: string; financial_impact?: string } | null;
   revision_basis?:       string | null;
   revised_at?:           string | null;   // last confirmed correction
   revision_summary?:     string | null;
+  // Report fields (migration 008).
+  financial_impact?:     string | null;
+  proposal_kind?:        "corrected" | "documented" | null;
+  resolution_kind?:      "corrected" | "documented" | null;
 }
 
 const EVIDENCE_RU: Record<string, string> = { confirmed: "Подтверждённое нарушение", risk_flag: "Признак риска", indirect: "Косвенный признак" };
-const REVISION_TEXT_FIELDS: [("title" | "description" | "legal_basis" | "recommendation"), string][] = [
-  ["title", "Название"], ["description", "Описание"], ["legal_basis", "Правовое основание"], ["recommendation", "Рекомендация"],
+const REVISION_TEXT_FIELDS: [("title" | "description" | "financial_impact" | "legal_basis" | "recommendation"), string][] = [
+  ["title", "Название"], ["description", "Описание"], ["financial_impact", "Финансовое влияние"], ["legal_basis", "Правовое основание"], ["recommendation", "Рекомендация"],
 ];
 
 const ruDate = (iso?: string | null) => (iso ? new Date(iso).toLocaleDateString("ru-RU", { timeZone: "Europe/Moscow" }) : "");
@@ -937,6 +608,12 @@ export default function AuditDetailPage() {
                       </div>
                     )}
 
+                    {f.financial_impact && (
+                      <div style={{ fontSize: "12px", color: "#c9d4ee", marginTop: "6px" }}>
+                        <strong>Финансовое влияние:</strong> {f.financial_impact}
+                      </div>
+                    )}
+
                     {f.legal_basis && (
                       <div style={{ fontSize: "12px", color: "#3d4f7a", marginTop: "6px" }}>
                         📋 {f.legal_basis}
@@ -987,7 +664,7 @@ export default function AuditDetailPage() {
                     {/* Stage 2: closing. The agent proposes, the client decides. */}
                     {f.status === "resolved" ? (
                       <div style={{ marginTop: "10px", padding: "10px 12px", background: "#0c2a22", border: "1px solid #1f7a5c", borderRadius: "6px", fontSize: "12px", color: "#a9d9c5", lineHeight: 1.55 }}>
-                        <strong style={{ color: "#2ecc8f" }}>Закрыто {ruDate(f.resolved_at)} по вашему решению.</strong>{" "}
+                        <strong style={{ color: "#2ecc8f" }}>{f.resolution_kind === "corrected" ? "Нарушение устранено" : "Закрыто по подтверждающим документам"} · {ruDate(f.resolved_at)}, по вашему решению.</strong>{" "}
                         {f.resolution_basis && <>Основание: {f.resolution_basis} </>}
                         {f.resolution_documents && <span style={{ color: "#6fa893" }}>Документы: {f.resolution_documents}. </span>}
                         <button disabled={deciding !== null} onClick={() => decide(f.id, "reopen")} style={{
@@ -997,7 +674,7 @@ export default function AuditDetailPage() {
                       </div>
                     ) : f.proposed_at ? (
                       <div style={{ marginTop: "10px", padding: "12px", background: "#0c2a22", border: "1px solid #1f7a5c", borderRadius: "6px", fontSize: "12px", color: "#a9b8dc", lineHeight: 1.55 }}>
-                        <div style={{ color: "#6fd3ad", marginBottom: "4px" }}>ИИ-аудитор предлагает закрыть этот вывод · решение принимаете вы</div>
+                        <div style={{ color: "#6fd3ad", marginBottom: "4px" }}>ИИ-аудитор предлагает закрыть этот вывод{f.proposal_kind === "corrected" ? " как устранённое нарушение" : f.proposal_kind === "documented" ? " по подтверждающим документам" : ""} · решение принимаете вы</div>
                         {f.proposal_basis && <div><strong style={{ color: "#c9d4ee" }}>Основание:</strong> {f.proposal_basis}</div>}
                         {f.proposal_documents && <div style={{ color: "#7a90c0" }}>Документы: {f.proposal_documents}</div>}
                         <div style={{ display: "flex", gap: "8px", marginTop: "10px" }}>
