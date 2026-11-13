@@ -1,6 +1,20 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+
+// The recorded amount, exactly: kopecks are shown whenever there are any
+// ("7 969,50", not "7 969,5" or a rounded "7 970") — it is what gets invoiced.
+function rubles(n: number): string {
+  const v = Number(n) || 0;
+  const whole = Math.abs(v * 100 - Math.round(v) * 100) < 0.5;
+  return v.toLocaleString("ru-RU", { minimumFractionDigits: whole ? 0 : 2, maximumFractionDigits: 2 });
+}
+function pluralRu(n: number, one: string, few: string, many: string): string {
+  const n10 = n % 10, n100 = n % 100;
+  if (n10 === 1 && n100 !== 11) return one;
+  if (n10 >= 2 && n10 <= 4 && (n100 < 12 || n100 > 14)) return few;
+  return many;
+}
 import { useParams, useRouter } from "next/navigation";
 import {
   getRiskColor, getRiskBgColor, type RiskLevel,
@@ -71,7 +85,7 @@ async function generatePDF(session: SessionDetail, findings: Finding[]) {
     const rows: any[] = [{
       text: [
         { text: `■ ${level}`, color, fontSize: 13, bold: true },
-        { text: `  (${items.length} нарушени${items.length === 1 ? "е" : "й"})`, color: colors.textLight, fontSize: 11, bold: false },
+        { text: `  (${items.length} ${pluralRu(items.length, "нарушение", "нарушения", "нарушений")})`, color: colors.textLight, fontSize: 11, bold: false },
       ],
       margin: [0, 20, 0, 10],
     }];
@@ -243,7 +257,7 @@ async function generatePDF(session: SessionDetail, findings: Finding[]) {
           {
             stack: [
               { text: "Стоимость аудита", fontSize: 9, color: colors.textLight, alignment: "center" },
-              { text: session.cost_rub ? `${session.cost_rub.toLocaleString("ru-RU")} ₽` : "—", fontSize: 15, bold: true, color: colors.primary, alignment: "center", margin: [0, 6, 0, 0] }
+              { text: session.cost_rub ? `${rubles(session.cost_rub)} ₽` : "—", fontSize: 15, bold: true, color: colors.primary, alignment: "center", margin: [0, 6, 0, 0] }
             ],
             fillColor: colors.bgCard,
             margin: [6, 0, 0, 0],
@@ -709,7 +723,7 @@ export default function AuditDetailPage() {
             { label: "Нарушений",  value: findings.length, color: findings.length > 0 ? "#e84040" : "#2ecc8f" },
             { label: "Транзакций", value: session.transactions_ct || "—", color: "#4d91ff" },
             { label: "Стоимость",  value: session.cost_rub
-                ? session.cost_rub.toLocaleString("ru", { style: "currency", currency: "RUB", maximumFractionDigits: 0 })
+                ? `${rubles(session.cost_rub)} ₽`
                 : "—", color: "#f59e0b" },
             { label: "Дата", value: new Date(session.created_at).toLocaleDateString("ru", { day: "numeric", month: "long", year: "numeric" }), color: "#7a90c0" },
           ].map((s, i) => (

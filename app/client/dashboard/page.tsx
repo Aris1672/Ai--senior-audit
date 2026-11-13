@@ -353,7 +353,7 @@ export default function ClientDashboard() {
           ) : data.sessions.map((sess) => {
             const st = SESSION_STATUS[sess.status] || SESSION_STATUS.active;
             const displayCost = sess.cost_rub
-              ? sess.cost_rub.toLocaleString("ru", { style: "currency", currency: "RUB", maximumFractionDigits: 0 })
+              ? `${Number(sess.cost_rub).toLocaleString("ru-RU", { minimumFractionDigits: Number.isInteger(Number(sess.cost_rub)) ? 0 : 2, maximumFractionDigits: 2 })} ₽`
               : "—";
             const companyName = sess.title.replace(/^Аудит:\s*/, "").split("(")[0].trim();
 
