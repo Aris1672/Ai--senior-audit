@@ -7,7 +7,7 @@ import { createAdminClient } from "@/lib/supabase-server";
 import { parseFile, renderPDFPagesAsImages, type DateRange } from "@/lib/file-parser";
 import { parseStoredOcr, ocrSidecarPath, ocrTextForModel, ocrCounts } from "@/lib/ocr";
 import { billingSchemaReady } from "@/lib/doc-billing-server";
-import { buildFindingsBlock, validateUpdates, proposalsFromText, updateFindingsTool, type AgentFinding } from "@/lib/finding-updates";
+import { buildFindingsBlock, validateUpdates, proposalsFromText, updateFindingsTool, clipText, type AgentFinding } from "@/lib/finding-updates";
 import { findingsSchemaReady, revisionSchemaReady, loadAgentFindings, applyAgentUpdates } from "@/lib/finding-updates-server";
 import { checkRequestVolume, isContextLimitError, CONTEXT_LIMIT_MESSAGE, type VolumePart } from "@/lib/volume";
 import { NextRequest, NextResponse } from "next/server";
@@ -345,7 +345,7 @@ async function saveFindings(
     for (const f of findings) {
       if (!f?.title || !validRiskLevels.has(f.risk_level)) continue;
 
-      const title = String(f.title).slice(0, 100);
+      const title = clipText(String(f.title), 100);
       const isDuplicate = acceptedTitles.some(
         existing => titleSimilarity(title, existing) >= DUPLICATE_SIMILARITY_THRESHOLD
       );
@@ -364,9 +364,9 @@ async function saveFindings(
         // the tool call omits or mis-formats this field — never let a missing
         // value silently overstate certainty.
         evidence_status: validEvidenceStatuses.has(f.evidence_status) ? f.evidence_status : "risk_flag",
-        description:     String(f.description    || "").slice(0, 500),
-        legal_basis:     String(f.legal_basis    || "").slice(0, 200),
-        recommendation:  String(f.recommendation || "").slice(0, 300),
+        description:     clipText(String(f.description    || ""), 500),
+        legal_basis:     clipText(String(f.legal_basis    || ""), 200),
+        recommendation:  clipText(String(f.recommendation || ""), 300),
         status:          "open",
       });
       acceptedTitles.push(title); // also guards against dupes within this same batch

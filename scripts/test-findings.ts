@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 process.env.LLM_API_KEY ||= "test";
 
 async function main() {
-  const { buildFindingsBlock, validateUpdates, findingCode, UPDATE_FINDINGS_TOOL, updateFindingsTool, cleanRevision, describeRevision } = await import("../lib/finding-updates");
+  const { buildFindingsBlock, validateUpdates, findingCode, UPDATE_FINDINGS_TOOL, updateFindingsTool, cleanRevision, describeRevision, clipText } = await import("../lib/finding-updates");
   type F = Parameters<typeof buildFindingsBlock>[0][number];
   const f = (i: number, over: Partial<F> = {}): F => ({
     id: `id-${i}`, code: findingCode(i), title: `Вывод ${i + 1}`, description: "Описание вывода", recommendation: "Запросить документы",
@@ -114,7 +114,14 @@ async function main() {
   assert.match(validateUpdates([{ ...revise, revision: { risk_level: "НЕСУЩЕСТВЕННО" } }], [loan], true).skipped[0], /нет изменений/);
   assert.match(validateUpdates([revise], [{ ...loan, revisionProposed: true }], true).skipped[0], /уже ожидает/);
   assert.match(validateUpdates([revise], [{ ...loan, status: "resolved" }], true).skipped[0], /уже закрыт/);
-  assert.deepEqual(cleanRevision({ risk_level: "ОЧЕНЬ ВАЖНО", recommendation: "р".repeat(400) }, loan), { recommendation: "р".repeat(300) });
+  assert.deepEqual(cleanRevision({ risk_level: "ОЧЕНЬ ВАЖНО", recommendation: "р".repeat(400) }, loan), { recommendation: "р".repeat(299) + "…" });
+
+  // Texts are shortened without cutting a word.
+  const longDesc = "Заём 900 000,00 ₽ выдан 09.04.2025 и не возвращён. " + "Доход возникает на последний день каждого месяца пользования займом. ".repeat(8) + "Договор № 1-З не загружен.";
+  const cut = clipText(longDesc, 500);
+  assert.ok(cut.length <= 500 && /\.$/.test(cut), cut);
+  assert.equal(clipText("слово ".repeat(200), 300).endsWith("слово…"), true);
+  assert.equal(clipText("короткий текст", 300), "короткий текст");
 
   // A reply cut at a tool call is finished by a second call (lib/audit-engine.ts).
   const { looksUnfinished } = await import("../lib/audit-engine");

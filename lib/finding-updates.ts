@@ -209,6 +209,22 @@ const EVIDENCE_IN: Record<string, string> = {
   confirmed: "confirmed", risk_flag: "risk_flag", indirect: "indirect",
   "подтверждённое нарушение": "confirmed", "подтвержденное нарушение": "confirmed", "признак риска": "risk_flag", "косвенный признак": "indirect",
 };
+/**
+ * Shortens a finding's text to a stored limit without cutting a word: at the
+ * end of the last full sentence when that keeps most of the text, otherwise
+ * at the last space, with "…". (Nov 13: a corrected description ended
+ * «…договор № 1-3 не загруже».)
+ */
+export function clipText(text: string, limit: number): string {
+  const t = String(text ?? "").replace(/\s+/g, " ").trim();
+  if (t.length <= limit) return t;
+  const head = t.slice(0, limit - 1);
+  const sentence = Math.max(head.lastIndexOf(". "), head.lastIndexOf("; "));
+  if (sentence >= limit * 0.6) return head.slice(0, sentence + 1);
+  const space = head.lastIndexOf(" ");
+  return (space > limit * 0.5 ? head.slice(0, space) : head).replace(/[\s,;:—–-]+$/u, "") + "…";
+}
+
 /** Same limits as findings recorded by record_findings (app/api/chat/route.ts). */
 const TEXT_LIMITS = { title: 100, description: 500, legal_basis: 200, recommendation: 300 } as const;
 
@@ -227,7 +243,7 @@ export function cleanRevision(raw: unknown, f: AgentFinding): Revision {
     title: f.title ?? "", description: f.description ?? "", legal_basis: f.legal_basis ?? "", recommendation: f.recommendation ?? "",
   };
   for (const key of Object.keys(TEXT_LIMITS) as (keyof typeof TEXT_LIMITS)[]) {
-    const v = typeof r[key] === "string" ? (r[key] as string).replace(/\s+/g, " ").trim().slice(0, TEXT_LIMITS[key]) : "";
+    const v = typeof r[key] === "string" ? clipText(r[key] as string, TEXT_LIMITS[key]) : "";
     if (v.length >= 5 && v !== current[key].trim()) out[key] = v;
   }
   return out;
