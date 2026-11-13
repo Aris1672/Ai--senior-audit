@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 process.env.LLM_API_KEY ||= "test";
 
 async function main() {
-  const { buildFindingsBlock, validateUpdates, findingCode, UPDATE_FINDINGS_TOOL } = await import("../lib/finding-updates");
+  const { buildFindingsBlock, validateUpdates, findingCode, UPDATE_FINDINGS_TOOL, updateFindingsTool, cleanRevision, describeRevision } = await import("../lib/finding-updates");
   type F = Parameters<typeof buildFindingsBlock>[0][number];
   const f = (i: number, over: Partial<F> = {}): F => ({
     id: `id-${i}`, code: findingCode(i), title: `Вывод ${i + 1}`, description: "Описание вывода", recommendation: "Запросить документы",
@@ -88,6 +88,33 @@ async function main() {
   assert.deepEqual(validateUpdates(fromText, seven).valid.map(v => [v.code, v.action]), [["Н-7", "propose_close"]]);
   assert.equal(proposalsFromText("Н-9 — остаётся открытым. Вывод Н-3 закрыт ранее. Предлагаю закрыть вопрос позже.").length, 0, "only an explicit 'Н-… — предлагаю закрыть' counts");
   assert.match(buildFindingsBlock([f(0)]), /без вызова инструмента клиент не увидит предложения/);
+
+  // 6. Correcting an assessment (migration 007). Without it the action does not exist.
+  assert.doesNotMatch(buildFindingsBlock([f(0)]), /9\. Исправление оценки/);
+  const loan = f(5, { title: "Беспроцентный заём директору 900 тыс. ₽", risk_level: "НЕСУЩЕСТВЕННО", evidence_status: "indirect",
+    description: "Обязанность пока не наступила.", legal_basis: "Гл. 23 НК РФ — для беспроцентных дата дохода — дата возврата" });
+  const withRevBlock = buildFindingsBlock([loan], true);
+  assert.match(withRevBlock, /9\. Исправление оценки/);
+  assert.match(withRevBlock, /Основание \(норма\): Гл\. 23 НК РФ/);            // the agent sees the legal basis it may correct
+  assert.deepEqual((updateFindingsTool(true).input_schema as any).properties.updates.items.properties.action.enum,
+    ["propose_close", "keep_open", "propose_revise"]);
+  assert.equal((updateFindingsTool(false).input_schema as any).properties.updates.items.properties.revision, undefined);
+  const revise = { finding: "Н-6", action: "propose_revise", basis: "Доход от экономии на процентах возникает в последний день каждого месяца (ст. 223 НК РФ).",
+    revision: { risk_level: "СУЩЕСТВЕННО", evidence_status: "Подтверждённое нарушение", legal_basis: "Ст. 212, 223 НК РФ — матвыгода на последний день месяца",
+                title: "Беспроцентный заём директору 900 тыс. ₽", description: "  " } };
+  // Not offered → dropped.
+  assert.equal(validateUpdates([revise], [loan]).valid.length, 0);
+  const rv = validateUpdates([revise], [loan], true);
+  assert.equal(rv.valid.length, 1);
+  // Only real changes are kept: the same title and an empty description are dropped, the label is mapped.
+  assert.deepEqual(rv.valid[0].revision, { risk_level: "СУЩЕСТВЕННО", evidence_status: "confirmed", legal_basis: "Ст. 212, 223 НК РФ — матвыгода на последний день месяца" });
+  assert.equal(describeRevision(loan, rv.valid[0].revision!),
+    "Уровень: НЕСУЩЕСТВЕННО → СУЩЕСТВЕННО; статус: Косвенный признак → Подтверждённое нарушение; изменены: правовое основание");
+  // Nothing changes → dropped; already waiting → dropped; a closed finding → dropped; unknown level ignored.
+  assert.match(validateUpdates([{ ...revise, revision: { risk_level: "НЕСУЩЕСТВЕННО" } }], [loan], true).skipped[0], /нет изменений/);
+  assert.match(validateUpdates([revise], [{ ...loan, revisionProposed: true }], true).skipped[0], /уже ожидает/);
+  assert.match(validateUpdates([revise], [{ ...loan, status: "resolved" }], true).skipped[0], /уже закрыт/);
+  assert.deepEqual(cleanRevision({ risk_level: "ОЧЕНЬ ВАЖНО", recommendation: "р".repeat(400) }, loan), { recommendation: "р".repeat(300) });
 
   // A reply cut at a tool call is finished by a second call (lib/audit-engine.ts).
   const { looksUnfinished } = await import("../lib/audit-engine");

@@ -7,8 +7,8 @@ import { createAdminClient } from "@/lib/supabase-server";
 import { parseFile, renderPDFPagesAsImages, type DateRange } from "@/lib/file-parser";
 import { parseStoredOcr, ocrSidecarPath, ocrTextForModel, ocrCounts } from "@/lib/ocr";
 import { billingSchemaReady } from "@/lib/doc-billing-server";
-import { buildFindingsBlock, validateUpdates, proposalsFromText, UPDATE_FINDINGS_TOOL, type AgentFinding } from "@/lib/finding-updates";
-import { findingsSchemaReady, loadAgentFindings, applyAgentUpdates } from "@/lib/finding-updates-server";
+import { buildFindingsBlock, validateUpdates, proposalsFromText, updateFindingsTool, type AgentFinding } from "@/lib/finding-updates";
+import { findingsSchemaReady, revisionSchemaReady, loadAgentFindings, applyAgentUpdates } from "@/lib/finding-updates-server";
 import { checkRequestVolume, isContextLimitError, CONTEXT_LIMIT_MESSAGE, type VolumePart } from "@/lib/volume";
 import { NextRequest, NextResponse } from "next/server";
 
@@ -572,10 +572,12 @@ export async function POST(req: NextRequest) {
           // to PROPOSE closing — see lib/finding-updates.ts. Until migration
           // 006 has been run this is absent and the turn runs as before.
           let agentFindings: AgentFinding[] = [];
+          let withRevise = false;   // correcting an assessment — migration 007
           if (sessionId && await findingsSchemaReady(supabase)) {
             agentFindings = await loadAgentFindings(supabase, sessionId);
+            withRevise = await revisionSchemaReady(supabase);
           }
-          const findingsBlock = buildFindingsBlock(agentFindings);
+          const findingsBlock = buildFindingsBlock(agentFindings, withRevise);
           const stage2 = agentFindings.some(f => f.status === "open");
 
           // Build system prompt: base + audit context + all file contents
@@ -645,7 +647,7 @@ export async function POST(req: NextRequest) {
             thinking: d => { thinkingBuffer += d; },
             text:     d => { flushThinking(); fullText += d; send({ type: "delta", text: d }); },
             reset:    () => { fullText = ""; send({ type: "reset" }); },
-          }, pseudonymizer, stage2 ? { extraTools: [UPDATE_FINDINGS_TOOL] } : {});
+          }, pseudonymizer, stage2 ? { extraTools: [updateFindingsTool(withRevise)] } : {});
           fullText = result.text; // authoritative
           const toolFindings = result.findings as any[];
           console.log("[chat] audit turn done — reviewed:", result.reviewed,
@@ -680,10 +682,14 @@ export async function POST(req: NextRequest) {
           }
           console.log("[chat] stage 2:", stage2, "| tool entries:", result.updates.length, "| used:", rawUpdates.length);
           if (stage2 && rawUpdates.length > 0) {
-            const { valid, skipped } = validateUpdates(rawUpdates, agentFindings);
+            const { valid, skipped } = validateUpdates(rawUpdates, agentFindings, withRevise);
             if (skipped.length > 0) console.warn("[chat] finding updates skipped:", skipped.join(" | "));
             const applied = await applyAgentUpdates(supabase, sessionId, valid, agentFindings);
-            console.log("[chat] finding updates — proposals:", applied.proposals.length, "| kept open:", applied.keptOpen);
+            console.log("[chat] finding updates — proposals:", applied.proposals.length, "| revisions:", applied.revisions.length, "| kept open:", applied.keptOpen);
+            if (applied.revisions.length > 0) {
+              step(`Предложено исправить оценку: ${applied.revisions.length} — решение за вами`);
+              send({ type: "revisions", revisions: applied.revisions });
+            }
             if (applied.proposals.length > 0) {
               step(`Предложено к закрытию: ${applied.proposals.length} — решение за вами`);
               send({ type: "proposals", proposals: applied.proposals });

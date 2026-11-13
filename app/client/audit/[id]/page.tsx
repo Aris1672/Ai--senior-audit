@@ -151,6 +151,17 @@ async function generatePDF(session: SessionDetail, findings: Finding[]) {
                 fillColor: "#eef3f9",
                 margin: [0, 4, 0, 0]
               }] : []),
+              ...(f.revised_at && f.revision_summary ? [{
+                text: [
+                  { text: `Оценка исправлена ${ruDate(f.revised_at)} по решению клиента. `, bold: true, color: "#a36a00" },
+                  { text: f.revision_summary },
+                ],
+                fontSize: 9.5, color: colors.textMuted, margin: [0, 8, 0, 0], lineHeight: 1.3,
+              }] : []),
+              ...(f.status !== "resolved" && f.revision_proposed_at ? [{
+                text: [{ text: "Предложено исправить оценку, ожидает решения клиента.", bold: true, color: "#a36a00" }],
+                fontSize: 9.5, color: colors.textMuted, margin: [0, 8, 0, 0], lineHeight: 1.3,
+              }] : []),
               ...(f.status === "resolved" ? [{
                 text: [
                   { text: `ЗАКРЫТО ${ruDate(f.resolved_at)} по решению клиента. `, bold: true, color: "#1b7f55" },
@@ -376,7 +387,18 @@ interface Finding {
   resolved_at?:          string | null;
   resolution_basis?:     string | null;
   resolution_documents?: string | null;
+  // Correcting an assessment (migration 007).
+  revision_proposed_at?: string | null;   // the agent proposes a corrected version; waits for the client
+  proposed_revision?:    { risk_level?: string; evidence_status?: string; title?: string; description?: string; legal_basis?: string; recommendation?: string } | null;
+  revision_basis?:       string | null;
+  revised_at?:           string | null;   // last confirmed correction
+  revision_summary?:     string | null;
 }
+
+const EVIDENCE_RU: Record<string, string> = { confirmed: "Подтверждённое нарушение", risk_flag: "Признак риска", indirect: "Косвенный признак" };
+const REVISION_TEXT_FIELDS: [("title" | "description" | "legal_basis" | "recommendation"), string][] = [
+  ["title", "Название"], ["description", "Описание"], ["legal_basis", "Правовое основание"], ["recommendation", "Рекомендация"],
+];
 
 const ruDate = (iso?: string | null) => (iso ? new Date(iso).toLocaleDateString("ru-RU", { timeZone: "Europe/Moscow" }) : "");
 
@@ -654,7 +676,7 @@ export default function AuditDetailPage() {
 
   // Stage 2: the client's decision on a finding (confirm / decline the
   // agent's proposal, or reopen a closed finding).
-  async function decide(findingId: string, decision: "confirm" | "decline" | "reopen") {
+  async function decide(findingId: string, decision: "confirm" | "decline" | "reopen" | "confirm_revision" | "decline_revision") {
     if (deciding) return;
     setDeciding(findingId); setDecideError("");
     try {
@@ -928,6 +950,37 @@ export default function AuditDetailPage() {
                         fontSize: "12px", color: "#4d91ff", lineHeight: "1.5",
                       }}>
                         💡 {f.recommendation}
+                      </div>
+                    )}
+
+                    {/* Stage 2: a corrected assessment. The agent proposes, the client decides. */}
+                    {f.revised_at && f.revision_summary && (
+                      <div style={{ marginTop: "10px", fontSize: "12px", color: "#c9b27a", lineHeight: 1.5 }}>
+                        <strong style={{ color: "#e0b85a" }}>Оценка исправлена {ruDate(f.revised_at)} по вашему решению.</strong> {f.revision_summary}
+                      </div>
+                    )}
+                    {f.status !== "resolved" && f.revision_proposed_at && f.proposed_revision && (
+                      <div style={{ marginTop: "10px", padding: "12px", background: "#2a220c", border: "1px solid #8a6a1f", borderRadius: "6px", fontSize: "12px", color: "#a9b8dc", lineHeight: 1.55 }}>
+                        <div style={{ color: "#e0b85a", marginBottom: "4px" }}>ИИ-аудитор предлагает исправить оценку этого вывода · решение принимаете вы</div>
+                        {f.proposed_revision.risk_level && <div>Уровень: {f.risk_level} → <strong style={{ color: "#e8edf8" }}>{f.proposed_revision.risk_level}</strong></div>}
+                        {f.proposed_revision.evidence_status && <div>Статус: {EVIDENCE_RU[f.evidence_status ?? ""] ?? "—"} → <strong style={{ color: "#e8edf8" }}>{EVIDENCE_RU[f.proposed_revision.evidence_status]}</strong></div>}
+                        {REVISION_TEXT_FIELDS.filter(([k]) => f.proposed_revision?.[k]).map(([k, label]) => (
+                          <div key={k}><strong style={{ color: "#c9d4ee" }}>{label} (новое):</strong> {f.proposed_revision?.[k]}</div>
+                        ))}
+                        {f.revision_basis && <div><strong style={{ color: "#c9d4ee" }}>Почему:</strong> {f.revision_basis}</div>}
+                        <div style={{ display: "flex", gap: "8px", marginTop: "10px" }}>
+                          <button disabled={deciding !== null} onClick={() => decide(f.id, "confirm_revision")} style={{
+                            padding: "7px 14px", background: "#b8860b", border: "none", borderRadius: "6px", color: "#fff",
+                            fontSize: "12px", fontWeight: 600, cursor: deciding ? "default" : "pointer", opacity: deciding ? 0.6 : 1,
+                          }}>Подтвердить исправление</button>
+                          <button disabled={deciding !== null} onClick={() => decide(f.id, "decline_revision")} style={{
+                            padding: "7px 14px", background: "transparent", border: "1px solid #1e2d55", borderRadius: "6px", color: "#7a90c0",
+                            fontSize: "12px", cursor: deciding ? "default" : "pointer", opacity: deciding ? 0.6 : 1,
+                          }}>Оставить как есть</button>
+                        </div>
+                        {decideError && deciding === null && (
+                          <div style={{ marginTop: "6px", fontSize: "12px", color: "#e84040" }}>{decideError}</div>
+                        )}
                       </div>
                     )}
 

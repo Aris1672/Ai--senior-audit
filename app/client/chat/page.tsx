@@ -126,6 +126,17 @@ const markdownComponents = {
 // normal Error with a real message, which callers catch and always resolve
 // (loading/uploading state is guaranteed to reset — see finally blocks below).
 interface FindingProposal { findingId: string; code: string; title: string; riskLevel: string; basis: string; documents: string[] }
+// A corrected assessment proposed by the agent (stage 2, migration 007).
+interface RevisionFields { risk_level?: string; evidence_status?: string; title?: string; description?: string; legal_basis?: string; recommendation?: string }
+interface RevisionProposal {
+  findingId: string; code: string; title: string; summary: string; basis: string;
+  revision: RevisionFields;
+  before: { risk_level: string; evidence_status: string | null; title: string; description: string; legal_basis: string | null; recommendation: string | null };
+}
+const EVIDENCE_RU: Record<string, string> = { confirmed: "Подтверждённое нарушение", risk_flag: "Признак риска", indirect: "Косвенный признак" };
+const REVISION_TEXT_FIELDS: [keyof RevisionFields, string][] = [
+  ["title", "Название"], ["description", "Описание"], ["legal_basis", "Правовое основание"], ["recommendation", "Рекомендация"],
+];
 
 interface StreamHandlers {
   onDelta:    (fullTextSoFar: string) => void;
@@ -245,14 +256,41 @@ export default function ChatPage() {
   // Stage 2: findings the agent proposes to close. The agent only proposes —
   // a finding is closed when the client confirms here (or on the audit page).
   const [proposals, setProposals] = useState<FindingProposal[]>([]);
+  const [revisions, setRevisions] = useState<RevisionProposal[]>([]);
   const [decidingId, setDecidingId] = useState<string | null>(null);
 
   async function refreshProposals(sid: string | null | undefined) {
     if (!sid) return;
     try {
       const res = await fetch(`/api/findings/decide?sessionId=${encodeURIComponent(sid)}`);
-      if (res.ok) setProposals((await res.json()).proposals ?? []);
+      if (res.ok) {
+        const json = await res.json();
+        setProposals(json.proposals ?? []);
+        setRevisions(json.revisions ?? []);
+      }
     } catch { /* the cards are a convenience; the audit page shows the same */ }
+  }
+
+  async function decideRevision(r: RevisionProposal, confirm: boolean) {
+    if (!sessionId || decidingId) return;
+    setDecidingId(r.findingId);
+    try {
+      const res = await fetch("/api/findings/decide", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sessionId, findingId: r.findingId, decision: confirm ? "confirm_revision" : "decline_revision" }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) pushAssistantReply(`❌ ${data.error || "Не удалось записать решение."}`);
+      else pushAssistantReply(confirm
+        ? `Оценка вывода ${r.code} исправлена по вашему решению: ${r.summary}. Прежняя версия сохранена в истории, изменение отмечено на странице аудита и в отчёте.`
+        : `Оценка вывода ${r.code} оставлена без изменений.`);
+    } catch {
+      pushAssistantReply("❌ Не удалось записать решение. Повторите попытку.");
+    } finally {
+      setDecidingId(null);
+      await refreshProposals(sessionId);
+    }
   }
 
   async function decideProposal(p: FindingProposal, decision: "confirm" | "decline") {
@@ -892,6 +930,51 @@ export default function ChatPage() {
         })()}
         <div ref={bottomRef} />
       </div>
+
+      {revisions.length > 0 && !quoteAsk && (
+        <div style={{ margin: "0 0 12px", display: "flex", flexDirection: "column", gap: "8px" }}>
+          {revisions.map(r => (
+            <div key={r.findingId} style={{
+              padding: "14px 18px", background: "#2a220c", border: "1px solid #8a6a1f", borderRadius: "10px",
+            }}>
+              <div style={{ fontSize: "12px", color: "#e0b85a", marginBottom: "4px" }}>
+                ИИ-аудитор предлагает исправить оценку вывода · решение принимаете вы
+              </div>
+              <div style={{ fontSize: "14px", fontWeight: 600, color: "#e8edf8", marginBottom: "6px" }}>
+                {r.code} · {r.title}
+              </div>
+              {(r.revision.risk_level || r.revision.evidence_status) && (
+                <div style={{ fontSize: "13px", color: "#e8edf8", marginBottom: "6px" }}>
+                  {r.revision.risk_level && <div>Уровень: <span style={{ color: "#a9b8dc" }}>{r.before.risk_level}</span> → <strong>{r.revision.risk_level}</strong></div>}
+                  {r.revision.evidence_status && <div>Статус: <span style={{ color: "#a9b8dc" }}>{EVIDENCE_RU[r.before.evidence_status ?? ""] ?? "—"}</span> → <strong>{EVIDENCE_RU[r.revision.evidence_status]}</strong></div>}
+                </div>
+              )}
+              {REVISION_TEXT_FIELDS.filter(([k]) => r.revision[k]).map(([k, label]) => (
+                <div key={k} style={{ fontSize: "13px", color: "#a9b8dc", lineHeight: 1.55, marginBottom: "4px" }}>
+                  <strong style={{ color: "#c9d4ee" }}>{label} (новое):</strong> {r.revision[k]}
+                </div>
+              ))}
+              <div style={{ fontSize: "13px", color: "#a9b8dc", lineHeight: 1.55, marginBottom: "4px" }}>
+                <strong style={{ color: "#c9d4ee" }}>Почему:</strong> {r.basis}
+              </div>
+              <div style={{ display: "flex", gap: "10px", marginTop: "8px" }}>
+                <button disabled={decidingId !== null} onClick={() => decideRevision(r, true)} style={{
+                  padding: "8px 16px", background: "#b8860b", border: "none", borderRadius: "8px",
+                  color: "#fff", fontSize: "13px", fontWeight: 600, cursor: decidingId ? "default" : "pointer", opacity: decidingId ? 0.6 : 1,
+                }}>
+                  Подтвердить исправление
+                </button>
+                <button disabled={decidingId !== null} onClick={() => decideRevision(r, false)} style={{
+                  padding: "8px 16px", background: "transparent", border: "1px solid #1e2d55", borderRadius: "8px",
+                  color: "#7a90c0", fontSize: "13px", cursor: decidingId ? "default" : "pointer", opacity: decidingId ? 0.6 : 1,
+                }}>
+                  Оставить как есть
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
 
       {/* Pending files list */}
       {proposals.length > 0 && !quoteAsk && (

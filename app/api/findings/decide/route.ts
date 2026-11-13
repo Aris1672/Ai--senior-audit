@@ -5,7 +5,9 @@
  *   confirm — accept the agent's proposal: the finding becomes "resolved"
  *   decline — reject the proposal: the finding stays open
  *   reopen  — put a resolved finding back to open
- * GET  ?sessionId=…  -> { proposals: [...] } — proposals waiting for a decision
+ *   confirm_revision / decline_revision — accept or reject a corrected
+ *             assessment proposed by the agent (migration 007)
+ * GET  ?sessionId=…  -> { proposals: [...], revisions: [...] } — proposals waiting for a decision
  *
  * Only a proposal recorded by the agent can be confirmed; the basis and the
  * documents come from that record, not from the request. The caller must be
@@ -14,7 +16,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase-server";
 import { authorizeSession, isAccessError } from "@/lib/doc-billing-server";
-import { decideFinding, findingsSchemaReady, loadAgentFindings, type Decision } from "@/lib/finding-updates-server";
+import { decideFinding, findingsSchemaReady, loadAgentFindings, loadRevisionProposals, type Decision } from "@/lib/finding-updates-server";
 
 export async function GET(req: NextRequest) {
   try {
@@ -22,7 +24,7 @@ export async function GET(req: NextRequest) {
     const supabase = createAdminClient();
     const access = await authorizeSession(supabase, sessionId);
     if (isAccessError(access)) return NextResponse.json({ error: access.error }, { status: access.status });
-    if (!(await findingsSchemaReady(supabase))) return NextResponse.json({ proposals: [] });
+    if (!(await findingsSchemaReady(supabase))) return NextResponse.json({ proposals: [], revisions: [] });
 
     const codes = new Map((await loadAgentFindings(supabase, sessionId!)).map(f => [f.id, f.code]));
     const { data } = await supabase.from("findings")
@@ -34,6 +36,7 @@ export async function GET(req: NextRequest) {
         findingId: f.id, code: codes.get(f.id) ?? "", title: f.title, riskLevel: f.risk_level,
         basis: f.proposal_basis ?? "", documents: String(f.proposal_documents ?? "").split("; ").filter(Boolean),
       })),
+      revisions: await loadRevisionProposals(supabase, sessionId!),
     });
   } catch (err) {
     console.error("[findings] list error:", (err as Error)?.message);
@@ -44,7 +47,7 @@ export async function GET(req: NextRequest) {
 export async function POST(req: NextRequest) {
   try {
     const { sessionId, findingId, decision, comment } = await req.json();
-    if (typeof findingId !== "string" || !["confirm", "decline", "reopen"].includes(decision)) {
+    if (typeof findingId !== "string" || !["confirm", "decline", "reopen", "confirm_revision", "decline_revision"].includes(decision)) {
       return NextResponse.json({ error: "Неверный запрос" }, { status: 400 });
     }
     const supabase = createAdminClient();
