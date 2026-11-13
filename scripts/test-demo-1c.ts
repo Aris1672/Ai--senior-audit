@@ -37,6 +37,18 @@ async function main() {
   assert.equal(D.isDemo1cUrl(new URL("https://a.ru/api/mock-1c/mock/odata")), true);
   assert.equal(D.isDemo1cUrl(new URL("https://a.ru/api/mock-1cx")), false);
 
-  console.log(`✅ demo 1C: all checks passed (off → 404 and a clear message; on → OData answers; reader in-process: ${docs} documents)`);
+  // Demo documents: all present, nothing outside the list can be fetched, the ZIP holds them all.
+  const { DEMO_DOCS, demoDocPath } = await import("../lib/demo-docs");
+  const fs = await import("node:fs");
+  const { zipSync, unzipSync } = await import("fflate");
+  assert.equal(DEMO_DOCS.length, 7);
+  for (const d of DEMO_DOCS) assert.ok(demoDocPath(d.file), `missing: ${d.file}`);
+  for (const bad of ["../data.ts", "../../.env", "/etc/passwd", "meridian_dogovor_i_akty.pdf/../../data.ts", "other.pdf"]) assert.equal(demoDocPath(bad), null, bad);
+  const zip = zipSync(Object.fromEntries(DEMO_DOCS.map((d, i) => [`${i + 1}_round${d.round}_${d.file}`, new Uint8Array(fs.readFileSync(demoDocPath(d.file)!))])));
+  const back = unzipSync(zip);
+  assert.equal(Object.keys(back).length, 7);
+  assert.ok(Object.keys(back)[0].startsWith("1_round1_meridian"));
+
+  console.log(`✅ demo 1C: all checks passed (off → 404 and a clear message; on → OData answers; reader in-process: ${docs} documents; 7 demo documents, ZIP ok)`);
 }
 main().catch(e => { console.error("❌ demo 1C test failed:", e); process.exit(1); });

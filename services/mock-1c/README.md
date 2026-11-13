@@ -16,6 +16,10 @@ off the address answers 404. The new-audit wizard then offers «Заполнит
 no `C1_ALLOW_PRIVATE_HOSTS` needed). Code: `lib/demo-1c.ts`,
 `app/api/mock-1c/[...path]/route.ts`; test: `npm run test:demo1c`.
 
+`demo-docs/` holds the stage-2 supporting documents for demonstrations (made by
+`scripts/dev/make-stage2-docs.py`, invented data, marked as test data); admins
+download them from «Демо 1С» as a ZIP or one by one (`lib/demo-docs.ts`).
+
 Login is HTTP Basic, like 1C's "automatic REST service" user. Settings (env):
 `MOCK_1C_PORT` (8081), `MOCK_1C_BASE` ("mock" — the part of the address before
 `/odata/…`), `MOCK_1C_USER` (odata.user), `MOCK_1C_PASSWORD` (mock-password),
