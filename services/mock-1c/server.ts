@@ -13,10 +13,9 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { timingSafeEqual } from "node:crypto";
-import { buildBase, type MockBase } from "./data";
+import { buildBase, mockFile, type MockBase } from "./data";
 import { handleOData } from "./odata";
 
-const HERE = path.dirname(fileURLToPath(import.meta.url));
 
 export interface MockOptions { port?: number; baseName?: string; user?: string; password?: string; year?: number; scale?: number }
 
@@ -25,7 +24,7 @@ export function startMock1C(opts: MockOptions = {}): Promise<{ url: string; base
   const user     = opts.user ?? process.env.MOCK_1C_USER ?? "odata.user";
   const password = opts.password ?? process.env.MOCK_1C_PASSWORD ?? "mock-password";
   const base     = buildBase(opts.year ?? (Number(process.env.MOCK_1C_YEAR) || 2025), opts.scale ?? (Number(process.env.MOCK_1C_SCALE) || 1));
-  const metadata = fs.readFileSync(path.join(HERE, "metadata.xml"), "utf8");
+  const metadata = fs.readFileSync(mockFile("metadata.xml"), "utf8");
   const prefix   = `/${baseName}/odata/standard.odata`;
   const expected = Buffer.from(`${user}:${password}`);
 

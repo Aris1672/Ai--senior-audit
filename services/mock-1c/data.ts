@@ -21,8 +21,20 @@ import { fileURLToPath } from "node:url";
 type Row = Record<string, unknown>;
 interface TypeInfo { kind: string; keys: string[]; props: Record<string, string> }
 
-const HERE = path.dirname(fileURLToPath(import.meta.url));
-export const STRUCTURE: Record<string, TypeInfo> = JSON.parse(fs.readFileSync(path.join(HERE, "structure.json"), "utf8"));
+/**
+ * A file of this folder. Run with tsx it sits next to this module; bundled
+ * into the Next app (the demo base at /api/mock-1c) the module lives in .next,
+ * and the folder is found from the working directory (the Docker image keeps
+ * services/mock-1c).
+ */
+export function mockFile(name: string): string {
+  const candidates: string[] = [];
+  try { candidates.push(path.join(path.dirname(fileURLToPath(import.meta.url)), name)); } catch { /* not a file URL when bundled */ }
+  candidates.push(path.join(/* turbopackIgnore: true */ process.cwd(), "services", "mock-1c", name));
+  for (const c of candidates) if (fs.existsSync(c)) return c;
+  throw new Error(`mock-1c: ${name} not found (looked in ${candidates.join(", ")})`);
+}
+export const STRUCTURE: Record<string, TypeInfo> = JSON.parse(fs.readFileSync(mockFile("structure.json"), "utf8"));
 
 export const ZERO_GUID = "00000000-0000-0000-0000-000000000000";
 export const EMPTY_DATE = "0001-01-01T00:00:00";

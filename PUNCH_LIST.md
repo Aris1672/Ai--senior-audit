@@ -2,7 +2,9 @@
 
 Prioritized by what it blocks. Derived from full source review (see PROJECT_STATUS.md for details on each item).
 
-> **▶ NOW (Nov 13, 20:00): PDF report redesigned — DONE, migration 008 run, verified by the user (incl. «Нарушение устранено» on Н-10).** Not yet seen: a «Финансовое влияние» row. Details: top entries of `PROJECT_STATUS.md`.
+> **▶ NOW (Nov 13, 23:15): demo 1C switch — BUILT.** ⚠ Run `supabase/migrations/009_app_settings.sql`; then admin → «Демо 1С» → «Включить»; remove `C1_ALLOW_PRIVATE_HOSTS` from the server. Details: top entry of `PROJECT_STATUS.md`.
+
+> **(Nov 13, 20:00): PDF report redesigned — DONE, migration 008 run, verified by the user (incl. «Нарушение устранено» on Н-10).** Not yet seen: a «Финансовое влияние» row. Details: top entries of `PROJECT_STATUS.md`.
 
 > **▶ NOW (Nov 13, 19:10): correcting a finding's assessment — DONE, migration 007 run, verified by the user on Н-6.** Details: top entries of `PROJECT_STATUS.md`.
 
@@ -23,7 +25,7 @@ Prioritized by what it blocks. Derived from full source review (see PROJECT_STAT
 > - [ ] Turn on Docker cleanup on the Coolify server (the disk filled up on Nov 13).
 > - [ ] Rotate the credentials listed in `Self-Host-Migration.md`; check the Supabase Studio port is not open to the internet.
 > - [ ] Ownership checks on `/api/chat` and the rest of `/api/data`.
-> - [ ] **Remove `C1_ALLOW_PRIVATE_HOSTS=true` from the auditor's environment in Coolify and redeploy.** It is left on deliberately (user decision, Nov 13, 2026) so the mock 1C base on `localhost` can be used for tests while nobody else uses the app. While it is on, anyone who can create an audit can make the server connect to internal addresses. The auditor's startup log prints a warning while it is set.
+> - [ ] **Remove `C1_ALLOW_PRIVATE_HOSTS=true` from the auditor's environment in Coolify and redeploy.** It was left on (user decision, Nov 13, 2026) for the mock 1C on `localhost`; **since Nov 13, 23:15 it is no longer needed** — the demo base is served by the app and switched in admin → «Демо 1С». While it is on, anyone who can create an audit can make the server connect to internal addresses. The auditor's startup log prints a warning while it is set.
 
 > **Updated November 12, 2026 (work order agreed)** — details in `PROJECT_STATUS.md` top entries.
 > - [x] **1. Decisions written down** — two stages (analysis 12.5 ₽/operation; correction 20 ₽/page), page definition, charging rules, overlap rule, volume rule.

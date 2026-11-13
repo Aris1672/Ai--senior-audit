@@ -24,6 +24,7 @@
  * file. Behaviour on a real base — paging limits, time-outs, error wording —
  * still has to be confirmed on one.
  */
+import { isDemo1cUrl, demo1cEnabled, demo1cRequest, DEMO_PATH } from "./demo-1c";
 import dns from "node:dns/promises";
 import net from "node:net";
 import { numberedKey } from "./operation-keys";
@@ -86,6 +87,11 @@ export async function assertAllowedC1Address(rawUrl: string): Promise<URL> {
   try { url = new URL(rawUrl); } catch { throw new C1Error("Адрес базы 1С указан неверно. Пример: https://1c.example.ru"); }
   if (url.protocol !== "https:" && url.protocol !== "http:") throw new C1Error("Адрес базы 1С должен начинаться с https:// или http://");
   if (url.username || url.password) throw new C1Error("Логин и пароль указываются в отдельных полях, а не в адресе.");
+  // The demo base is answered inside the app (lib/demo-1c.ts) — nothing goes out.
+  if (isDemo1cUrl(url)) {
+    if (!(await demo1cEnabled())) throw new C1Error("Демо-база 1С сейчас выключена. Включите её на странице «Демо 1С» в разделе администратора.");
+    return url;
+  }
   if (process.env.C1_ALLOW_PRIVATE_HOSTS === "true") return url;
 
   const host = url.hostname.replace(/^\[|\]$/g, "");
@@ -120,7 +126,12 @@ class C1Client {
     this.requests++;
     let res: Response;
     try {
-      res = await fetch(url, { headers: { authorization: this.auth, accept: "application/json" }, redirect: "manual", signal: AbortSignal.timeout(this.timeoutMs) });
+      const target = new URL(url);
+      if (isDemo1cUrl(target)) {
+        // The demo base: answered in-process, same status codes as over HTTP.
+        const out = await demo1cRequest("GET", decodeURIComponent(target.pathname.slice(DEMO_PATH.length)), target.searchParams, this.auth, target.origin);
+        res = new Response(out.body, { status: out.status, headers: { "content-type": out.contentType } });
+      } else res = await fetch(url, { headers: { authorization: this.auth, accept: "application/json" }, redirect: "manual", signal: AbortSignal.timeout(this.timeoutMs) });
     } catch (err) {
       const name = (err as Error)?.name;
       if (name === "TimeoutError" || name === "AbortError") throw new C1Error("База 1С не ответила вовремя. Попробуйте ещё раз или выберите более короткий период.");

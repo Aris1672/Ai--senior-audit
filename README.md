@@ -25,7 +25,7 @@ Coolify app built from this repository:
 | **Audit model** | DeepSeek V4 Pro (Anthropic-compatible API) | analysis. It receives **coded** text only: names of individuals are replaced before sending and put back in the reply |
 | **Name detection** | [`services/ner`](services/ner/README.md) (Natasha) | finds people's names in Russian text for the coding step. If the service is configured and down, the audit is blocked |
 | **Text recognition (OCR)** | [`services/ocr`](services/ocr/README.md) (Tesseract) | reads scans and photos of documents, so scans never leave our server |
-| **Mock 1C** (tests only) | [`services/mock-1c`](services/mock-1c/README.md) | a stand-in 1C base with 8 planted errors for testing the 1C connection |
+| **Demo / mock 1C** | [`services/mock-1c`](services/mock-1c/README.md), served by the app at `/api/mock-1c` | an invented 1C base with 8 planted errors — for tests, and for demonstrations when an admin switches it on («Демо 1С») |
 
 ## Text recognition (OCR)
 
@@ -80,7 +80,7 @@ Deployment of the service: [`services/ocr/README.md`](services/ocr/README.md).
 | `NER_URL`, `NER_TOKEN` | name-detection service (`http://ner:8000`) |
 | `OCR_URL`, `OCR_TOKEN` | text-recognition service (`http://ocr:8000`) |
 | `OCR_MIN_CONFIDENCE` | OCR quality threshold, default 75 |
-| `C1_ALLOW_PRIVATE_HOSTS` | lets the 1C connection reach local addresses, for the mock 1C only. **Remove before real clients** |
+| `C1_ALLOW_PRIVATE_HOSTS` | lets the 1C connection reach local addresses. **Not needed any more** for the mock (the demo base is served by the app, switched in «Демо 1С»); remove it |
 
 The OCR service has its own variables: `OCR_TOKEN`, plus the optional
 `OCR_WORKERS` and `OCR_MAX_PAGES`.

@@ -20,7 +20,8 @@
     "test:findings": "tsx scripts/test-findings.ts",
     "test:ocr": "tsx scripts/test-ocr.ts",
     "report:sample": "tsx scripts/render-report-sample.ts",
-    "test:report": "tsx scripts/test-report.ts"
+    "test:report": "tsx scripts/test-report.ts",
+    "test:demo1c": "tsx scripts/test-demo-1c.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.96.0",

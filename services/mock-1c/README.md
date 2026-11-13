@@ -8,6 +8,14 @@ npm run mock:1c        # http://localhost:8081/mock/odata/standard.odata/
 npm run test:mock1c    # checks the interface and that the books balance
 ```
 
+**For demonstrations** the same base is served by the app itself, switched on
+and off by an admin (admin area → «Демо 1С», migration `009_app_settings.sql`):
+`https://<app>/api/mock-1c`, base `mock`, same login and password. While it is
+off the address answers 404. The new-audit wizard then offers «Заполнить данные
+демо-базы». The app's 1C reader answers that address in-process (no network,
+no `C1_ALLOW_PRIVATE_HOSTS` needed). Code: `lib/demo-1c.ts`,
+`app/api/mock-1c/[...path]/route.ts`; test: `npm run test:demo1c`.
+
 Login is HTTP Basic, like 1C's "automatic REST service" user. Settings (env):
 `MOCK_1C_PORT` (8081), `MOCK_1C_BASE` ("mock" — the part of the address before
 `/odata/…`), `MOCK_1C_USER` (odata.user), `MOCK_1C_PASSWORD` (mock-password),

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef } from "react";
+import { useState, useRef, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { formatRubles } from "@/lib/billing";
 import { LEGAL_FORMS, TAX_REGIMES, VAT_STATUSES } from "@/lib/audit-constants";
@@ -37,6 +37,12 @@ export default function NewAuditPage() {
     taxRegimeOther:   "",
     vatStatus:        "",
   });
+
+  // The demo 1C base (admin switch, lib/demo-1c.ts): while it is on the form offers to fill it in.
+  const [demo1c, setDemo1c] = useState<{ enabled: boolean; path: string; base: string; username?: string; password?: string } | null>(null);
+  useEffect(() => {
+    fetch("/api/admin/demo-1c").then(r => (r.ok ? r.json() : null)).then(setDemo1c).catch(() => setDemo1c(null));
+  }, []);
 
   const [c1Config, setC1Config] = useState({
     url:      "",
@@ -478,6 +484,25 @@ export default function NewAuditPage() {
               <h2 style={{ fontSize: "15px", fontWeight: "600", color: "#4d91ff", margin: "0 0 16px" }}>
                 Подключение к 1С:Бухгалтерия
               </h2>
+              {demo1c?.enabled && (
+                <div style={{
+                  display: "flex", alignItems: "center", justifyContent: "space-between", gap: "12px",
+                  marginBottom: "16px", padding: "10px 14px", background: "#0f2a1f", border: "1px solid #1f7a4d", borderRadius: "8px",
+                }}>
+                  <span style={{ fontSize: "13px", color: "#9fe0bf" }}>
+                    Включена демо-база 1С (вымышленная организация ООО «Вектор-Трейд», 2025 год)
+                  </span>
+                  <button type="button" onClick={() => setC1Config(f => ({
+                    ...f, url: `${window.location.origin}${demo1c.path}`, base: demo1c.base,
+                    username: demo1c.username ?? "", password: demo1c.password ?? "",
+                  }))} style={{
+                    padding: "7px 14px", background: "#1f7a4d", border: "none", borderRadius: "6px",
+                    color: "#fff", fontSize: "13px", fontWeight: 600, cursor: "pointer", whiteSpace: "nowrap",
+                  }}>
+                    Заполнить данные демо-базы
+                  </button>
+                </div>
+              )}
               <div style={{ display: "grid", gap: "14px" }}>
                 <div>
                   <label style={labelStyle}>URL сервера 1С *</label>
