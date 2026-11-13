@@ -2,7 +2,7 @@
 
 Prioritized by what it blocks. Derived from full source review (see PROJECT_STATUS.md for details on each item).
 
-> **▶ NOW (Nov 13, evening): PDF report redesigned.** ⚠ Run `supabase/migrations/008_finding_report_fields.sql` (financial impact; corrected vs documented). Then download the PDF of audit «1C-8». Details: top entry of `PROJECT_STATUS.md`.
+> **▶ NOW (Nov 13, 20:00): PDF report redesigned — DONE, migration 008 run, verified by the user (incl. «Нарушение устранено» on Н-10).** Not yet seen: a «Финансовое влияние» row. Details: top entries of `PROJECT_STATUS.md`.
 
 > **▶ NOW (Nov 13, 19:10): correcting a finding's assessment — DONE, migration 007 run, verified by the user on Н-6.** Details: top entries of `PROJECT_STATUS.md`.
 
