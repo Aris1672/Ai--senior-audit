@@ -119,7 +119,8 @@ export default function InstructionsPage() {
           color: "#7a90c0",
         }}
       >
-        Остались вопросы? Свяжитесь с поддержкой через раздел «Журнал действий» или напишите на support@assistant24.tech.
+        Остались вопросы? Свяжитесь с поддержкой через раздел «Журнал действий» или напишите на{" "}
+        <a href="mailto:support@assistant24info.ru" style={{ color: "#4d91ff" }}>support@assistant24info.ru</a>.
       </div>
     </div>
   );
