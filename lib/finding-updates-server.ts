@@ -31,10 +31,29 @@ export async function loadAgentFindings(supabase: Admin, sessionId: string): Pro
     .order("created_at", { ascending: true })
     .order("id", { ascending: true });
   if (error) { console.error("[findings] load error:", error.message); return []; }
+
+  // Was the agent's last proposal declined by the client? (history: finding_events)
+  const declined = new Map<string, { at: string; basis: string }>();
+  const { data: events } = await supabase.from("finding_events")
+    .select("finding_id, event_type, note, created_at")
+    .eq("session_id", sessionId).in("event_type", ["proposed", "declined", "confirmed", "reopened"])
+    .order("created_at", { ascending: true });
+  const lastBasis = new Map<string, string>();
+  for (const e of events ?? []) {
+    if (e.event_type === "proposed") { lastBasis.set(e.finding_id, e.note ?? ""); declined.delete(e.finding_id); }
+    else if (e.event_type === "declined") {
+      declined.set(e.finding_id, {
+        at: new Date(e.created_at).toLocaleDateString("ru-RU", { timeZone: "Europe/Moscow" }),
+        basis: lastBasis.get(e.finding_id) ?? "",
+      });
+    } else declined.delete(e.finding_id);
+  }
+
   return (data ?? []).map((f, i) => ({
     id: f.id, code: findingCode(i), title: f.title, description: f.description, recommendation: f.recommendation,
     risk_level: f.risk_level, evidence_status: f.evidence_status, status: f.status ?? "open",
     proposed: !!f.proposed_at, agent_note: f.agent_note,
+    declined: f.status === "open" && !f.proposed_at ? declined.get(f.id) ?? null : null,
   }));
 }
 

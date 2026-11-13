@@ -485,7 +485,9 @@ export async function POST(req: NextRequest) {
             // "*": the closing columns (migration 006) come along when they exist.
             .select("*")
             .eq("session_id", sessionId)
-            .order("created_at", { ascending: true }),
+            // Same order as lib/finding-updates-server.ts: the position gives the code (Н-1, Н-2 …).
+            .order("created_at", { ascending: true })
+            .order("id", { ascending: true }),
           supabase
             .from("audit_messages")
             .select("role, content")

@@ -70,6 +70,7 @@ async function generatePDF(session: SessionDetail, findings: Finding[]) {
   };
 
   const allFindings  = findings;
+  const codes = new Map(findings.map((f, i) => [f.id, `Н-${i + 1}`]));   // same codes as in the chat
   // The conclusion speaks about what is still OPEN; closed findings stay in
   // the register below, marked as closed with the basis.
   const openFindings = allFindings.filter(f => f.status !== "resolved");
@@ -106,7 +107,7 @@ async function generatePDF(session: SessionDetail, findings: Finding[]) {
             stack: [
               {
                 columns: [
-                  { text: `${i + 1}. ${f.title}${f.status === "resolved" ? "  — закрыто" : ""}`, bold: true, fontSize: 12, color: f.status === "resolved" ? colors.textLight : colors.textMain, width: "*" },
+                  { text: `${codes.get(f.id) ?? `${i + 1}.`} ${f.title}${f.status === "resolved" ? "  — закрыто" : ""}`, bold: true, fontSize: 12, color: f.status === "resolved" ? colors.textLight : colors.textMain, width: "*" },
                   { text: level, bold: true, fontSize: 9, color: color, alignment: "right", width: "auto" }
                 ],
                 margin: [0, 0, 0, 4]
@@ -701,6 +702,10 @@ export default function AuditDetailPage() {
   const { session, findings, messages } = data;
   const st = SESSION_STATUS[session.status] || SESSION_STATUS.active;
 
+  // The code the agent and the chat use for a finding (Н-1, Н-2 …): its
+  // position in order of creation.
+  const codeOf = new Map(findings.map((f, i) => [f.id, `Н-${i + 1}`]));
+
   const grouped = RISK_ORDER.reduce<Record<string, Finding[]>>((acc, level) => {
     const items = findings.filter(f => f.risk_level === level);
     if (items.length) acc[level] = items;
@@ -869,7 +874,8 @@ export default function AuditDetailPage() {
                     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: "12px" }}>
                       <div style={{ fontSize: "14px", fontWeight: "600", color: f.status === "resolved" ? "#6b7fa8" : "#e8edf8", flex: 1,
                                     textDecoration: f.status === "resolved" ? "line-through" : "none" }}>
-                        {i + 1}. {f.title}
+                        <span style={{ color: "#4d91ff", fontWeight: 600, textDecoration: "none", display: "inline-block", marginRight: "6px" }}>{codeOf.get(f.id)}</span>
+                        {f.title}
                       </div>
                       {f.evidence_status && (
                         <span style={{
@@ -937,6 +943,11 @@ export default function AuditDetailPage() {
                         <strong style={{ color: "#a9b8dc" }}>По загруженным документам вывод остаётся открытым.</strong> {f.agent_note}
                       </div>
                     ) : null}
+                    {f.status !== "resolved" && !f.proposed_at && (
+                      <div style={{ marginTop: "8px", fontSize: "11px", color: "#3d4f7a" }}>
+                        Чтобы ИИ-аудитор оценил этот вывод заново по всем загруженным документам, напишите в чате аудита: «Пересмотри вывод {codeOf.get(f.id)}».
+                      </div>
+                    )}
                     {decideError && deciding === null && f.proposed_at && (
                       <div style={{ marginTop: "6px", fontSize: "12px", color: "#e84040" }}>{decideError}</div>
                     )}

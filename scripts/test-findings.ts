@@ -34,6 +34,12 @@ async function main() {
     /При сомнении — keep_open/, /НЕ восемь разделов отчёта/, /Существующие выводы через record_findings не повторяй/]) {
     assert.match(block, rule);
   }
+  // A declined proposal is shown as such, with the rule for reconsidering on request.
+  const withDeclined = buildFindingsBlock([f(0, { declined: { at: "13.11.2026", basis: "Справка НПД и 6 чеков покрывают все выплаты." } })]);
+  assert.match(withDeclined, /клиент ОТКЛОНИЛ твоё предложение закрыть этот вывод \(13\.11\.2026\)\. Основание того предложения: Справка НПД/);
+  assert.match(withDeclined, /8\. Пересмотр по просьбе клиента\./);
+  assert.match(withDeclined, /не повод ослабить требования к документам/);
+
   // A long description does not flood the request.
   assert.ok(buildFindingsBlock([f(0, { description: "д".repeat(5000) })]).length < 5200);
 
