@@ -6,7 +6,7 @@ import { Pseudonymizer, PseudonymizationError } from "@/lib/pseudonymize";
 import { createAdminClient } from "@/lib/supabase-server";
 import { parseFile, renderPDFPagesAsImages, type DateRange } from "@/lib/file-parser";
 import { billingSchemaReady } from "@/lib/doc-billing-server";
-import { buildFindingsBlock, validateUpdates, UPDATE_FINDINGS_TOOL, type AgentFinding } from "@/lib/finding-updates";
+import { buildFindingsBlock, validateUpdates, proposalsFromText, UPDATE_FINDINGS_TOOL, type AgentFinding } from "@/lib/finding-updates";
 import { findingsSchemaReady, loadAgentFindings, applyAgentUpdates } from "@/lib/finding-updates-server";
 import { checkRequestVolume, isContextLimitError, CONTEXT_LIMIT_MESSAGE, type VolumePart } from "@/lib/volume";
 import { NextRequest, NextResponse } from "next/server";
@@ -634,8 +634,16 @@ export async function POST(req: NextRequest) {
 
           // Stage 2: record what the agent concluded about existing findings.
           // A proposal changes nothing by itself — the client decides.
-          if (stage2 && result.updates.length > 0) {
-            const { valid, skipped } = validateUpdates(result.updates, agentFindings);
+          // If the agent wrote "предлагаю закрыть" but made no tool call, the
+          // proposals are read from its text (see proposalsFromText).
+          let rawUpdates: unknown[] = result.updates;
+          if (stage2 && rawUpdates.length === 0) {
+            rawUpdates = proposalsFromText(fullText);
+            if (rawUpdates.length > 0) console.warn("[chat] update_findings was NOT called — proposals read from the answer text:", rawUpdates.length);
+          }
+          console.log("[chat] stage 2:", stage2, "| tool entries:", result.updates.length, "| used:", rawUpdates.length);
+          if (stage2 && rawUpdates.length > 0) {
+            const { valid, skipped } = validateUpdates(rawUpdates, agentFindings);
             if (skipped.length > 0) console.warn("[chat] finding updates skipped:", skipped.join(" | "));
             const applied = await applyAgentUpdates(supabase, sessionId, valid, agentFindings);
             console.log("[chat] finding updates — proposals:", applied.proposals.length, "| kept open:", applied.keptOpen);

@@ -41,7 +41,7 @@ async function main() {
   assert.match(withDeclined, /не повод ослабить требования к документам/);
 
   // A long description does not flood the request.
-  assert.ok(buildFindingsBlock([f(0, { description: "д".repeat(5000) })]).length < 5200);
+  assert.ok(buildFindingsBlock([f(0, { description: "д".repeat(5000) })]).length - buildFindingsBlock([f(0)]).length < 750);
 
   // 3. The tool can only propose or keep open — there is no "close" action.
   const actions = (UPDATE_FINDINGS_TOOL.input_schema as any).properties.updates.items.properties.action.enum;
@@ -65,6 +65,29 @@ async function main() {
   assert.equal(valid[1].remaining, "Акты за октябрь и декабрь на 200 000,00.");
   assert.equal(skipped.length, 6);
   assert.ok(skipped.some(s => /Н-3: вывод уже закрыт/.test(s)) && skipped.some(s => /Н-9: нет такого вывода/.test(s)) && skipped.some(s => /Н-1: повтор/.test(s)));
+
+  // 5. Safety net: proposals written in the answer text without a tool call (a real reply, 13.11.2026).
+  const { proposalsFromText } = await import("../lib/finding-updates");
+  const reply = [
+    "**Что проверено** Повторно сопоставлен вывод Н-7 со всеми документами аудита (файл safonova_spravka_npd_i_cheki.pdf).",
+    "",
+    "**Н-7 · Выплаты Сафоновой Милене Робертовне 240 тыс. ₽ без актов, НДФЛ и взносов** — предлагаю закрыть. Основание вывода устранено полностью:",
+    "- Справка подтверждает статус плательщика НПД с 01.07.2025 — до первой выплаты 21.07.2025;",
+    "- шесть чеков НПД покрывают все шесть платежей по 40 000,00 ₽ (файл safonova_spravka_npd_i_cheki.pdf);",
+    "",
+    "Н-9 · Услуги ИП — остаётся открытым. Акт № 5 на 90 000,00 ₽ не сходится с оплатой.",
+    "**Новые выводы** Нет.",
+  ].join("\n");
+  const fromText = proposalsFromText(reply);
+  assert.equal(fromText.length, 1);
+  assert.equal(fromText[0].finding, "Н-7");
+  assert.match(fromText[0].basis, /^Основание вывода устранено полностью: Справка подтверждает статус плательщика НПД .* шесть чеков НПД покрывают/);
+  assert.ok(!fromText[0].basis.includes("Н-9") && !fromText[0].basis.includes("**"));
+  assert.deepEqual(fromText[0].documents, ["safonova_spravka_npd_i_cheki.pdf"]);
+  const seven = Array.from({ length: 7 }, (_, i) => f(i));
+  assert.deepEqual(validateUpdates(fromText, seven).valid.map(v => [v.code, v.action]), [["Н-7", "propose_close"]]);
+  assert.equal(proposalsFromText("Н-9 — остаётся открытым. Вывод Н-3 закрыт ранее. Предлагаю закрыть вопрос позже.").length, 0, "only an explicit 'Н-… — предлагаю закрыть' counts");
+  assert.match(buildFindingsBlock([f(0)]), /без вызова инструмента клиент не увидит предложения/);
 
   console.log("✅ findings (stage 2): all checks passed (block shown to the agent, closing rules present, validation of proposals)");
 }
