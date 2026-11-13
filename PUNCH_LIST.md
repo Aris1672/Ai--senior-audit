@@ -2,7 +2,7 @@
 
 Prioritized by what it blocks. Derived from full source review (see PROJECT_STATUS.md for details on each item).
 
-> **▶ NOW (Nov 13, 19:20): correcting a finding's assessment — BUILT.** ⚠ Run `supabase/migrations/007_finding_revision.sql`, then in audit «1C-8» write «Пересмотри вывод Н-6» (expect НЕСУЩЕСТВЕННО → СУЩЕСТВЕННО for review). Details: top entry of `PROJECT_STATUS.md`.
+> **▶ NOW (Nov 13, 19:10): correcting a finding's assessment — DONE, migration 007 run, verified by the user on Н-6.** Details: top entries of `PROJECT_STATUS.md`.
 
 > **▶ NOW (Nov 13, 2026, 18:25): OCR DONE — deployed and accepted by the user.** Details: top entries of `PROJECT_STATUS.md`. Open: threshold on real scans; confirm "OCR service down → 0 ₽, upload again"; whether an invoice alone may become a finding. Next by the plan: step 4c (1С:Фреш trial) or the rest of stage 2 — user to choose. `npm run check:audit` still not re-run.
 > - [x] Stage 2 part 1 — closing findings (agent proposes, client confirms; reconsideration «Пересмотри вывод Н-…») — **verified by the user Nov 13**.

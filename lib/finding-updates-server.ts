@@ -195,7 +195,11 @@ async function decideRevision(
   const summary = describeRevision(f, revision);
   const reason = String(f.revision_basis ?? "").trim();
   const { data: moved } = await supabase.from("findings")
-    .update({ ...revision, ...clear, revised_at: new Date().toISOString(),
+    // agent_note ("still open: …") was written against the old assessment and
+    // may contradict the corrected one (Nov 13, Н-6: "обязанность возникнет при
+    // возврате" left under the corrected finding) — it is cleared; the next
+    // review writes a new one.
+    .update({ ...revision, ...clear, agent_note: null, revised_at: new Date().toISOString(),
               revision_summary: [summary, reason && `Причина: ${reason}`].filter(Boolean).join(". ").slice(0, 2000) })
     .eq("id", findingId).eq("status", "open").not("revision_proposed_at", "is", null).select("id");
   if (!moved?.length) return { ok: false, error: "Состояние вывода изменилось — обновите страницу" };
