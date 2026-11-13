@@ -2,7 +2,7 @@
 
 Prioritized by what it blocks. Derived from full source review (see PROJECT_STATUS.md for details on each item).
 
-> **▶ NOW (Nov 13, 23:15): demo 1C switch — BUILT.** ⚠ Run `supabase/migrations/009_app_settings.sql`; then admin → «Демо 1С» → «Включить»; remove `C1_ALLOW_PRIVATE_HOSTS` from the server. Details: top entry of `PROJECT_STATUS.md`.
+> **▶ NOW (Nov 14, 01:40): demo 1C switch + demo documents — DONE, verified by the user.** Still to do: remove `C1_ALLOW_PRIVATE_HOSTS` from the server (no longer needed). Details: top entries of `PROJECT_STATUS.md`.
 
 > **(Nov 13, 20:00): PDF report redesigned — DONE, migration 008 run, verified by the user (incl. «Нарушение устранено» on Н-10).** Not yet seen: a «Финансовое влияние» row. Details: top entries of `PROJECT_STATUS.md`.
 
