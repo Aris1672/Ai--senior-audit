@@ -2,9 +2,9 @@
 
 Prioritized by what it blocks. Derived from full source review (see PROJECT_STATUS.md for details on each item).
 
-> **▶ NOW (Nov 13, 2026, evening): OCR BUILT — waiting for deploy and the user's test.** `services/ocr/` (Tesseract, table lines removed before reading), gate at confidence 75, recognised text stored once (`<file>.ocr.json`), reliable pages × 20 ₽, the agent told the text is from a scan. **To switch on:** new Coolify app from `services/ocr` (see its README), `OCR_URL=http://ocr:8000` + `OCR_TOKEN` in the auditor, redeploy. Details: top entry of `PROJECT_STATUS.md`. **To confirm with the user:** service down at upload → document unreadable, 0 ₽, "upload again later" (built that way). Still wanted: a few real scans to check the threshold. Before testing: `npm run check:audit` once.
+> **▶ NOW (Nov 13, 2026, 18:25): OCR DONE — deployed and accepted by the user.** Details: top entries of `PROJECT_STATUS.md`. Open: threshold on real scans; confirm "OCR service down → 0 ₽, upload again"; whether an invoice alone may become a finding. Next by the plan: step 4c (1С:Фреш trial) or the rest of stage 2 — user to choose. `npm run check:audit` still not re-run.
 > - [x] Stage 2 part 1 — closing findings (agent proposes, client confirms; reconsideration «Пересмотри вывод Н-…») — **verified by the user Nov 13**.
-> - [x] **OCR** built (above) — [ ] deployed, [ ] tried by the user, [ ] threshold checked on real scans.
+> - [x] **OCR** built, deployed and **accepted by the user (Nov 13, 18:25)** — [ ] threshold checked on real scans; [ ] a proposal from scans alone (fresh mock audit).
 > - [ ] Step 4c — one run against the 1С:Фреш trial base.
 > - [ ] Rest of stage 2: client closing a finding without a proposal (not requested); whether stage 2 is a separately started paid step.
 
