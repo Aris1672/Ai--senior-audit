@@ -166,6 +166,13 @@ export async function loadRevisionProposals(supabase: Admin, sessionId: string):
   return out;
 }
 
+function appendRevisionLine(previous: string | null | undefined, summary: string, reason: string): string {
+  const day = new Date().toLocaleDateString("ru-RU", { timeZone: "Europe/Moscow" });
+  const line = `${day}: ${[summary, reason && `Причина: ${reason}`].filter(Boolean).join(". ")}`;
+  const all = [String(previous ?? "").trim(), line].filter(Boolean).join("\n");
+  return all.length > 4000 ? "…" + all.slice(all.length - 3999) : all;
+}
+
 /**
  * The client's decision on a proposed correction. On confirm the fields of
  * the stored proposal (never of the request) are written to the finding; the
@@ -199,8 +206,11 @@ async function decideRevision(
     // may contradict the corrected one (Nov 13, Н-6: "обязанность возникнет при
     // возврате" left under the corrected finding) — it is cleared; the next
     // review writes a new one.
+    // Each confirmed correction is a dated line of its own; a second one does
+    // not hide the first (Nov 13, Н-6: the level change disappeared from the
+    // page after a later correction of the description).
     .update({ ...revision, ...clear, agent_note: null, revised_at: new Date().toISOString(),
-              revision_summary: [summary, reason && `Причина: ${reason}`].filter(Boolean).join(". ").slice(0, 2000) })
+              revision_summary: appendRevisionLine(f.revision_summary, summary, reason) })
     .eq("id", findingId).eq("status", "open").not("revision_proposed_at", "is", null).select("id");
   if (!moved?.length) return { ok: false, error: "Состояние вывода изменилось — обновите страницу" };
   await supabase.from("finding_events").insert({ finding_id: findingId, session_id: sessionId, actor: actor.role, actor_id: actor.id,

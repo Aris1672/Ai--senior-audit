@@ -120,6 +120,7 @@ async function main() {
   const longDesc = "Заём 900 000,00 ₽ выдан 09.04.2025 и не возвращён. " + "Доход возникает на последний день каждого месяца пользования займом. ".repeat(8) + "Договор № 1-З не загружен.";
   const cut = clipText(longDesc, 500);
   assert.ok(cut.length <= 500 && /\.$/.test(cut), cut);
+  assert.equal(clipText("Первая часть описания вывода длинная; " + "вторая часть ".repeat(10), 60), "Первая часть описания вывода длинная.");
   assert.equal(clipText("слово ".repeat(200), 300).endsWith("слово…"), true);
   assert.equal(clipText("короткий текст", 300), "короткий текст");
 

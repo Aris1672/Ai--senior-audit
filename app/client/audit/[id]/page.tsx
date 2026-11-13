@@ -153,7 +153,7 @@ async function generatePDF(session: SessionDetail, findings: Finding[]) {
               }] : []),
               ...(f.revised_at && f.revision_summary ? [{
                 text: [
-                  { text: `Оценка исправлена ${ruDate(f.revised_at)} по решению клиента. `, bold: true, color: "#a36a00" },
+                  { text: "Оценка исправлена по решению клиента.\n", bold: true, color: "#a36a00" },
                   { text: f.revision_summary },
                 ],
                 fontSize: 9.5, color: colors.textMuted, margin: [0, 8, 0, 0], lineHeight: 1.3,
@@ -955,8 +955,8 @@ export default function AuditDetailPage() {
 
                     {/* Stage 2: a corrected assessment. The agent proposes, the client decides. */}
                     {f.revised_at && f.revision_summary && (
-                      <div style={{ marginTop: "10px", fontSize: "12px", color: "#c9b27a", lineHeight: 1.5 }}>
-                        <strong style={{ color: "#e0b85a" }}>Оценка исправлена {ruDate(f.revised_at)} по вашему решению.</strong> {f.revision_summary}
+                      <div style={{ marginTop: "10px", fontSize: "12px", color: "#c9b27a", lineHeight: 1.5, whiteSpace: "pre-line" }}>
+                        <strong style={{ color: "#e0b85a" }}>Оценка исправлена по вашему решению.</strong>{"\n"}{f.revision_summary}
                       </div>
                     )}
                     {f.status !== "resolved" && f.revision_proposed_at && f.proposed_revision && (

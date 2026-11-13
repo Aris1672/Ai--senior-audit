@@ -220,7 +220,7 @@ export function clipText(text: string, limit: number): string {
   if (t.length <= limit) return t;
   const head = t.slice(0, limit - 1);
   const sentence = Math.max(head.lastIndexOf(". "), head.lastIndexOf("; "));
-  if (sentence >= limit * 0.6) return head.slice(0, sentence + 1);
+  if (sentence >= limit * 0.6) return head.slice(0, sentence) + ".";   // "; …" ends as a sentence, not with ";"
   const space = head.lastIndexOf(" ");
   return (space > limit * 0.5 ? head.slice(0, space) : head).replace(/[\s,;:—–-]+$/u, "") + "…";
 }
