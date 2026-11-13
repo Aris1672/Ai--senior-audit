@@ -45,7 +45,7 @@ const FIXTURE = path.join(process.cwd(), "scripts", "fixtures", "ip-ausn-stateme
 const RUNS = Math.max(1, parseInt(process.env.RUNS || "3", 10) || 3);
 
 interface Finding { title?: string; risk_level?: string; evidence_status?: string;
-  description?: string; legal_basis?: string; recommendation?: string; }
+  description?: string; legal_basis?: string; recommendation?: string; financial_impact?: string; }
 interface RunResult { text: string; findings: Finding[]; reviewed: string; draftFindings: Finding[];
   thinkingChars: number; seconds: number; tokensIn: number; tokensOut: number; }
 
@@ -117,6 +117,10 @@ const CHECKS: { id: string; label: string; required: boolean; test: (r: RunResul
     test: r => !/^\s*(здравствуйте|добрый день|привет|меня зовут)/i.test(r.text) },
   { id: "size", required: false, label: "3–7 findings (no padding)",
     test: r => r.findings.length >= 3 && r.findings.length <= 7 },
+  // Nov 13, 2026: record_findings has an optional financial_impact (one line,
+  // only from the audit's data). At least the money findings should carry it.
+  { id: "impact", required: false, label: "the double payment and the unidentified inflows carry a financial impact",
+    test: r => ["83973", "неустановлен"].every(key => r.findings.some(f => new RegExp(key, "i").test(blob(f)) && (f.financial_impact ?? "").trim().length >= 5)) },
 ];
 
 async function main() {
@@ -186,7 +190,10 @@ async function main() {
     console.log(` ${r.seconds}s | thinking ${r.thinkingChars} chars | tokens ${r.tokensIn}/${r.tokensOut} | ≈$${cost.toFixed(3)} | review: ${r.reviewed} | findings: draft ${r.draftFindings.length} → final ${r.findings.length}`);
     const finalTitles = new Set(r.findings.map(f => f.title));
     for (const f of r.draftFindings) if (!finalTitles.has(f.title)) console.log(`     (draft only) [${f.risk_level} / ${f.evidence_status}] ${f.title}`);
-    for (const f of r.findings) console.log(`     • [${f.risk_level} / ${f.evidence_status}] ${f.title}`);
+    for (const f of r.findings) {
+      console.log(`     • [${f.risk_level} / ${f.evidence_status}] ${f.title}`);
+      if (f.financial_impact) console.log(`         ₽ ${f.financial_impact}`);
+    }
     for (const c of CHECKS) {
       const ok = c.test(r);
       if (ok) passed[c.id]++;
