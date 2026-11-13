@@ -24,6 +24,11 @@ import {
 const LOGO_BASE64 =
   "data:image/png;base64,/9j/4AAQSkZJRgABAQAAAQABAAD/4gHYSUNDX1BST0ZJTEUAAQEAAAHIAAAAAAQwAABtbnRyUkdCIFhZWiAH4AABAAEAAAAAAABhY3NwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAQAA9tYAAQAAAADTLQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAlkZXNjAAAA8AAAACRyWFlaAAABFAAAABRnWFlaAAABKAAAABRiWFlaAAABPAAAABR3dHB0AAABUAAAABRyVFJDAAABZAAAAChnVFJDAAABZAAAAChiVFJDAAABZAAAAChjcHJ0AAABjAAAADxtbHVjAAAAAAAAAAEAAAAMZW5VUwAAAAgAAAAcAHMAUgBHAEJYWVogAAAAAAAAb6IAADj1AAADkFhZWiAAAAAAAABimQAAt4UAABjaWFlaIAAAAAAAACSgAAAPhAAAts9YWVogAAAAAAAA9tYAAQAAAADTLXBhcmEAAAAAAAQAAAACZmYAAPKnAAANWQAAE9AAAApbAAAAAAAAAABtbHVjAAAAAAAAAAEAAAAMZW5VUwAAACAAAAAcAEcAbwBvAGcAbABlACAASQBuAGMALgAgADIAMAAxADb/2wBDAAUDBAQEAwUEBAQFBQUGBwwIBwcHBw8LCwkMEQ8SEhEPERETFhwXExQaFRERGCEYGh0dHx8fExciJCIeJBweHx7/2wBDAQUFBQcGBw4ICA4eFBEUHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh7/wAARCAAzAmsDASIAAhEBAxEB/8QAHAAAAgIDAQEAAAAAAAAAAAAAAAcFBgMECAIB/8QAWRAAAQMCAwEHDQsIBwUJAAAAAQACAwQFBgcREiExQVFhcRQXFzI2UnSBg6Gxs8HSFSIjN2ZykZOksuIzUkRUYsLD0RYkRYKElKI0RURW8SVDRlNjkqPh8P/EABsBAAIDAQEBAAAAAAAAAAAAAAUGAAQHAwIB/8QAQxEAAQMDAAQJBwsEAQUAAAAAAQACAwQFEQYhMXESIkFRYYGRsdEWNDZyocHhExQVMjNCUlOCsvAjNpLSoiRDYsLx/9oADAMBAAIRAxEAPwDjJCEKKITdyfwnFFQG+XOnZJJUN0po5GghrO60PGeLm6VSst8NOxFfWtmaeoafR9Q7l5GdJ82qfcskFJSulkcyGCFhLid5rGgeYBO+idoEhNbMOKPq55+U9XfuStpDcSwfNojrO3w6/wCbV4koqOSmkpn0sJhkaWPZsABwO8QkBj3Dc2G726n0c6kl1fTSHjbyHnHAfAeNMnB2YMV5xNVW2oa2GGZ/9Qcd4kAdi7nOmo8I5FZMZWCnxHZJaGbRso9/BKR+TeOA9HEeZG7lS01+ozJSnLmk46uTr2jqQuiqJrTU8CccV2M+PVyrnFCz3CkqKCtmoquMxTwvли9HEeZG7lS01+ozJSnLmk46uTr2jqQuiqJrTU8CccV2M+PVyrnFCz3CkqKCtmoquMxTwvли9/BKR+TeOA9HEeZG7lS01+ozJSnLmk46uTr2jqQuiqJrTU8CccV2M+PVyrnFCz3CkqKCtmoquMxTwvMnEWsGAoUXHEUJAGSsSEybJlPXzxNlutwjpCRruUTd0cOYnUAHo1U03KWz6e+udcTzBg9SP";
 
+// "2025-01-01 – 2025-12-31" (as stored) → "01.01.2025 – 31.12.2025".
+function ruPeriod(period: string): string {
+  return period.replace(/(\d{4})-(\d{2})-(\d{2})/g, "$3.$2.$1");
+}
+
 async function generatePDF(session: SessionDetail, findings: Finding[]) {
   const pdfMake  = (await import("pdfmake/build/pdfmake")).default;
   const pdfFonts = (await import("pdfmake/build/vfs_fonts")).default;
@@ -79,9 +84,11 @@ async function generatePDF(session: SessionDetail, findings: Finding[]) {
   const majorCt      = openFindings.filter(f => f.risk_level === "СУЩЕСТВЕННО").length;
   const minorCt      = openFindings.filter(f => f.risk_level === "НЕСУЩЕСТВЕННО").length;
   const closedNote   = resolvedCt > 0 ? ` Закрыто по подтверждающим документам: ${resolvedCt} из ${allFindings.length}.` : "";
-  const validPeriod  = session.period && session.period !== "All periods" ? session.period : null;
+  const validPeriod  = session.period && session.period !== "All periods" ? ruPeriod(session.period) : null;
   const auditDate    = new Date(session.created_at).toLocaleDateString("ru-RU", { day: "numeric", month: "long", year: "numeric" });
   const reportDate   = new Date().toLocaleDateString("ru-RU", { day: "numeric", month: "long", year: "numeric" });
+
+  const closedIn = (items: Finding[]) => items.filter(f => f.status === "resolved").length;
 
   function findingsSection(level: string): any[] {
     const items = allFindings.filter(f => f.risk_level === level);
@@ -91,7 +98,8 @@ async function generatePDF(session: SessionDetail, findings: Finding[]) {
     const rows: any[] = [{
       text: [
         { text: `■ ${level}`, color, fontSize: 13, bold: true },
-        { text: `  (${items.length} ${pluralRu(items.length, "нарушение", "нарушения", "нарушений")})`, color: colors.textLight, fontSize: 11, bold: false },
+        { text: `  (${items.length} ${pluralRu(items.length, "нарушение", "нарушения", "нарушений")}` +
+                (closedIn(items) > 0 ? `, из них закрыто ${closedIn(items)}` : "") + ")", color: colors.textLight, fontSize: 11, bold: false },
       ],
       margin: [0, 20, 0, 10],
     }];
@@ -261,7 +269,7 @@ async function generatePDF(session: SessionDetail, findings: Finding[]) {
           },
           {
             stack: [
-              { text: "Критичные риски", fontSize: 9, color: colors.textLight, alignment: "center" },
+              { text: "Критичные риски (открытые)", fontSize: 9, color: colors.textLight, alignment: "center" },
               { text: criticalCt.toString(), fontSize: 18, bold: true, color: criticalCt > 0 ? colors.red : colors.green, alignment: "center", margin: [0, 4, 0, 0] }
             ],
             fillColor: colors.bgCard,
@@ -270,7 +278,7 @@ async function generatePDF(session: SessionDetail, findings: Finding[]) {
           },
           {
             stack: [
-              { text: "Существенные риски", fontSize: 9, color: colors.textLight, alignment: "center" },
+              { text: "Существенные риски (открытые)", fontSize: 9, color: colors.textLight, alignment: "center" },
               { text: majorCt.toString(), fontSize: 18, bold: true, color: majorCt > 0 ? colors.amber : colors.textMuted, alignment: "center", margin: [0, 4, 0, 0] }
             ],
             fillColor: colors.bgCard,
@@ -736,7 +744,7 @@ export default function AuditDetailPage() {
             </h1>
             {session.period && session.period !== "All periods" && (
               <div style={{ fontSize: "13px", color: "#7a90c0", marginBottom: "12px" }}>
-                Период: {session.period}
+                Период: {ruPeriod(session.period)}
               </div>
             )}
             <span style={{
@@ -761,7 +769,19 @@ export default function AuditDetailPage() {
             <button
               onClick={async () => {
                 try {
-                  await generatePDF(session, findings);
+                  // Built from the audit as it is NOW on the server: a closure
+                  // confirmed in the chat (another tab) after this page was
+                  // opened must be in the report.
+                  let current: AuditDetailData = data;
+                  try {
+                    const res = await fetch("/api/data", {
+                      method: "POST", headers: { "Content-Type": "application/json" },
+                      body: JSON.stringify({ action: "audit_detail", payload: { sessionId } }),
+                    });
+                    const json = await res.json();
+                    if (res.ok && json.session) { current = json; setData(json); }
+                  } catch { /* offline — use what the page shows */ }
+                  await generatePDF(current.session, current.findings);
                 } catch (e) {
                   console.error("[PDF] Exception:", e);
                   alert("Не удалось сформировать PDF. Попробуйте ещё раз.");
