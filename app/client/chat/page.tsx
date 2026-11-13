@@ -125,6 +125,8 @@ const markdownComponents = {
 // forever, with no visible error. Every failure path here instead throws a
 // normal Error with a real message, which callers catch and always resolve
 // (loading/uploading state is guaranteed to reset — see finally blocks below).
+interface FindingProposal { findingId: string; code: string; title: string; riskLevel: string; basis: string; documents: string[] }
+
 interface StreamHandlers {
   onDelta:    (fullTextSoFar: string) => void;
   onStep?:    (text: string) => void;   // real pipeline step
@@ -240,6 +242,45 @@ export default function ChatPage() {
   // Nothing is analysed until they confirm (server enforces this too).
   const [quoteAsk,       setQuoteAsk]       = useState<{ lines: string[]; totalRub: number } | null>(null);
   const quoteAnswerRef = useRef<((accept: boolean) => void) | null>(null);
+  // Stage 2: findings the agent proposes to close. The agent only proposes —
+  // a finding is closed when the client confirms here (or on the audit page).
+  const [proposals, setProposals] = useState<FindingProposal[]>([]);
+  const [decidingId, setDecidingId] = useState<string | null>(null);
+
+  async function refreshProposals(sid: string | null | undefined) {
+    if (!sid) return;
+    try {
+      const res = await fetch(`/api/findings/decide?sessionId=${encodeURIComponent(sid)}`);
+      if (res.ok) setProposals((await res.json()).proposals ?? []);
+    } catch { /* the cards are a convenience; the audit page shows the same */ }
+  }
+
+  async function decideProposal(p: FindingProposal, decision: "confirm" | "decline") {
+    if (!sessionId || decidingId) return;
+    setDecidingId(p.findingId);
+    try {
+      const res = await fetch("/api/findings/decide", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sessionId, findingId: p.findingId, decision }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        pushAssistantReply(`❌ ${data.error || "Не удалось записать решение."}`);
+      } else {
+        pushAssistantReply(decision === "confirm"
+          ? `Вывод ${p.code} «${p.title}» закрыт по вашему решению. Основание и документы сохранены в отчёте.`
+          : `Вывод ${p.code} «${p.title}» оставлен открытым.`);
+      }
+    } catch {
+      pushAssistantReply("❌ Не удалось записать решение. Повторите попытку.");
+    } finally {
+      setDecidingId(null);
+      await refreshProposals(sessionId);
+    }
+  }
+
+  useEffect(() => { refreshProposals(sessionId); }, [sessionId]);
   // index of the message currently being typewritten (-1 = none)
   const [typingIndex,    setTypingIndex]    = useState(-1);
 
@@ -457,6 +498,7 @@ export default function ChatPage() {
       });
       target = finalText; // authoritative final text, in case of any drift
       serverDone = true;
+      refreshProposals(typeof payload.sessionId === "string" ? payload.sessionId : sessionId);
 
       // Wait for the display to actually finish catching up before
       // resolving — otherwise the message would flip to Markdown rendering
@@ -852,6 +894,45 @@ export default function ChatPage() {
       </div>
 
       {/* Pending files list */}
+      {proposals.length > 0 && !quoteAsk && (
+        <div style={{ margin: "0 0 12px", display: "flex", flexDirection: "column", gap: "8px" }}>
+          {proposals.map(p => (
+            <div key={p.findingId} style={{
+              padding: "14px 18px", background: "#0c2a22", border: "1px solid #1f7a5c", borderRadius: "10px",
+            }}>
+              <div style={{ fontSize: "12px", color: "#6fd3ad", marginBottom: "4px" }}>
+                ИИ-аудитор предлагает закрыть вывод · решение принимаете вы
+              </div>
+              <div style={{ fontSize: "14px", fontWeight: 600, color: "#e8edf8", marginBottom: "6px" }}>
+                {p.code} · {p.title}
+              </div>
+              <div style={{ fontSize: "13px", color: "#a9b8dc", lineHeight: 1.55, marginBottom: "4px" }}>
+                <strong style={{ color: "#c9d4ee" }}>Основание:</strong> {p.basis}
+              </div>
+              {p.documents.length > 0 && (
+                <div style={{ fontSize: "12px", color: "#7a90c0", marginBottom: "10px" }}>
+                  Документы: {p.documents.join("; ")}
+                </div>
+              )}
+              <div style={{ display: "flex", gap: "10px", marginTop: "8px" }}>
+                <button disabled={decidingId !== null} onClick={() => decideProposal(p, "confirm")} style={{
+                  padding: "8px 16px", background: "#1f9d6f", border: "none", borderRadius: "8px",
+                  color: "#fff", fontSize: "13px", fontWeight: 600, cursor: decidingId ? "default" : "pointer", opacity: decidingId ? 0.6 : 1,
+                }}>
+                  Подтвердить закрытие
+                </button>
+                <button disabled={decidingId !== null} onClick={() => decideProposal(p, "decline")} style={{
+                  padding: "8px 16px", background: "transparent", border: "1px solid #1e2d55", borderRadius: "8px",
+                  color: "#7a90c0", fontSize: "13px", cursor: decidingId ? "default" : "pointer", opacity: decidingId ? 0.6 : 1,
+                }}>
+                  Оставить открытым
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
       {quoteAsk && (
         <div style={{
           margin: "0 0 12px", padding: "16px 18px", background: "#0d1f3e",

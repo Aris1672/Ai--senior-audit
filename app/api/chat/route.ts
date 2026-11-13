@@ -6,6 +6,8 @@ import { Pseudonymizer, PseudonymizationError } from "@/lib/pseudonymize";
 import { createAdminClient } from "@/lib/supabase-server";
 import { parseFile, renderPDFPagesAsImages, type DateRange } from "@/lib/file-parser";
 import { billingSchemaReady } from "@/lib/doc-billing-server";
+import { buildFindingsBlock, validateUpdates, UPDATE_FINDINGS_TOOL, type AgentFinding } from "@/lib/finding-updates";
+import { findingsSchemaReady, loadAgentFindings, applyAgentUpdates } from "@/lib/finding-updates-server";
 import { checkRequestVolume, isContextLimitError, CONTEXT_LIMIT_MESSAGE, type VolumePart } from "@/lib/volume";
 import { NextRequest, NextResponse } from "next/server";
 
@@ -528,10 +530,22 @@ export async function POST(req: NextRequest) {
             }
           }
 
+          // Stage 2 (Nov 2026): once the audit has findings, the agent is shown
+          // them with codes and the rules for closing, and gets a second tool
+          // to PROPOSE closing — see lib/finding-updates.ts. Until migration
+          // 006 has been run this is absent and the turn runs as before.
+          let agentFindings: AgentFinding[] = [];
+          if (sessionId && await findingsSchemaReady(supabase)) {
+            agentFindings = await loadAgentFindings(supabase, sessionId);
+          }
+          const findingsBlock = buildFindingsBlock(agentFindings);
+          const stage2 = agentFindings.some(f => f.status === "open");
+
           // Build system prompt: base + audit context + all file contents
-          const systemPrompt = context
-            ? `${AUDIT_SYSTEM_PROMPT}\n\n${buildAuditContext({ ...context, existingFindings })}${fileSection}`
-            : `${AUDIT_SYSTEM_PROMPT}${fileSection}`;
+          // (the stage-2 block replaces the older plain list of finding titles).
+          const systemPrompt = (context
+            ? `${AUDIT_SYSTEM_PROMPT}\n\n${buildAuditContext({ ...context, existingFindings: findingsBlock ? [] : existingFindings })}${fileSection}`
+            : `${AUDIT_SYSTEM_PROMPT}${fileSection}`) + (findingsBlock ? `\n\n${findingsBlock}` : "");
 
           console.log("[chat] System prompt length:", systemPrompt.length,
             "| Model:", AUDIT_MODEL,
@@ -594,7 +608,7 @@ export async function POST(req: NextRequest) {
             thinking: d => { thinkingBuffer += d; },
             text:     d => { flushThinking(); fullText += d; send({ type: "delta", text: d }); },
             reset:    () => { fullText = ""; send({ type: "reset" }); },
-          }, pseudonymizer);
+          }, pseudonymizer, stage2 ? { extraTools: [UPDATE_FINDINGS_TOOL] } : {});
           fullText = result.text; // authoritative
           const toolFindings = result.findings as any[];
           console.log("[chat] audit turn done — reviewed:", result.reviewed,
@@ -616,6 +630,20 @@ export async function POST(req: NextRequest) {
           if (savedResult.saved > 0 || savedResult.skipped > 0) {
             step(`Сохранено новых нарушений: ${savedResult.saved}` +
               (savedResult.skipped > 0 ? ` (повторов пропущено: ${savedResult.skipped})` : ""));
+          }
+
+          // Stage 2: record what the agent concluded about existing findings.
+          // A proposal changes nothing by itself — the client decides.
+          if (stage2 && result.updates.length > 0) {
+            const { valid, skipped } = validateUpdates(result.updates, agentFindings);
+            if (skipped.length > 0) console.warn("[chat] finding updates skipped:", skipped.join(" | "));
+            const applied = await applyAgentUpdates(supabase, sessionId, valid, agentFindings);
+            console.log("[chat] finding updates — proposals:", applied.proposals.length, "| kept open:", applied.keptOpen);
+            if (applied.proposals.length > 0) {
+              step(`Предложено к закрытию: ${applied.proposals.length} — решение за вами`);
+              send({ type: "proposals", proposals: applied.proposals });
+            }
+            if (applied.keptOpen > 0) step(`Остаются открытыми с уточнением, чего не хватает: ${applied.keptOpen}`);
           }
 
           send({ type: "done", message: fullText });

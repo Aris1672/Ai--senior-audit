@@ -39,9 +39,14 @@ export interface AuditCallbacks {
   reset:    () => void;               // discard answer text sent so far
 }
 
+/** Extra tools for one turn (stage 2: `update_findings`). */
+export interface TurnOptions { extraTools?: Anthropic.Messages.Tool[] }
+
 export interface PassResult {
   text: string;
   findings: unknown[];
+  /** Entries of every `update_findings` call (stage 2) — proposals about EXISTING findings. */
+  updates: unknown[];
   toolCalled: boolean;
   stopReason: string | null;
   tokensIn: number;
@@ -51,6 +56,7 @@ export interface PassResult {
 export interface AuditTurnResult {
   text: string;               // final answer text (authoritative)
   findings: unknown[];        // final findings to validate + save
+  updates: unknown[];         // proposals about existing findings (stage 2), to validate + apply
   reviewed: "done" | "skipped" | "failed";
   draft?: PassResult;         // present when a review was attempted
   tokensIn: number;
@@ -73,12 +79,14 @@ async function runPass(
   messages: Msg[],
   on: { text: (d: string) => void; thinking: (d: string) => void; continuing: () => void },
   label: string,
+  extraTools: Anthropic.Messages.Tool[] = [],
 ): Promise<PassResult> {
   let fullText = "";
   let working = [...messages];
   let continuations = 0;
   let stopReason: string | null = null;
   let findings: unknown[] = [];
+  const updates: unknown[] = [];
   let toolCalled = false;
   let tokensIn = 0, tokensOut = 0;
 
@@ -89,7 +97,7 @@ async function runPass(
       max_tokens:  AUDIT_MAX_OUTPUT_TOKENS,
       system,
       messages:    working,
-      tools:       [FINDINGS_TOOL],
+      tools:       [FINDINGS_TOOL, ...extraTools],
       tool_choice: { type: "auto" }, // must stay "auto": type "tool" returns 400 in DeepSeek thinking mode
       ...LLM_EXTRA_PARAMS,
     });
@@ -101,6 +109,11 @@ async function runPass(
     // record_findings must fire at most once per pass, even across
     // max_tokens continuations — a second call is ignored.
     for (const block of final.content) {
+      if (block.type === "tool_use" && block.name === "update_findings") {
+        const input = block.input as { updates?: unknown[] };
+        if (Array.isArray(input?.updates)) updates.push(...input.updates);
+        continue;
+      }
       if (block.type === "tool_use" && block.name === "record_findings") {
         if (toolCalled) {
           console.warn(`[audit:${label}] record_findings called again in the same pass — ignored`);
@@ -138,7 +151,7 @@ async function runPass(
   } while (stopReason === "max_tokens" && continuations <= MAX_CONTINUATIONS);
 
   if (stopReason === "max_tokens") console.warn(`[audit:${label}] hit MAX_CONTINUATIONS — response may be truncated`);
-  return { text: fullText, findings, toolCalled, stopReason, tokensIn, tokensOut };
+  return { text: fullText, findings, updates, toolCalled, stopReason, tokensIn, tokensOut };
 }
 
 // Append the review request to the last user message (two user messages in
@@ -165,8 +178,9 @@ export async function runAuditTurn(
   messages: Msg[],
   cb: AuditCallbacks,
   pz?: Pseudonymizer,
+  opts: TurnOptions = {},
 ): Promise<AuditTurnResult> {
-  if (!pz) return runAuditTurnRaw(system, messages, cb);
+  if (!pz) return runAuditTurnRaw(system, messages, cb, opts);
 
   // The static prompt is ours and has no personal data — it is not coded
   // (coding it could replace ordinary words that look like a client's surname).
@@ -207,12 +221,12 @@ export async function runAuditTurn(
     thinking: d => thinkOut.push(d),
     text:     d => textOut.push(d),
     reset:    () => { textOut.clear(); cb.reset(); },
-  });
+  }, opts);
   textOut.flush(); thinkOut.flush();
   if (pz.unknownTokens > 0) console.warn(`[audit] model used ${pz.unknownTokens} unknown code(s) — left as is`);
 
-  const restorePass = (p: PassResult): PassResult => ({ ...p, text: pz.restore(p.text), findings: pz.restoreDeep(p.findings) });
-  return { ...res, text: pz.restore(res.text), findings: pz.restoreDeep(res.findings),
+  const restorePass = (p: PassResult): PassResult => ({ ...p, text: pz.restore(p.text), findings: pz.restoreDeep(p.findings), updates: pz.restoreDeep(p.updates) });
+  return { ...res, text: pz.restore(res.text), findings: pz.restoreDeep(res.findings), updates: pz.restoreDeep(res.updates),
     draft: res.draft ? restorePass(res.draft) : undefined };
 }
 
@@ -220,7 +234,9 @@ async function runAuditTurnRaw(
   system: string,
   messages: Msg[],
   cb: AuditCallbacks,
+  opts: TurnOptions = {},
 ): Promise<AuditTurnResult> {
+  const extraTools = opts.extraTools ?? [];
   cb.step(LLM_THINKING_ENABLED
     ? `Передаю данные ИИ-аудитору (${AUDIT_MODEL}, глубокий анализ)`
     : `Передаю данные ИИ-аудитору (${AUDIT_MODEL})`);
@@ -260,13 +276,13 @@ async function runAuditTurnRaw(
       }
     },
     continuing: () => cb.step("Отчёт длинный — продолжаю"),
-  }, "draft");
+  }, "draft", extraTools);
 
   if (mode === "undecided") { mode = "direct"; if (held) goDirect(held); }
 
   const needsReview = AUDIT_REVIEW_ENABLED && (p1.toolCalled || looksLikeReport(p1.text));
   if (!needsReview) {
-    return { text: p1.text, findings: p1.findings, reviewed: "skipped", tokensIn: p1.tokensIn, tokensOut: p1.tokensOut };
+    return { text: p1.text, findings: p1.findings, updates: p1.updates, reviewed: "skipped", tokensIn: p1.tokensIn, tokensOut: p1.tokensOut };
   }
 
   // A report that slipped through as a direct answer (no report header in
@@ -282,7 +298,7 @@ async function runAuditTurnRaw(
     cb.reset();
     cb.step("Контроль качества не завершён — показан отчёт без повторной проверки");
     cb.text(p1.text);
-    return { text: p1.text, findings: p1.findings, reviewed: "failed", draft: p1,
+    return { text: p1.text, findings: p1.findings, updates: p1.updates, reviewed: "failed", draft: p1,
       tokensIn: p1.tokensIn + (p2?.tokensIn ?? 0), tokensOut: p1.tokensOut + (p2?.tokensOut ?? 0) };
   };
 
@@ -296,7 +312,7 @@ async function runAuditTurnRaw(
         cb.text(d);
       },
       continuing: () => cb.step("Отчёт длинный — продолжаю"),
-    }, "review");
+    }, "review", extraTools);
   } catch (err) {
     console.error("[audit] review pass error:", err);
     return fallback("review call failed");
@@ -310,6 +326,6 @@ async function runAuditTurnRaw(
   if (!p2.toolCalled && p1.findings.length > 0)  return fallback("review recorded no findings although the draft had some", p2);
 
   cb.step(`Контроль качества завершён: в черновике выводов — ${p1.findings.length}, в итоговом отчёте — ${p2.findings.length}`);
-  return { text: p2.text, findings: p2.findings, reviewed: "done", draft: p1,
+  return { text: p2.text, findings: p2.findings, updates: p2.updates.length ? p2.updates : p1.updates, reviewed: "done", draft: p1,
     tokensIn: p1.tokensIn + p2.tokensIn, tokensOut: p1.tokensOut + p2.tokensOut };
 }

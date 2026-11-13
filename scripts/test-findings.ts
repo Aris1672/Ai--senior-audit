@@ -1,0 +1,65 @@
+// Code test (no LLM, no database): stage 2 — what the agent is shown about
+// existing findings, and validation of what it sends back.
+//   npm run test:findings
+import assert from "node:assert/strict";
+process.env.LLM_API_KEY ||= "test";
+
+async function main() {
+  const { buildFindingsBlock, validateUpdates, findingCode, UPDATE_FINDINGS_TOOL } = await import("../lib/finding-updates");
+  type F = Parameters<typeof buildFindingsBlock>[0][number];
+  const f = (i: number, over: Partial<F> = {}): F => ({
+    id: `id-${i}`, code: findingCode(i), title: `Вывод ${i + 1}`, description: "Описание вывода", recommendation: "Запросить документы",
+    risk_level: "СУЩЕСТВЕННО", evidence_status: "risk_flag", status: "open", proposed: false, agent_note: null, ...over,
+  });
+
+  // 1. No findings yet → nothing is added to the request (a first analysis runs as before).
+  assert.equal(buildFindingsBlock([]), "");
+
+  // 2. The block lists open findings with codes, and closed ones separately.
+  const list = [
+    f(0, { title: "Аванс ООО «Меридиан-Сервис» 480 000,00 без документов" }),
+    f(1, { title: "Двойная оплата счёта № 20781", proposed: true }),
+    f(2, { title: "НДФЛ с дивидендов не удержан", status: "resolved" }),
+    f(3, { title: "Услуги ИП без актов", agent_note: "Нет актов за октябрь и декабрь на 200 000,00." }),
+  ];
+  const block = buildFindingsBlock(list);
+  assert.match(block, /ОТКРЫТЫЕ ВЫВОДЫ \(3\):/);
+  assert.match(block, /\[Н-1\] СУЩЕСТВЕННО · Признак риска · Аванс ООО «Меридиан-Сервис»/);
+  assert.match(block, /\[Н-2\][^\n]*\n[^\n]*\n[^\n]*\n\s+Состояние: закрытие уже предложено/);
+  assert.match(block, /ЗАКРЫТЫЕ ВЫВОДЫ \(1\)[^\n]*\n\[Н-3\] НДФЛ с дивидендов/);
+  assert.match(block, /Ранее ты указал, чего не хватает: Нет актов за октябрь и декабрь/);
+  // The rules that matter most are in it.
+  for (const rule of [/Ты только ПРЕДЛАГАЕШЬ закрытие/, /Решение принимает клиент/, /Только договор, только счёт или только счёт-фактура — недостаточно/,
+    /Счёт или счёт-фактура на первую поставку основанием не являются/, /только слова клиента без документа/, /изображение или скан без распознанного текста/,
+    /При сомнении — keep_open/, /НЕ восемь разделов отчёта/, /Существующие выводы через record_findings не повторяй/]) {
+    assert.match(block, rule);
+  }
+  // A long description does not flood the request.
+  assert.ok(buildFindingsBlock([f(0, { description: "д".repeat(5000) })]).length < 5200);
+
+  // 3. The tool can only propose or keep open — there is no "close" action.
+  const actions = (UPDATE_FINDINGS_TOOL.input_schema as any).properties.updates.items.properties.action.enum;
+  assert.deepEqual(actions, ["propose_close", "keep_open"]);
+
+  // 4. Validation of the agent's answer.
+  const { valid, skipped } = validateUpdates([
+    { finding: "Н-1", action: "propose_close", basis: "Договор № 3 от 01.03.2025 и акты № 1–3 на 480 000,00.", documents: ["dogovor.pdf", "akty.pdf"], remaining: "что-то" },
+    { finding: "[H-4]", action: "keep_open", basis: "Акты представлены за четыре из шести месяцев.", remaining: "Акты за октябрь и декабрь на 200 000,00." },   // Latin H, brackets
+    { finding: "Н-3", action: "propose_close", basis: "Платёжное поручение на 156 000,00." },      // already closed
+    { finding: "Н-9", action: "propose_close", basis: "Какой-то документ подтверждает." },        // no such finding
+    { finding: "Н-2", action: "close", basis: "Закрываю сам, без клиента." },                     // not an allowed action
+    { finding: "Н-2", action: "propose_close", basis: "ок" },                                     // no real basis
+    { finding: "Н-1", action: "keep_open", basis: "Передумал, оставляю открытым вывод." },         // repeated code
+    null,
+  ], list);
+  assert.deepEqual(valid.map(v => [v.code, v.action]), [["Н-1", "propose_close"], ["Н-4", "keep_open"]]);
+  assert.equal(valid[0].findingId, "id-0");
+  assert.equal(valid[0].remaining, "", "nothing is 'remaining' on a closing proposal");
+  assert.deepEqual(valid[0].documents, ["dogovor.pdf", "akty.pdf"]);
+  assert.equal(valid[1].remaining, "Акты за октябрь и декабрь на 200 000,00.");
+  assert.equal(skipped.length, 6);
+  assert.ok(skipped.some(s => /Н-3: вывод уже закрыт/.test(s)) && skipped.some(s => /Н-9: нет такого вывода/.test(s)) && skipped.some(s => /Н-1: повтор/.test(s)));
+
+  console.log("✅ findings (stage 2): all checks passed (block shown to the agent, closing rules present, validation of proposals)");
+}
+main().catch(e => { console.error("❌ findings test failed:", e); process.exit(1); });

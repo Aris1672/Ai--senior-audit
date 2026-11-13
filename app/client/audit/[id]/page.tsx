@@ -70,9 +70,14 @@ async function generatePDF(session: SessionDetail, findings: Finding[]) {
   };
 
   const allFindings  = findings;
-  const criticalCt   = allFindings.filter(f => f.risk_level === "КРИТИЧНО").length;
-  const majorCt      = allFindings.filter(f => f.risk_level === "СУЩЕСТВЕННО").length;
-  const minorCt      = allFindings.filter(f => f.risk_level === "НЕСУЩЕСТВЕННО").length;
+  // The conclusion speaks about what is still OPEN; closed findings stay in
+  // the register below, marked as closed with the basis.
+  const openFindings = allFindings.filter(f => f.status !== "resolved");
+  const resolvedCt   = allFindings.length - openFindings.length;
+  const criticalCt   = openFindings.filter(f => f.risk_level === "КРИТИЧНО").length;
+  const majorCt      = openFindings.filter(f => f.risk_level === "СУЩЕСТВЕННО").length;
+  const minorCt      = openFindings.filter(f => f.risk_level === "НЕСУЩЕСТВЕННО").length;
+  const closedNote   = resolvedCt > 0 ? ` Закрыто по подтверждающим документам: ${resolvedCt} из ${allFindings.length}.` : "";
   const validPeriod  = session.period && session.period !== "All periods" ? session.period : null;
   const auditDate    = new Date(session.created_at).toLocaleDateString("ru-RU", { day: "numeric", month: "long", year: "numeric" });
   const reportDate   = new Date().toLocaleDateString("ru-RU", { day: "numeric", month: "long", year: "numeric" });
@@ -101,7 +106,7 @@ async function generatePDF(session: SessionDetail, findings: Finding[]) {
             stack: [
               {
                 columns: [
-                  { text: `${i + 1}. ${f.title}`, bold: true, fontSize: 12, color: colors.textMain, width: "*" },
+                  { text: `${i + 1}. ${f.title}${f.status === "resolved" ? "  — закрыто" : ""}`, bold: true, fontSize: 12, color: f.status === "resolved" ? colors.textLight : colors.textMain, width: "*" },
                   { text: level, bold: true, fontSize: 9, color: color, alignment: "right", width: "auto" }
                 ],
                 margin: [0, 0, 0, 4]
@@ -136,6 +141,23 @@ async function generatePDF(session: SessionDetail, findings: Finding[]) {
                 layout: "noBorders",
                 fillColor: "#eef3f9",
                 margin: [0, 4, 0, 0]
+              }] : []),
+              ...(f.status === "resolved" ? [{
+                text: [
+                  { text: `ЗАКРЫТО ${ruDate(f.resolved_at)} по решению клиента. `, bold: true, color: "#1b7f55" },
+                  { text: f.resolution_basis ? `Основание: ${f.resolution_basis}` : "" },
+                  { text: f.resolution_documents ? ` Документы: ${f.resolution_documents}.` : "" },
+                ],
+                fontSize: 9.5, color: colors.textMuted, margin: [0, 8, 0, 0], lineHeight: 1.3,
+              }] : f.proposed_at ? [{
+                text: [
+                  { text: "Предложено к закрытию, ожидает решения клиента. ", bold: true, color: "#a36a00" },
+                  { text: f.proposal_basis ? `Основание: ${f.proposal_basis}` : "" },
+                ],
+                fontSize: 9.5, color: colors.textMuted, margin: [0, 8, 0, 0], lineHeight: 1.3,
+              }] : f.agent_note ? [{
+                text: [{ text: "Остаётся открытым. ", bold: true, color: colors.textMain }, { text: f.agent_note }],
+                fontSize: 9.5, color: colors.textMuted, margin: [0, 8, 0, 0], lineHeight: 1.3,
               }] : []),
             ],
             fillColor: colors.bgCard,
@@ -281,14 +303,16 @@ async function generatePDF(session: SessionDetail, findings: Finding[]) {
                 text: criticalCt > 0
                   ? `По результатам проверки выявлено критичных нарушений: ${criticalCt}` +
                     (majorCt > 0 ? `, существенных нарушений и признаков риска: ${majorCt}` : "") +
-                    `. Критичные нарушения требуют незамедлительного исправления — см. реестр ниже.`
+                    `. Критичные нарушения требуют незамедлительного исправления — см. реестр ниже.${closedNote}`
                   : majorCt > 0
                     ? `Критичных нарушений не выявлено. Выявлено существенных нарушений и признаков риска: ${majorCt}` +
                       (minorCt > 0 ? `; несущественных замечаний: ${minorCt}` : "") +
-                      `. Существенные нарушения требуют исправления и могут повлечь налоговые доначисления, штрафы и пени — см. реестр ниже.`
-                    : allFindings.length > 0
-                      ? `Критичных и существенных нарушений не выявлено. Несущественных замечаний: ${minorCt} — см. реестр ниже.`
-                      : "В пределах проверенных данных нарушений не выявлено. Вывод относится только к представленным документам и периоду.",
+                      `. Существенные нарушения требуют исправления и могут повлечь налоговые доначисления, штрафы и пени — см. реестр ниже.${closedNote}`
+                    : openFindings.length > 0
+                      ? `Критичных и существенных нарушений не выявлено. Несущественных замечаний: ${minorCt} — см. реестр ниже.${closedNote}`
+                      : allFindings.length > 0
+                        ? `Все выявленные нарушения закрыты по подтверждающим документам (${resolvedCt}). Основания закрытия — в реестре ниже.`
+                        : "В пределах проверенных данных нарушений не выявлено. Вывод относится только к представленным документам и периоду.",
                 fontSize: 10, color: colors.textMain, lineHeight: 1.4
               }
             ],
@@ -335,7 +359,17 @@ interface Finding {
   // shapes might still omit it — render defensively wherever it's used.
   evidence_status?: EvidenceStatus;
   created_at:      string;
+  // Stage 2 (closing with supporting documents) — present after migration 006.
+  proposed_at?:          string | null;   // the agent proposes closing; waits for the client
+  proposal_basis?:       string | null;
+  proposal_documents?:   string | null;
+  agent_note?:           string | null;   // what the agent says is still missing
+  resolved_at?:          string | null;
+  resolution_basis?:     string | null;
+  resolution_documents?: string | null;
 }
+
+const ruDate = (iso?: string | null) => (iso ? new Date(iso).toLocaleDateString("ru-RU", { timeZone: "Europe/Moscow" }) : "");
 
 interface Message {
   role:    "user" | "assistant";
@@ -606,6 +640,33 @@ export default function AuditDetailPage() {
   const [loading, setLoading] = useState(true);
   const [mounted, setMounted] = useState(false);
   const [tab,     setTab]     = useState<"findings" | "chat">("findings");
+  const [deciding, setDeciding] = useState<string | null>(null);
+  const [decideError, setDecideError] = useState("");
+
+  // Stage 2: the client's decision on a finding (confirm / decline the
+  // agent's proposal, or reopen a closed finding).
+  async function decide(findingId: string, decision: "confirm" | "decline" | "reopen") {
+    if (deciding) return;
+    setDeciding(findingId); setDecideError("");
+    try {
+      const res = await fetch("/api/findings/decide", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sessionId, findingId, decision }),
+      });
+      const out = await res.json().catch(() => ({}));
+      if (!res.ok) setDecideError(out.error || "Не удалось записать решение");
+      const fresh = await fetch("/api/data", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "audit_detail", payload: { sessionId } }),
+      });
+      const json = await fresh.json();
+      if (json.session) setData(json);
+    } catch {
+      setDecideError("Не удалось записать решение");
+    } finally {
+      setDeciding(null);
+    }
+  }
 
   useEffect(() => {
     if (!sessionId) return;
@@ -806,7 +867,8 @@ export default function AuditDetailPage() {
                     marginBottom: "10px",
                   }}>
                     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: "12px" }}>
-                      <div style={{ fontSize: "14px", fontWeight: "600", color: "#e8edf8", flex: 1 }}>
+                      <div style={{ fontSize: "14px", fontWeight: "600", color: f.status === "resolved" ? "#6b7fa8" : "#e8edf8", flex: 1,
+                                    textDecoration: f.status === "resolved" ? "line-through" : "none" }}>
                         {i + 1}. {f.title}
                       </div>
                       {f.evidence_status && (
@@ -841,6 +903,42 @@ export default function AuditDetailPage() {
                       }}>
                         💡 {f.recommendation}
                       </div>
+                    )}
+
+                    {/* Stage 2: closing. The agent proposes, the client decides. */}
+                    {f.status === "resolved" ? (
+                      <div style={{ marginTop: "10px", padding: "10px 12px", background: "#0c2a22", border: "1px solid #1f7a5c", borderRadius: "6px", fontSize: "12px", color: "#a9d9c5", lineHeight: 1.55 }}>
+                        <strong style={{ color: "#2ecc8f" }}>Закрыто {ruDate(f.resolved_at)} по вашему решению.</strong>{" "}
+                        {f.resolution_basis && <>Основание: {f.resolution_basis} </>}
+                        {f.resolution_documents && <span style={{ color: "#6fa893" }}>Документы: {f.resolution_documents}. </span>}
+                        <button disabled={deciding !== null} onClick={() => decide(f.id, "reopen")} style={{
+                          marginLeft: "6px", background: "transparent", border: "none", color: "#7a90c0", fontSize: "12px",
+                          textDecoration: "underline", cursor: deciding ? "default" : "pointer", padding: 0,
+                        }}>Открыть заново</button>
+                      </div>
+                    ) : f.proposed_at ? (
+                      <div style={{ marginTop: "10px", padding: "12px", background: "#0c2a22", border: "1px solid #1f7a5c", borderRadius: "6px", fontSize: "12px", color: "#a9b8dc", lineHeight: 1.55 }}>
+                        <div style={{ color: "#6fd3ad", marginBottom: "4px" }}>ИИ-аудитор предлагает закрыть этот вывод · решение принимаете вы</div>
+                        {f.proposal_basis && <div><strong style={{ color: "#c9d4ee" }}>Основание:</strong> {f.proposal_basis}</div>}
+                        {f.proposal_documents && <div style={{ color: "#7a90c0" }}>Документы: {f.proposal_documents}</div>}
+                        <div style={{ display: "flex", gap: "8px", marginTop: "10px" }}>
+                          <button disabled={deciding !== null} onClick={() => decide(f.id, "confirm")} style={{
+                            padding: "7px 14px", background: "#1f9d6f", border: "none", borderRadius: "6px", color: "#fff",
+                            fontSize: "12px", fontWeight: 600, cursor: deciding ? "default" : "pointer", opacity: deciding ? 0.6 : 1,
+                          }}>Подтвердить закрытие</button>
+                          <button disabled={deciding !== null} onClick={() => decide(f.id, "decline")} style={{
+                            padding: "7px 14px", background: "transparent", border: "1px solid #1e2d55", borderRadius: "6px", color: "#7a90c0",
+                            fontSize: "12px", cursor: deciding ? "default" : "pointer", opacity: deciding ? 0.6 : 1,
+                          }}>Оставить открытым</button>
+                        </div>
+                      </div>
+                    ) : f.agent_note ? (
+                      <div style={{ marginTop: "10px", fontSize: "12px", color: "#7a90c0", lineHeight: 1.5 }}>
+                        <strong style={{ color: "#a9b8dc" }}>По загруженным документам вывод остаётся открытым.</strong> {f.agent_note}
+                      </div>
+                    ) : null}
+                    {decideError && deciding === null && f.proposed_at && (
+                      <div style={{ marginTop: "6px", fontSize: "12px", color: "#e84040" }}>{decideError}</div>
                     )}
                   </div>
                 ))}

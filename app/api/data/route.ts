@@ -482,7 +482,8 @@ export async function POST(req: NextRequest) {
             .single(),
           supabase
             .from("findings")
-            .select("id, risk_level, title, description, legal_basis, recommendation, status, created_at")
+            // "*": the closing columns (migration 006) come along when they exist.
+            .select("*")
             .eq("session_id", sessionId)
             .order("created_at", { ascending: true }),
           supabase
