@@ -9,7 +9,8 @@ import { createHash } from "node:crypto";
 import { createAdminClient } from "./supabase-server";
 import { parseFile, type DateRange, type ParseResult } from "./file-parser";
 import { mergeKeyLists } from "./operation-keys";
-import { DEFAULT_PAGE_RATE_RUB } from "./doc-billing";
+import { DEFAULT_PAGE_RATE_RUB, PAGE_KINDS, NOT_READ_KINDS } from "./doc-billing";
+import { ocrSidecarPath } from "./ocr";
 
 type Admin = ReturnType<typeof createAdminClient>;
 
@@ -118,7 +119,7 @@ export async function loadAcceptedContent(
 ): Promise<{ knownKeys: Map<string, number>; hashes: Set<string> }> {
   const { data: docs } = await supabase
     .from("documents")
-    .select("id, file_type, storage_path, content_hash")
+    .select("id, file_type, storage_path, content_hash, billing_kind")
     .eq("session_id", sessionId)
     .eq("billing_status", "confirmed");
 
@@ -126,7 +127,9 @@ export async function loadAcceptedContent(
   const lists: string[][] = [];
   for (const doc of docs ?? []) {
     if (doc.id === exceptDocumentId) continue;
-    if (doc.content_hash) hashes.add(doc.content_hash);
+    // A file that was not read (no recognition then, or the service was down)
+    // is not a repeat when uploaded again — it is priced and read afresh.
+    if (doc.content_hash && !NOT_READ_KINDS.has(doc.billing_kind ?? "")) hashes.add(doc.content_hash);
     if (!OPERATION_TYPES.has(doc.file_type) || !doc.storage_path) continue;
     const { data: blob } = await supabase.storage.from("audit-documents").download(doc.storage_path);
     if (!blob) continue;
@@ -177,11 +180,12 @@ export async function settleDocuments(
     for (const r of rows) {
       addedRub += Number(r.billing_amount_rub ?? 0);
       if (r.billing_kind === "operations") addedOps += Number(r.billing_new_units ?? 0);
-      if (r.billing_kind === "pages")      addedPages += Number(r.billing_new_units ?? 0);
+      if (PAGE_KINDS.has(r.billing_kind)) addedPages += Number(r.billing_new_units ?? 0);
     }
   } else {
     // A declined file is not kept: it was never analysed and never will be.
-    const paths = rows.map(r => r.storage_path).filter(Boolean) as string[];
+    // The recognised text of a scan (if any) is removed with it.
+    const paths = (rows.map(r => r.storage_path).filter(Boolean) as string[]).flatMap(p => [p, ocrSidecarPath(p)]);
     if (paths.length) await supabase.storage.from("audit-documents").remove(paths);
   }
 

@@ -12,7 +12,7 @@
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
-export type ParseMethod = "xlsx" | "xls" | "csv" | "xml" | "docx" | "doc" | "1c_txt" | "1c_odata" | "pdf" | "fallback";
+export type ParseMethod = "xlsx" | "xls" | "csv" | "xml" | "docx" | "doc" | "1c_txt" | "1c_odata" | "pdf" | "ocr" | "fallback";
 
 export interface ParseResult {
   rowCount: number;
@@ -37,6 +37,9 @@ export interface ParseResult {
   // 1C snapshot: names of individuals known from the base's own fields —
   // handed to the pseudonymizer as certain (see lib/c1-reader.ts).
   personNames?: string[];
+  // Scan or photo recognised by services/ocr (see lib/ocr.ts): page counts
+  // by status. Present only when parseMethod is "ocr".
+  ocr?: { pages: number; reliable: number; unreliable: number; empty: number; minConfidence: number };
 }
 
 /** A single rendered PDF page, ready to send to Claude's vision input. */
@@ -675,7 +678,7 @@ export async function parsePDF(buffer: ArrayBuffer): Promise<ParseResult> {
         rowCount:      0,
         parseMethod:   "pdf",
         likelyScanned: true,
-        textContent:   "[PDF не содержит извлекаемого текста — вероятно, это скан. Страницы будут переданы модели как изображения.]",
+        textContent:   "[PDF не содержит извлекаемого текста — вероятно, это скан.]",
         detectedColumns: [`Страниц: ${numPages}`],
         pageCount:     numPages,
         parsedAt:      now(),

@@ -5,6 +5,7 @@ import { runAuditTurn } from "@/lib/audit-engine";
 import { Pseudonymizer, PseudonymizationError } from "@/lib/pseudonymize";
 import { createAdminClient } from "@/lib/supabase-server";
 import { parseFile, renderPDFPagesAsImages, type DateRange } from "@/lib/file-parser";
+import { parseStoredOcr, ocrSidecarPath, ocrTextForModel, ocrCounts } from "@/lib/ocr";
 import { billingSchemaReady } from "@/lib/doc-billing-server";
 import { buildFindingsBlock, validateUpdates, proposalsFromText, UPDATE_FINDINGS_TOOL, type AgentFinding } from "@/lib/finding-updates";
 import { findingsSchemaReady, loadAgentFindings, applyAgentUpdates } from "@/lib/finding-updates-server";
@@ -30,13 +31,13 @@ interface DocumentsResult {
   personNames: string[];
 }
 
-// Placeholder text for images / scanned PDFs while the audit model can't
-// read them (DeepSeek). The instruction makes the model tell the client
+// Placeholder text for images / scanned PDFs that were not recognised at
+// upload (no OCR service configured, or uploaded before it was). The instruction makes the model tell the client
 // plainly which documents were skipped, rather than silently ignoring them.
 function UNREADABLE_IMAGE_NOTE(fileName: string, kind: string): string {
-  return `[Документ: ${fileName} — ${kind}. Распознавание изображений пока не подключено, ` +
-    `содержимое этого документа НЕ передано на анализ. Обязательно сообщи пользователю, ` +
-    `что этот документ не проанализирован, и предложи загрузить его в текстовом формате ` +
+  return `[Документ: ${fileName} — ${kind}. Текст этого документа не распознан, ` +
+    `содержимое НЕ передано на анализ. Обязательно сообщи пользователю, ` +
+    `что этот документ не проанализирован, и предложи загрузить его ещё раз или в текстовом формате ` +
     `(PDF с текстовым слоем, XLSX, DOCX, выгрузка 1С).]`;
 }
 
@@ -73,12 +74,15 @@ async function getAllDocumentsContent(
     const { data: allDocs, error: docErr } = await supabase
       .from("documents")
       .select(billingReady
-        ? "storage_path, file_name, file_type, page_count, billing_status"
-        : "storage_path, file_name, file_type, page_count")
+        ? "storage_path, file_name, file_type, page_count, parsed_data, billing_status, billing_kind"
+        : "storage_path, file_name, file_type, page_count, parsed_data")
       .eq("session_id", sessionId)
       .order("uploaded_at", { ascending: true });
 
-    type DocRow = { storage_path: string; file_name: string; file_type: string; page_count: number | null; billing_status?: string };
+    type DocRow = {
+      storage_path: string; file_name: string; file_type: string; page_count: number | null;
+      parsed_data: { parseMethod?: string } | null; billing_status?: string; billing_kind?: string | null;
+    };
     const rows = (allDocs ?? []) as unknown as DocRow[];
     const docs = billingReady ? rows.filter(d => d.billing_status === "confirmed") : rows;
     const waiting = billingReady ? rows.filter(d => d.billing_status === "pending") : [];
@@ -102,6 +106,39 @@ async function getAllDocumentsContent(
 
     for (const doc of docs) {
       if (!doc.storage_path) continue;
+
+      // ── Scan or photo recognised at upload: read the stored text ─────────
+      // Recognised once (/api/upload), never again; the original is not needed.
+      if (doc.parsed_data?.parseMethod === "ocr") {
+        const { data: side, error: sideErr } = await supabase.storage
+          .from("audit-documents").download(ocrSidecarPath(doc.storage_path));
+        if (sideErr || !side) {
+          console.error("[chat] Recognised text missing for", doc.file_name, ":", sideErr?.message);
+          sections.push(`[Документ: ${doc.file_name} — скан; распознанный текст не найден, документ НЕ проанализирован. Сообщи об этом пользователю и предложи загрузить документ ещё раз.]`);
+          continue;
+        }
+        const stored = parseStoredOcr(await side.arrayBuffer());
+        const c = ocrCounts(stored);
+        step(c.reliable === c.pages
+          ? `«${doc.file_name}» — скан, распознанный текст: ${c.pages} стр.`
+          : `«${doc.file_name}» — скан: распознано надёжно ${c.reliable} из ${c.pages} стр.`);
+        const content = ocrTextForModel(stored);
+        sizes.push({ name: doc.file_name, chars: content.length });
+        const header = [
+          `Файл: ${doc.file_name}`,
+          `Формат: СКАН (текст распознан, OCR)`,
+          `Страниц: ${c.pages}; распознано надёжно: ${c.reliable}; не распознано надёжно: ${c.unreliable}; пустых: ${c.empty}`,
+        ].join("\n");
+        sections.push(`=== ДОКУМЕНТ: ${doc.file_name} ===\n${header}\n\n${content}\n=== КОНЕЦ: ${doc.file_name} ===`);
+        continue;
+      }
+      if (doc.billing_kind === "ocr_failed") {
+        step(`«${doc.file_name}» — скан не распознан: сервис распознавания был недоступен при загрузке`);
+        sections.push(`[Документ: ${doc.file_name} — скан или изображение. При загрузке сервис распознавания был недоступен, ` +
+          `содержимое НЕ передано на анализ и не оплачено. Обязательно сообщи пользователю, что этот документ не проанализирован, ` +
+          `и предложи загрузить его ещё раз.]`);
+        continue;
+      }
 
       console.log("[chat] Downloading:", doc.file_name, "— file_type:", doc.file_type);
       step(`Читаю «${doc.file_name}»`);
@@ -131,7 +168,7 @@ async function getAllDocumentsContent(
         // NOT analyzed so it says so instead of guessing. Server-side OCR
         // (PUNCH_LIST Step B) will turn these into text.
         if (!LLM_SUPPORTS_IMAGES) {
-          step(`«${doc.file_name}» — изображение, пропущено: распознавание сканов ещё не подключено`);
+          step(`«${doc.file_name}» — изображение без распознанного текста, пропущено`);
           sections.push(UNREADABLE_IMAGE_NOTE(doc.file_name, "изображение"));
           continue;
         }
@@ -177,7 +214,7 @@ async function getAllDocumentsContent(
       if (doc.file_type === "pdf" && parsed.likelyScanned) {
         if (!LLM_SUPPORTS_IMAGES) {
           console.log("[chat]", doc.file_name, "— scanned PDF detected, OCR not available yet — not sent");
-          step(`«${doc.file_name}» — скан без текста, пропущен: распознавание сканов ещё не подключено`);
+          step(`«${doc.file_name}» — скан без распознанного текста, пропущен`);
           sections.push(UNREADABLE_IMAGE_NOTE(doc.file_name, "отсканированный PDF без текстового слоя"));
           continue;
         }

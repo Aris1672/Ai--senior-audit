@@ -1,0 +1,7 @@
+# Pinned to the versions the service was tested with (Nov 2026).
+fastapi==0.162.6
+uvicorn==0.54.0
+pytesseract==0.3.13
+opencv-python-headless==5.0.0.93
+numpy==2.5.4
+pillow==13.0.0

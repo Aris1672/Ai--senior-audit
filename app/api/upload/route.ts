@@ -7,6 +7,11 @@
  * the client confirms the quote (/api/billing/confirm-documents). This is the
  * same for the first file of an audit and for files added later in the chat.
  *
+ * Scans and photos (Nov 13, 2026): a JPG / PNG, or a PDF without a text
+ * layer, is sent to our own recognition service (lib/ocr-client.ts) here, once.
+ * The result is stored beside the file (`<path>.ocr.json`) and read from there
+ * by every later turn; only pages recognised reliably are analysed and charged.
+ *
  * The caller must be signed in and own the audit; the client id is taken
  * from the audit, not from the request.
  */
@@ -15,6 +20,8 @@ import { createAdminClient } from "@/lib/supabase-server";
 import { parseFile, is1CClientBankExchange, toParsedSummary } from "@/lib/file-parser";
 import { NextRequest, NextResponse } from "next/server";
 import { quoteDocument, describeQuote, type DocumentQuote } from "@/lib/doc-billing";
+import { recognizeDocument, OCR_ENABLED, OcrUnavailableError } from "@/lib/ocr-client";
+import { buildStoredOcr, minConfidenceFromEnv, ocrParseResult, ocrSidecarPath, ocrCounts } from "@/lib/ocr";
 import {
   authorizeSession, isAccessError, billingSchemaReady, resolveRates, loadAcceptedContent, sha256,
 } from "@/lib/doc-billing-server";
@@ -186,6 +193,34 @@ export async function POST(req: NextRequest) {
       await supabase.from("documents").update({ status: "ready" }).eq("id", doc.id);
     }
 
+    // ── Scan or photo: recognise the text once, on our own server ─────────
+    let ocrUnavailable = false;
+    const isScan = fileType === "image" || (fileType === "pdf" && !!parsed?.likelyScanned);
+    if (isScan && OCR_ENABLED) {
+      try {
+        const mediaType = fileType === "pdf" ? "application/pdf" : (file.type === "image/png" ? "image/png" : "image/jpeg");
+        const t0 = Date.now();
+        const result = await recognizeDocument(arrayBuffer, mediaType, parsed?.pageCount ?? 1);
+        if (result) {
+          const stored = buildStoredOcr(result.engine, result.pages, minConfidenceFromEnv());
+          const { error: sideErr } = await supabase.storage
+            .from("audit-documents")
+            .upload(ocrSidecarPath(storagePath), new TextEncoder().encode(JSON.stringify(stored)), { contentType: "application/json", upsert: true });
+          if (sideErr) throw new OcrUnavailableError(`could not store the recognised text: ${sideErr.message}`);
+          parsed = ocrParseResult(stored);
+          await supabase.from("documents")
+            .update({ parsed_data: toParsedSummary(parsed), status: "ready", page_count: parsed.pageCount ?? null })
+            .eq("id", doc.id);
+          const c = ocrCounts(stored);
+          // Counts only — recognised text is never logged.
+          console.log(`[upload] OCR — pages: ${c.pages} | reliable: ${c.reliable} | unreliable: ${c.unreliable} | empty: ${c.empty} | ${Date.now() - t0} ms`);
+        }
+      } catch (err) {
+        ocrUnavailable = true;
+        console.error("[upload] OCR failed — document treated as unreadable:", (err as Error)?.message);
+      }
+    }
+
     // ── Quote ─────────────────────────────────────────────────────────────
     let quote: DocumentQuote | null = null;
     let quoteText: string | null = null;
@@ -202,6 +237,7 @@ export async function POST(req: NextRequest) {
         knownKeys: accepted.knownKeys,
         operationRateRub: rates.operationRateRub,
         pageRateRub: rates.pageRateRub,
+        ocrUnavailable,
       });
       quoteText = describeQuote(file.name, quote);
       await supabase.from("documents").update({

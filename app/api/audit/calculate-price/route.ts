@@ -24,7 +24,7 @@ import { createAdminClient } from "@/lib/supabase-server";
 import { parseFile, toParsedSummary } from "@/lib/file-parser";
 import { calcAuditPrice } from "@/lib/billing";
 import { NextRequest, NextResponse } from "next/server";
-import { describeQuote, type DocumentQuote } from "@/lib/doc-billing";
+import { describeQuote, PAGE_KINDS, type DocumentQuote } from "@/lib/doc-billing";
 import { authorizeSession, isAccessError, billingSchemaReady } from "@/lib/doc-billing-server";
 
 export async function POST(req: NextRequest) {
@@ -111,7 +111,7 @@ export async function POST(req: NextRequest) {
         };
         priceRub += q.amountRub;
         if (q.kind === "operations") operations += q.newUnits;
-        if (q.kind === "pages")      pages += q.newUnits;
+        if (PAGE_KINDS.has(q.kind))  pages += q.newUnits;
         lines.push(describeQuote(d.file_name, q));
       }
       return NextResponse.json({

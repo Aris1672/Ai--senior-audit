@@ -2,9 +2,9 @@
 
 Prioritized by what it blocks. Derived from full source review (see PROJECT_STATUS.md for details on each item).
 
-> **▶ RESUME HERE (handover Nov 13, 2026, 17:00): BUILD OCR ON THE USER'S OWN SERVER.** Read `claude/where-we-are.md` in the claude.ai project first. Design agreed: `services/ocr/` (FastAPI + Tesseract `rus+eng`, its own Coolify app like `services/ner`, mandatory token); confidence gate (low confidence → not analysed, not charged); recognised text stored once, coded as usual; the agent told the text is from a scan — a scanned amount supports closing a finding only if it matches the base or the statement; pages that pass are charged per page. Waiting from the user: a few real scans to tune the threshold. To settle with the user: what happens when the OCR service is down (suggested: the document is treated as unreadable, 0 ₽). Before building: `npm run check:audit` once.
+> **▶ NOW (Nov 13, 2026, evening): OCR BUILT — waiting for deploy and the user's test.** `services/ocr/` (Tesseract, table lines removed before reading), gate at confidence 75, recognised text stored once (`<file>.ocr.json`), reliable pages × 20 ₽, the agent told the text is from a scan. **To switch on:** new Coolify app from `services/ocr` (see its README), `OCR_URL=http://ocr:8000` + `OCR_TOKEN` in the auditor, redeploy. Details: top entry of `PROJECT_STATUS.md`. **To confirm with the user:** service down at upload → document unreadable, 0 ₽, "upload again later" (built that way). Still wanted: a few real scans to check the threshold. Before testing: `npm run check:audit` once.
 > - [x] Stage 2 part 1 — closing findings (agent proposes, client confirms; reconsideration «Пересмотри вывод Н-…») — **verified by the user Nov 13**.
-> - [ ] **OCR** (above).
+> - [x] **OCR** built (above) — [ ] deployed, [ ] tried by the user, [ ] threshold checked on real scans.
 > - [ ] Step 4c — one run against the 1С:Фреш trial base.
 > - [ ] Rest of stage 2: client closing a finding without a proposal (not requested); whether stage 2 is a separately started paid step.
 
