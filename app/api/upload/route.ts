@@ -194,9 +194,16 @@ export async function POST(req: NextRequest) {
     }
 
     // ── Scan or photo: recognise the text once, on our own server ─────────
+    // What the audit already holds — read once, used for the repeat check
+    // below and for the quote.
+    const accepted = billingReady ? await loadAcceptedContent(supabase, sessionId, period, doc.id) : null;
+    const sameFileAlreadyAccepted = !!accepted?.hashes.has(contentHash);
+
     let ocrUnavailable = false;
     const isScan = fileType === "image" || (fileType === "pdf" && !!parsed?.likelyScanned);
-    if (isScan && OCR_ENABLED) {
+    // A scan already accepted in this audit (same bytes) is a repeat: it is
+    // not recognised again — it will be priced as a repeat and removed.
+    if (isScan && OCR_ENABLED && !sameFileAlreadyAccepted) {
       try {
         const mediaType = fileType === "pdf" ? "application/pdf" : (file.type === "image/png" ? "image/png" : "image/jpeg");
         const t0 = Date.now();
@@ -230,11 +237,10 @@ export async function POST(req: NextRequest) {
         await supabase.from("documents").update({ billing_status: "declined" }).eq("id", doc.id);
         return NextResponse.json({ error: "Тариф не настроен. Обратитесь к администратору." }, { status: 500 });
       }
-      const accepted = await loadAcceptedContent(supabase, sessionId, period, doc.id);
       quote = quoteDocument({
         fileType, parsed,
-        sameFileAlreadyAccepted: accepted.hashes.has(contentHash),
-        knownKeys: accepted.knownKeys,
+        sameFileAlreadyAccepted,
+        knownKeys: accepted?.knownKeys ?? new Map(),
         operationRateRub: rates.operationRateRub,
         pageRateRub: rates.pageRateRub,
         ocrUnavailable,

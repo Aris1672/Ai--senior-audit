@@ -89,6 +89,14 @@ async function main() {
   assert.equal(proposalsFromText("Н-9 — остаётся открытым. Вывод Н-3 закрыт ранее. Предлагаю закрыть вопрос позже.").length, 0, "only an explicit 'Н-… — предлагаю закрыть' counts");
   assert.match(buildFindingsBlock([f(0)]), /без вызова инструмента клиент не увидит предложения/);
 
+  // A reply cut at a tool call is finished by a second call (lib/audit-engine.ts).
+  const { looksUnfinished } = await import("../lib/audit-engine");
+  assert.equal(looksUnfinished(""), true);
+  assert.equal(looksUnfinished("подтверждение уплаты аванса УСН за полугодие 30 000,00 ₽ (Н-10), пла"), true);
+  assert.equal(looksUnfinished("договор займа № 1-3 с подтверждением возврата (Н-6)."), false);
+  assert.equal(looksUnfinished("**Новые выводы:** нет.  "), false);
+  assert.equal(looksUnfinished("| Н-1 | закрыт |"), false);
+
   console.log("✅ findings (stage 2): all checks passed (block shown to the agent, closing rules present, validation of proposals)");
 }
 main().catch(e => { console.error("❌ findings test failed:", e); process.exit(1); });

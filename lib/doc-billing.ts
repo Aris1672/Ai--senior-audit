@@ -65,6 +65,12 @@ export function quoteDocument(q: QuoteInput): DocumentQuote {
     return zero("ocr_failed", q.parsed?.pageCount ?? (q.fileType === "image" ? 1 : 0));
   }
 
+  // A scan or photo already accepted in this audit (same bytes) is a repeat
+  // whether or not it was recognised again.
+  if (q.sameFileAlreadyAccepted && (q.fileType === "image" || q.parsed?.likelyScanned)) {
+    return zero("duplicate", q.parsed?.pageCount ?? 1, q.pageRateRub);
+  }
+
   if (q.parsed?.parseMethod === "ocr" && q.parsed.ocr) {
     const { pages, reliable } = q.parsed.ocr;
     if (q.sameFileAlreadyAccepted) return zero("duplicate", pages, q.pageRateRub);

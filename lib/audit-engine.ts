@@ -64,6 +64,14 @@ export interface AuditTurnResult {
 }
 
 const MAX_CONTINUATIONS = 5; // hard safety limit on auto-continue loops
+const MAX_TOOL_RESUMES = 2;  // finishing the text after a tool call (see runPass)
+
+/** True when the reply is empty or stops mid-sentence (no closing punctuation). */
+export function looksUnfinished(text: string): boolean {
+  const t = text.replace(/[\s*_`]+$/u, "");
+  if (!t) return true;
+  return !/[.!?…:;»")\]|]$/u.test(t);
+}
 const GATE_CHARS = 400;      // how much of pass 1 to hold before deciding draft vs direct answer
 
 function looksLikeReport(text: string): boolean {
@@ -89,6 +97,8 @@ async function runPass(
   const updates: unknown[] = [];
   let toolCalled = false;
   let tokensIn = 0, tokensOut = 0;
+  let toolResumes = 0;
+  let resumeAfterTool = false;
 
   do {
     let chunk = "";
@@ -148,7 +158,32 @@ async function runPass(
       ];
       continuations++;
     }
-  } while (stopReason === "max_tokens" && continuations <= MAX_CONTINUATIONS);
+
+    // The model stopped to call a tool (record_findings / update_findings).
+    // A tool call ends the response, so whatever the model meant to write
+    // after it was lost — seen Nov 13 on a stage-2 reply cut mid-word. When
+    // the visible text is empty or plainly unfinished, answer the tool call
+    // and let the model finish the text. The tool input was captured above;
+    // a repeated call in the continuation is ignored (record_findings) or
+    // dropped as a repeat by validation (update_findings).
+    resumeAfterTool = false;
+    if (stopReason === "tool_use" && toolResumes < MAX_TOOL_RESUMES && looksUnfinished(fullText)) {
+      const toolUses = final.content.filter(b => b.type === "tool_use") as Anthropic.Messages.ToolUseBlock[];
+      if (toolUses.length > 0) {
+        working = [
+          ...working,
+          { role: "assistant", content: final.content as unknown as Anthropic.Messages.ContentBlockParam[] },
+          { role: "user", content: toolUses.map(t => ({
+              type: "tool_result" as const, tool_use_id: t.id,
+              content: "Принято. Продолжи ответ клиенту ровно с того места, где текст оборвался; не повторяй уже написанное и не вызывай инструменты повторно.",
+            })) },
+        ];
+        toolResumes++;
+        resumeAfterTool = true;
+        console.log(`[audit:${label}] text unfinished at a tool call — resuming (${toolResumes})`);
+      }
+    }
+  } while ((stopReason === "max_tokens" && continuations <= MAX_CONTINUATIONS) || resumeAfterTool);
 
   if (stopReason === "max_tokens") console.warn(`[audit:${label}] hit MAX_CONTINUATIONS — response may be truncated`);
   return { text: fullText, findings, updates, toolCalled, stopReason, tokensIn, tokensOut };

@@ -83,6 +83,9 @@ async function main() {
   assert.deepEqual([qf.kind, qf.units, qf.amountRub], ["ocr_failed", 4, 0]);
   assert.match(describeQuote("скан.pdf", qf), /распознавание сканов сейчас недоступно.*ещё раз позже/);
   assert.ok(NOT_READ_KINDS.has("ocr_failed") && NOT_READ_KINDS.has("unreadable") && !NOT_READ_KINDS.has("scan"));
+  // A scan already in the audit is a repeat even when it is not recognised again.
+  assert.deepEqual([quote("pdf", scanPdf, { sameFileAlreadyAccepted: true }).kind,
+                    quote("image", null, { sameFileAlreadyAccepted: true }).kind], ["duplicate", "duplicate"]);
   // Without the service configured nothing changes: unreadable, 0 ₽.
   assert.deepEqual([quote("pdf", scanPdf).kind, quote("image", null).kind], ["unreadable", "unreadable"]);
 
