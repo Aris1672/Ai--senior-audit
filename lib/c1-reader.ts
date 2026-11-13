@@ -76,6 +76,11 @@ function isPrivateAddress(ip: string): boolean {
   return v === "::1" || v === "::" || v.startsWith("fc") || v.startsWith("fd") || v.startsWith("fe80") || v.startsWith("ff");
 }
 
+if (process.env.C1_ALLOW_PRIVATE_HOSTS === "true") {
+  console.warn("[1c] ⚠ C1_ALLOW_PRIVATE_HOSTS=true — connections to local and internal addresses are ALLOWED. " +
+    "For tests with the mock base only; remove before real clients use the app.");
+}
+
 export async function assertAllowedC1Address(rawUrl: string): Promise<URL> {
   let url: URL;
   try { url = new URL(rawUrl); } catch { throw new C1Error("Адрес базы 1С указан неверно. Пример: https://1c.example.ru"); }

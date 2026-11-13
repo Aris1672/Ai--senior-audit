@@ -2,6 +2,9 @@
 
 Prioritized by what it blocks. Derived from full source review (see PROJECT_STATUS.md for details on each item).
 
+> **⚠ BEFORE THE FIRST REAL CLIENT (launch checklist)**
+> - [ ] **Remove `C1_ALLOW_PRIVATE_HOSTS=true` from the auditor's environment in Coolify and redeploy.** It is left on deliberately (user decision, Nov 13, 2026) so the mock 1C base on `localhost` can be used for tests while nobody else uses the app. While it is on, anyone who can create an audit can make the server connect to internal addresses. The auditor's startup log prints a warning while it is set.
+
 > **Updated November 12, 2026 (work order agreed)** — details in `PROJECT_STATUS.md` top entries.
 > - [x] **1. Decisions written down** — two stages (analysis 12.5 ₽/operation; correction 20 ₽/page), page definition, charging rules, overlap rule, volume rule.
 > - [x] **2. Volume** — 500-row / 500-operation / 50 000-character caps removed; request over the model's limit (1 648 800 characters) is refused with a clear message; `npm run test:volume`. *To verify after deploy: one large file end to end (Natasha speed, DeepSeek accepting it).*
